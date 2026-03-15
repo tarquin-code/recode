@@ -1,0 +1,841 @@
+<!--
+  Plex Re-Encoder - setup.html
+  Copyright (C) 2026 Tarquin Douglass
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  Author:  Tarquin Douglass
+  License: GPL-3.0-or-later
+  URL:     https://github.com/tarquin-code/plex-recencoder
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plex Re-Encoder — Setup</title>
+<style>
+:root { --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d; --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --yellow: #d29922; --cyan: #56d4dd; --purple: #bc8cff; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.setup-container { max-width: 900px; width: 100%; }
+#step1 { min-height: 350px; }
+.logo { text-align: center; margin-bottom: 32px; }
+.logo h1 { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.logo p { color: var(--muted); font-size: 14px; margin-top: 4px; }
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin-bottom: 16px; }
+.card h2 { font-size: 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.card h2 { display: flex; align-items: center; gap: 8px; }
+.card h2 .num { background: var(--accent); color: #fff; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+.check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.check-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg3); border-radius: 6px; font-size: 13px; }
+.check-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot-warn { background: var(--yellow); }
+.dot-err { background: var(--red); }
+.gpu-card { padding: 10px 14px; background: var(--bg3); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+.gpu-card .gpu-name { font-weight: 600; font-size: 13px; }
+.gpu-card .gpu-detail { font-size: 11px; color: var(--cyan); font-family: var(--mono); }
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.form-group select, .form-group input[type="text"] { width: 100%; padding: 8px 12px; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--font); }
+.form-group select:focus, .form-group input:focus { outline: none; border-color: var(--accent); }
+.form-group .desc { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.btn { padding: 10px 24px; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #79c0ff; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.actions { display: flex; justify-content: flex-end; margin-top: 24px; }
+.info-box { padding: 10px 14px; background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; font-size: 12px; color: var(--muted); margin-top: 12px; line-height: 1.6; }
+.warn-box { padding: 10px 14px; background: rgba(248,81,73,0.08); border-left: 3px solid var(--red); border-radius: 0 6px 6px 0; font-size: 12px; color: var(--muted); margin-top: 12px; }
+.hidden { display: none; }
+.btn-sm { padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); cursor: pointer; }
+.btn-sm:hover { background: var(--accent); color: #fff; }
+.btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-sm.installing { background: var(--yellow); color: #333; }
+.btn-sm.done { background: var(--green); color: #fff; }
+@media (max-width: 600px) {
+    .check-grid { grid-template-columns: 1fr; }
+    .form-row { grid-template-columns: 1fr; }
+    .card { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="setup-container">
+    <div class="logo">
+        <h1>Plex Re-Encoder</h1>
+        <p id="versionText">Setup Wizard</p>
+    </div>
+
+    <!-- PAGE 1: System Requirements -->
+    <div id="setupPage1">
+
+    <!-- Step 1: System Check -->
+    <div class="card" id="step1">
+        <h2 style="justify-content:space-between;"><span class="num">1</span> System Check <button class="btn-sm" style="font-size:11px;margin-left:auto;" onclick="document.getElementById('setupHelpModal').style.display='flex'">? Help</button></h2>
+        <div id="systemChecks">
+            <p style="color:var(--muted);font-size:13px;">Detecting system capabilities...</p>
+        </div>
+    </div>
+
+    <!-- Step 2: GPU Config -->
+    <div class="card" id="step2">
+        <h2><span class="num">2</span> GPU Configuration</h2>
+        <div id="gpuConfig"></div>
+    </div>
+
+    <!-- Step 3: Plex -->
+    <div class="card" id="step3">
+        <h2><span class="num">3</span> Plex Integration</h2>
+        <div id="plexConfig"></div>
+    </div>
+
+    <div class="actions" style="justify-content:space-between;">
+        <div style="font-size:11px;color:var(--muted);" id="page1Note">You can continue without all tools — CPU encoding will still work.</div>
+        <button class="btn btn-primary" id="btnContinue" onclick="showPage2()">Continue to Settings &rarr;</button>
+    </div>
+
+    </div>
+
+    <!-- PAGE 2: Configuration (hidden initially) -->
+    <div id="setupPage2" style="display:none;">
+
+
+    <!-- Step 4: Encoding Defaults -->
+    <div class="card" id="step4">
+        <h2><span class="num">4</span> Encoding Defaults</h2>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Default Preset</label>
+                <select id="sPreset">
+                    <option value="auto" selected>Auto (adapts to resolution)</option>
+                    <option value="4k_stream">4K Stream</option>
+                    <option value="stream">Stream (1080p)</option>
+                    <option value="archive">Archive (high quality)</option>
+                    <option value="fast">Fast (testing)</option>
+                    <option value="small">Small (aggressive)</option>
+                </select>
+                <div class="desc">Auto is recommended — adjusts CQ/bitrate/speed per resolution</div>
+            </div>
+            <div class="form-group">
+                <label>Encoder</label>
+                <select id="sEncoder">
+                    <option value="gpu">GPU (NVENC)</option>
+                    <option value="cpu">CPU (libx265)</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Audio Codec</label>
+                <select id="sAudioCodec">
+                    <option value="copy">Passthrough (copy)</option>
+                    <option value="libopus">Opus (most efficient)</option>
+                    <option value="aac">AAC (widest compat)</option>
+                    <option value="eac3">EAC3 (Dolby Digital+)</option>
+                    <option value="ac3">AC3 (Dolby Digital)</option>
+                </select>
+                <div class="desc">Passthrough recommended for Dolby Vision compatibility</div>
+            </div>
+            <div class="form-group">
+                <label>Dolby Vision Mode</label>
+                <select id="sDvMode">
+                    <option value="skip">Skip DV files</option>
+                    <option value="hdr10">Convert DV to HDR10</option>
+                    <option value="encode_dv">Convert to DV P8.4</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Temp Directory</label>
+                <input type="text" id="sTmpDir" value="/tmp/recode">
+                <div class="desc">Where temporary encode files are stored. Use fast storage (SSD/NVMe).</div>
+            </div>
+            <div class="form-group">
+                <label>Encode File Suffix</label>
+                <input type="text" id="sSuffix" value="recode" pattern="[A-Za-z0-9_-]+">
+                <div class="desc">Appended to output: Movie_h265_HDR10_<strong>suffix</strong>.mkv</div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Allowed Media Paths</label>
+            <input type="text" id="sAllowedPaths" value="/mnt">
+            <div class="desc">Comma-separated list of directories the app can browse (e.g. /mnt,/media,/data)</div>
+        </div>
+    </div>
+
+    <!-- Step 5: Concurrent -->
+    <div class="card" id="step5">
+        <h2><span class="num">5</span> Concurrency</h2>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Max Concurrent Encodes</label>
+                <select id="sConcurrent"></select>
+                <div class="desc" id="sConcurrentDesc">Based on GPU VRAM capacity</div>
+            </div>
+            <div class="form-group">
+                <label>Auto-start Queue on Restart</label>
+                <select id="sAutoStart">
+                    <option value="false" selected>No (manual start)</option>
+                    <option value="true">Yes (auto-start)</option>
+                </select>
+                <div class="desc">Whether the queue begins processing automatically after a server restart</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="actions" style="justify-content:space-between;">
+        <button class="btn" style="background:var(--bg3);color:var(--text);" onclick="showPage1()">&larr; Back</button>
+        <button class="btn btn-primary" id="btnSave" onclick="saveSetup()">Complete Setup</button>
+    </div>
+
+    </div>
+</div>
+
+<!-- Help Modal -->
+<div id="setupHelpModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:200;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;max-width:900px;width:95vw;max-height:85vh;display:flex;flex-direction:column;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border);">
+            <h2 style="font-size:18px;margin:0;">Setup Guide</h2>
+            <button onclick="document.getElementById('setupHelpModal').style.display='none'" style="background:none;border:none;color:var(--text);font-size:24px;cursor:pointer;padding:0 4px;">&times;</button>
+        </div>
+        <div style="padding:20px;overflow-y:auto;flex:1;">
+
+            <h3 style="color:var(--accent);font-size:15px;margin:0 0 8px 0;">What is Plex Re-Encoder?</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:16px;">
+                Plex Re-Encoder converts your video library to HEVC (H.265) format, significantly reducing file sizes while maintaining visual quality. It supports GPU-accelerated encoding via NVIDIA NVENC, Dolby Vision conversion, HDR passthrough, and integrates directly with Plex Media Server.
+            </p>
+
+            <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:120px;padding:12px;background:var(--bg3);border-radius:6px;text-align:center;">
+                    <div style="font-size:22px;font-weight:700;color:var(--green);">40-60%</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Typical space savings</div>
+                </div>
+                <div style="flex:1;min-width:120px;padding:12px;background:var(--bg3);border-radius:6px;text-align:center;">
+                    <div style="font-size:22px;font-weight:700;color:var(--accent);">10-50x</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px;">GPU encode speed</div>
+                </div>
+                <div style="flex:1;min-width:120px;padding:12px;background:var(--bg3);border-radius:6px;text-align:center;">
+                    <div style="font-size:22px;font-weight:700;color:var(--purple);">DV P8.4</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Dolby Vision support</div>
+                </div>
+            </div>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">Step 1: System Check</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">
+                The system check detects your hardware and software. Here's what each item means:
+            </p>
+            <div style="display:grid;grid-template-columns:120px 1fr;gap:4px 12px;font-size:12px;margin-bottom:16px;">
+                <div style="font-weight:600;color:var(--text);">NVIDIA GPU</div>
+                <div style="color:var(--muted);">Detects GPU hardware via nvidia-smi (drivers) and lspci (hardware). GPU encoding is 10-50x faster than CPU.</div>
+                <div style="font-weight:600;color:var(--text);">ffmpeg</div>
+                <div style="color:var(--muted);">The core encoding engine. Must be built with specific features for full functionality. Click "Build ffmpeg" if missing.</div>
+                <div style="font-weight:600;color:var(--text);">NVENC</div>
+                <div style="color:var(--muted);">NVIDIA's hardware encoder inside ffmpeg. Requires GPU drivers + ffmpeg built with --enable-nvenc.</div>
+                <div style="font-weight:600;color:var(--text);">libplacebo</div>
+                <div style="color:var(--muted);">Vulkan-based video processor. Required for Dolby Vision Profile 5 color space conversion (IPTPQc2 to BT.2020).</div>
+                <div style="font-weight:600;color:var(--text);">dovi_tool</div>
+                <div style="color:var(--muted);">Dolby Vision metadata tool. Extracts, converts, and injects RPU data for DV P5/P7/P8 conversion.</div>
+                <div style="font-weight:600;color:var(--text);">mkvmerge</div>
+                <div style="color:var(--muted);">MKV muxing tool for Dolby Vision output. Bundled with the installer — no package manager needed.</div>
+            </div>
+            <div class="info-box" style="margin-bottom:16px;">
+                <strong>Missing items?</strong> Click the Install button next to any missing tool. ffmpeg will be compiled from source with all available features (takes 15-30 minutes). dovi_tool and mkvtoolnix are bundled as pre-built binaries — no package repos needed. mediainfo is installed via your system's package manager. Only one install can run at a time — a Cancel button allows stopping a build in progress.
+            </div>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">Step 2: GPU Configuration</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">
+                Shows detected GPUs with their VRAM and maximum concurrent encodes. The system automatically calculates capacity:
+            </p>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:8px;text-align:center;">
+                <div style="padding:8px;background:var(--bg3);border-radius:6px;"><div style="font-weight:700;">2 GB</div><div style="font-size:11px;color:var(--cyan);">1 encode</div></div>
+                <div style="padding:8px;background:var(--bg3);border-radius:6px;"><div style="font-weight:700;">4 GB</div><div style="font-size:11px;color:var(--cyan);">2 encodes</div></div>
+                <div style="padding:8px;background:var(--bg3);border-radius:6px;"><div style="font-weight:700;">8 GB</div><div style="font-size:11px;color:var(--cyan);">4 encodes</div></div>
+                <div style="padding:8px;background:var(--bg3);border-radius:6px;"><div style="font-weight:700;">16 GB</div><div style="font-size:11px;color:var(--cyan);">8 encodes</div></div>
+            </div>
+            <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Each encode uses approximately 1 GB VRAM. Multi-GPU systems distribute encodes automatically across all GPUs.</p>
+            <div class="warn-box" style="margin-bottom:16px;">
+                <strong>No GPU?</strong> The encoder falls back to CPU mode (libx265). CPU encoding is slower but produces slightly smaller files. No GPU is required to use the application.
+            </div>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">Step 3: Plex Integration</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">
+                If Plex Media Server is installed, the app auto-detects it and reads the authentication token from <code style="background:var(--bg3);padding:2px 6px;border-radius:3px;font-size:12px;color:var(--cyan);">Preferences.xml</code>. This enables:
+            </p>
+            <ul style="font-size:12px;color:var(--muted);line-height:1.8;padding-left:20px;margin-bottom:8px;">
+                <li><strong>Library scanning</strong> — Browse Plex libraries directly from the web UI</li>
+                <li><strong>Auto library rescan</strong> — Plex automatically picks up re-encoded files</li>
+                <li><strong>Webhook encoding</strong> — New media added to Plex can auto-queue for encoding</li>
+            </ul>
+            <div class="info-box" style="margin-bottom:16px;">
+                <strong>Plex Webhook URL:</strong> After setup, add this URL in Plex → Settings → Webhooks to auto-encode new media:<br>
+                <code style="font-size:13px;color:var(--cyan);margin-top:4px;display:inline-block;">http://your-server-ip:9877/api/plex-webhook</code>
+            </div>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">Step 4: Encoding Defaults</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">These defaults apply when you queue files for encoding. All can be changed later in Settings.</p>
+            <div style="display:grid;grid-template-columns:120px 1fr;gap:4px 12px;font-size:12px;margin-bottom:16px;">
+                <div style="font-weight:600;color:var(--text);">Preset</div>
+                <div style="color:var(--muted);"><strong>Auto</strong> is recommended — it adjusts quality settings (CQ, bitrate, speed) based on the source resolution (4K, 1080p, SD).</div>
+                <div style="font-weight:600;color:var(--text);">Encoder</div>
+                <div style="color:var(--muted);"><strong>GPU (NVENC)</strong> for speed, <strong>CPU (libx265)</strong> for best compression. GPU is 10-50x faster.</div>
+                <div style="font-weight:600;color:var(--text);">Audio Codec</div>
+                <div style="color:var(--muted);"><strong>Passthrough</strong> copies audio untouched (required for Dolby Vision on Fire Stick). Opus gives best compression. EAC3/AC3 for AV receiver compatibility.</div>
+                <div style="font-weight:600;color:var(--text);">DV Mode</div>
+                <div style="color:var(--muted);"><strong>Skip</strong> leaves DV files alone. <strong>Convert to HDR10</strong> strips DV metadata. <strong>Convert to DV P8.4</strong> re-encodes with DV metadata for wide device support.</div>
+                <div style="font-weight:600;color:var(--text);">Temp Directory</div>
+                <div style="color:var(--muted);">Where encode temp files are stored. Use fast storage (SSD/NVMe) for best performance. Default: <code style="font-size:11px;color:var(--cyan);">/tmp/recode</code></div>
+                <div style="font-weight:600;color:var(--text);">Encode Suffix</div>
+                <div style="color:var(--muted);">Appended to output filenames. Example: <code style="font-size:11px;color:var(--cyan);">Movie_h265_HDR10_recode.mkv</code></div>
+                <div style="font-weight:600;color:var(--text);">Allowed Paths</div>
+                <div style="color:var(--muted);">Directories the app can browse. Comma-separated. Default: <code style="font-size:11px;color:var(--cyan);">/mnt</code></div>
+            </div>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">Step 5: Concurrency</h3>
+            <div style="display:grid;grid-template-columns:120px 1fr;gap:4px 12px;font-size:12px;margin-bottom:16px;">
+                <div style="font-weight:600;color:var(--text);">Concurrent</div>
+                <div style="color:var(--muted);">How many files to encode in parallel. Maximum is auto-calculated from GPU VRAM. Higher values use more GPU memory and power.</div>
+                <div style="font-weight:600;color:var(--text);">Auto-start</div>
+                <div style="color:var(--muted);">When disabled (default), the queue starts paused after a server restart. You must click Start manually. Enable for fully automated operation.</div>
+            </div>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">NVIDIA Driver Installation</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">
+                If an NVIDIA GPU is detected without drivers, the setup wizard offers to install them. This is a two-step confirmation process:
+            </p>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                <div style="padding:6px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;font-size:12px;">1. Click Install</div>
+                <span style="color:var(--muted);">→</span>
+                <div style="padding:6px 12px;background:rgba(210,153,34,0.15);border:1px solid var(--yellow);border-radius:6px;font-size:12px;">2. Acknowledge risks</div>
+                <span style="color:var(--muted);">→</span>
+                <div style="padding:6px 12px;background:rgba(248,81,73,0.15);border:1px solid var(--red);border-radius:6px;font-size:12px;">3. Final confirm</div>
+                <span style="color:var(--muted);">→</span>
+                <div style="padding:6px 12px;background:rgba(63,185,80,0.15);border:1px solid var(--green);border-radius:6px;font-size:12px;">4. Install + Reboot</div>
+            </div>
+            <div class="warn-box" style="margin-bottom:16px;">
+                <strong>Important:</strong> Driver installation requires a server reboot. After reboot, return to the setup page to rebuild ffmpeg with GPU support (NVENC + Vulkan + libplacebo). Ubuntu/Debian uses ubuntu-drivers autoinstall for the best driver match. RHEL/Alma/Rocky automatically adds the NVIDIA CUDA repository before installing.
+            </div>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">ffmpeg Build</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">
+                ffmpeg is compiled from source to include all required features. The build automatically detects available capabilities:
+            </p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                <div style="padding:10px;background:var(--bg3);border-radius:6px;border-left:3px solid var(--green);">
+                    <div style="font-weight:600;font-size:12px;">With NVIDIA GPU</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px;">NVENC + Vulkan + libplacebo + libx265 + libx264 + libopus + libass</div>
+                </div>
+                <div style="padding:10px;background:var(--bg3);border-radius:6px;border-left:3px solid var(--yellow);">
+                    <div style="font-weight:600;font-size:12px;">Without GPU</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px;">libx265 + libx264 + libopus + libass (CPU encoding only)</div>
+                </div>
+            </div>
+            <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Build time: 15-30 minutes depending on your CPU. You can cancel the build at any time. Without a GPU, ffmpeg is built for CPU-only encoding (libx265). DV P5 files can still be converted to HDR10 without libplacebo — only DV P8.4 conversion requires GPU + Vulkan.</p>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">After Setup</h3>
+            <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">
+                Clicking "Complete Setup" saves your settings, restarts the server, and redirects you to the main application. From there you can:
+            </p>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                <div style="padding:6px 12px;background:var(--bg3);border:1px solid var(--accent);border-radius:6px;font-size:12px;">Scan Libraries</div>
+                <span style="color:var(--muted);">→</span>
+                <div style="padding:6px 12px;background:var(--bg3);border:1px solid var(--accent);border-radius:6px;font-size:12px;">Select Files</div>
+                <span style="color:var(--muted);">→</span>
+                <div style="padding:6px 12px;background:var(--bg3);border:1px solid var(--accent);border-radius:6px;font-size:12px;">Queue &amp; Encode</div>
+                <span style="color:var(--muted);">→</span>
+                <div style="padding:6px 12px;background:var(--bg3);border:1px solid var(--green);border-radius:6px;font-size:12px;">Monitor Progress</div>
+            </div>
+            <ul style="font-size:12px;color:var(--muted);line-height:1.8;padding-left:20px;margin-bottom:8px;">
+                <li>All settings can be changed in Settings (gear icon)</li>
+                <li>Library-specific profiles can override defaults per media folder</li>
+                <li>Folder Watch can auto-encode new files as they appear</li>
+                <li>Full help documentation available in the main app's Help section</li>
+                <li>Restart Service button in Settings — restarts without sudo via systemd flag file</li>
+            </ul>
+
+            <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">Service Management</h3>
+            <div style="background:var(--bg3);padding:12px;border-radius:6px;font-family:var(--mono);font-size:12px;color:var(--cyan);line-height:2;">
+                systemctl start recode &nbsp;&nbsp;&nbsp;<span style="color:var(--muted);"># Start the service</span><br>
+                systemctl stop recode &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);"># Stop the service</span><br>
+                systemctl restart recode &nbsp;<span style="color:var(--muted);"># Restart</span><br>
+                systemctl status recode &nbsp;&nbsp;<span style="color:var(--muted);"># Check status</span><br>
+                journalctl -u recode -f &nbsp;&nbsp;<span style="color:var(--muted);"># View live logs</span>
+            </div>
+
+            <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);text-align:center;">
+                <div style="font-size:12px;color:var(--muted);">Plex Re-Encoder by Tarquin Douglass — GPL-3.0 License</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let sysInfo = {};
+let rebootPending = false;
+
+async function init() {
+    try {
+        const res = await fetch('/api/setup/status');
+        sysInfo = await res.json();
+
+        // If not first run, redirect to main app
+        if (!sysInfo.first_run) {
+            window.location.href = '/';
+            return;
+        }
+
+        document.getElementById('versionText').textContent = `v${sysInfo.version} — Setup Wizard`;
+        renderSystemCheck();
+        renderGpuConfig();
+        renderPlexConfig();
+        renderConcurrency();
+        // Auto-select GPU/CPU based on detection
+        if (!sysInfo.has_nvenc) {
+            document.getElementById('sEncoder').value = 'cpu';
+        }
+        // Disable DV P8.4 if no libplacebo
+        if (!sysInfo.has_libplacebo) {
+            const dvSel = document.getElementById('sDvMode');
+            for (const opt of dvSel.options) {
+                if (opt.value === 'encode_dv') {
+                    opt.disabled = true;
+                    opt.textContent = 'Convert to DV P8.4 (requires GPU + libplacebo)';
+                }
+            }
+        }
+    } catch(e) {
+        document.getElementById('systemChecks').innerHTML = `<div class="warn-box">Failed to connect to server: ${e.message}</div>`;
+    }
+}
+
+function renderSystemCheck() {
+    const s = sysInfo;
+    let html = '<div class="check-grid">';
+    if (s.has_gpu) {
+        html += checkItem('NVIDIA GPU', true, `${s.gpu_count} GPU(s) — drivers working`);
+    } else if (s.has_nvidia_hw) {
+        html += checkItem('NVIDIA GPU', false, `Hardware found but no drivers: ${s.lspci_gpu}`);
+    } else {
+        html += checkItem('NVIDIA GPU', false, 'No NVIDIA GPU detected — CPU encoding only');
+    }
+    html += checkItem('RAM', true, `${s.ram_gb} GB`);
+    html += checkItem('ffmpeg', !!s.ffmpeg_path && s.ffmpeg_path !== 'ffmpeg', s.ffmpeg_path || 'Not found');
+    html += checkItem('NVENC', s.has_nvenc, s.has_nvenc ? 'GPU encoding ready' : 'Requires ffmpeg rebuild');
+    html += checkItem('libplacebo', s.has_libplacebo, s.has_libplacebo ? 'DV P5 color conversion' : 'Requires ffmpeg rebuild');
+    html += checkItem('dovi_tool', s.has_dovi_tool, s.has_dovi_tool ? 'DV conversion ready' : 'Not installed', !s.has_dovi_tool ? 'dovi_tool' : null);
+    html += checkItem('mkvmerge', s.has_mkvmerge, s.has_mkvmerge ? 'MKV muxing ready' : 'Not installed', !s.has_mkvmerge ? 'mkvmerge' : null);
+    html += checkItem('mediainfo', true, 'Optional', null);
+    html += '</div>';
+    if (s.has_nvidia_hw && !s.has_gpu) {
+        html += `<div class="warn-box" style="margin-top:12px;">
+            <strong>NVIDIA GPU detected: ${s.lspci_gpu}</strong><br>
+            Drivers are not installed. GPU encoding requires NVIDIA drivers.<br><br>
+            <div id="driverStep1">
+                <button class="btn-sm" onclick="driverStep(2)" id="driverInstallBtn">Install NVIDIA Drivers</button>
+            </div>
+            <div id="driverStep2" style="display:none;margin-top:10px;padding:10px;background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:6px;">
+                <strong style="color:var(--red);">WARNING</strong><br>
+                <ul style="margin:6px 0;padding-left:18px;font-size:11px;line-height:1.8;">
+                    <li>Installing GPU drivers can potentially break your system</li>
+                    <li>Incompatible drivers may cause display or boot issues</li>
+                    <li>A <strong>reboot will be required</strong> after installation</li>
+                </ul>
+                <strong>Please ensure you have a backup of your server before proceeding.</strong><br><br>
+                <button class="btn-sm" onclick="driverStep(3)" style="background:var(--yellow);color:#333;">I understand the risks — continue</button>
+                <button class="btn-sm" onclick="driverStep(0)" style="margin-left:6px;">Cancel</button>
+            </div>
+            <div id="driverStep3" style="display:none;margin-top:10px;padding:10px;background:rgba(248,81,73,0.15);border:2px solid var(--red);border-radius:6px;">
+                <strong style="color:var(--red);">FINAL CONFIRMATION</strong><br><br>
+                <span style="font-size:12px;">By clicking Install below you acknowledge:</span>
+                <ul style="margin:6px 0;padding-left:18px;font-size:11px;line-height:1.8;">
+                    <li>You have <strong>backed up your server</strong></li>
+                    <li>You accept the <strong>risk of driver incompatibility</strong></li>
+                    <li>The authors of Plex Re-Encoder accept <strong>no responsibility</strong> for any damage caused by driver installation</li>
+                    <li>You will need to <strong>reboot</strong> after installation</li>
+                </ul>
+                <button class="btn-sm" onclick="driverStep(4)" style="background:var(--red);color:#fff;font-weight:600;">Install NVIDIA Drivers Now</button>
+                <button class="btn-sm" onclick="driverStep(0)" style="margin-left:6px;">Cancel</button>
+            </div>
+            <div id="driverStep4" style="display:none;margin-top:8px;">
+                <span style="font-size:11px;color:var(--muted);" id="driverInstallStatus">Installing...</span>
+            </div>
+        </div>`;
+    }
+    // ffmpeg build/rebuild logic based on GPU state
+    const hasFFmpeg = !!s.ffmpeg_path && s.ffmpeg_path !== 'ffmpeg';
+    const gpuDriversWorking = s.has_gpu;  // nvidia-smi works
+    const gpuHwNoDrivers = s.has_nvidia_hw && !s.has_gpu;  // lspci sees GPU but no drivers
+
+    if (!hasFFmpeg) {
+        // No ffmpeg at all — must build
+        if (gpuDriversWorking) {
+            html += `<div class="info-box" style="margin-top:12px;">
+                <strong>ffmpeg is not installed.</strong> It is required for encoding.<br>
+                <span style="font-size:11px;color:var(--muted);">GPU drivers detected — ffmpeg will be built with NVENC + Vulkan + libplacebo for GPU encoding.</span><br><br>
+                <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg with GPU support</button>
+                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
+            </div>`;
+        } else {
+            html += `<div class="info-box" style="margin-top:12px;">
+                <strong>ffmpeg is not installed.</strong> It is required for encoding.<br>
+                <span style="font-size:11px;color:var(--muted);">${gpuHwNoDrivers ? 'GPU hardware detected but drivers not installed — ' : ''}ffmpeg will be built for CPU encoding (libx265). ${gpuHwNoDrivers ? 'Install GPU drivers first, then rebuild ffmpeg to add GPU support.' : ''}</span><br><br>
+                <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg (CPU only)</button>
+                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
+            </div>`;
+        }
+    } else if (gpuDriversWorking && (!s.has_nvenc || !s.has_libplacebo)) {
+        // ffmpeg exists, GPU drivers work, but ffmpeg missing GPU features — rebuild
+        let missing = [];
+        if (!s.has_nvenc) missing.push('NVENC (GPU encoding)');
+        if (!s.has_libplacebo) missing.push('libplacebo (DV P5 conversion)');
+        html += `<div class="info-box" style="margin-top:12px;">
+            <strong>ffmpeg is missing GPU features:</strong> ${missing.join(', ')}<br><br>
+            GPU drivers are installed. Rebuilding ffmpeg will add GPU-accelerated encoding and Dolby Vision support.<br><br>
+            <button class="btn-sm" id="rebuildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Rebuild ffmpeg with GPU support</button>
+            <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
+        </div>`;
+    } else if (hasFFmpeg && gpuHwNoDrivers && !s.has_nvenc) {
+        // ffmpeg exists (CPU only), GPU hardware present but no drivers
+        html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
+            ffmpeg installed for CPU encoding. Install GPU drivers above, then rebuild ffmpeg to add GPU support.
+        </div>`;
+    } else if (hasFFmpeg && !s.has_gpu && !s.has_nvidia_hw) {
+        html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
+            ffmpeg installed for CPU encoding. If you add a GPU later, re-run setup to rebuild with GPU support.
+        </div>`;
+    }
+    html += '<div id="installLog" style="display:none;margin-top:12px;padding:10px;background:#0d1117;border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:11px;color:var(--muted);max-height:200px;overflow-y:auto;white-space:pre-wrap;"></div>';
+    document.getElementById('systemChecks').innerHTML = html;
+}
+
+function checkItem(name, ok, detail, installTool) {
+    const dot = ok ? 'dot-ok' : 'dot-err';
+    let installBtn = '';
+    if (installTool) {
+        installBtn = ` <button class="btn-sm" id="install-${installTool}" onclick="installTool('${installTool}', this)">Install</button>`;
+    }
+    return `<div class="check-item"><span class="dot ${dot}"></span><span><strong>${name}</strong>${installBtn}<br><span style="font-size:11px;color:var(--muted);">${detail}</span></span></div>`;
+}
+
+async function cancelInstall() {
+    try {
+        const res = await fetch('/api/setup/cancel-install', {method: 'POST'});
+        const data = await res.json();
+        if (data.ok) {
+            const logEl = document.getElementById('installLog');
+            if (logEl) logEl.textContent += '\n*** Cancelled ***\n';
+            const cancelBtn = document.getElementById('cancelInstallBtn');
+            if (cancelBtn) cancelBtn.style.display = 'none';
+        }
+    } catch(e) {}
+}
+
+function setAllInstallButtons(disabled) {
+    if (!disabled && rebootPending) return; // Never re-enable if reboot pending
+    document.querySelectorAll('.btn-sm[onclick*="installTool"], .btn-sm[onclick*="driverStep"], .btn-sm[onclick*="rebootServer"]').forEach(b => {
+        if (b.id === 'cancelInstallBtn') return;
+        if (disabled) {
+            b.disabled = true;
+            if (!b.dataset.origText) b.dataset.origText = b.textContent;
+        } else {
+            b.disabled = false;
+            if (b.dataset.origText) { b.textContent = b.dataset.origText; delete b.dataset.origText; }
+        }
+    });
+    const cont = document.getElementById('btnContinue');
+    if (cont) cont.disabled = disabled || rebootPending;
+    const note = document.getElementById('page1Note');
+    if (note && !rebootPending) {
+        note.textContent = disabled
+            ? 'Please wait for the current install to complete before continuing.'
+            : 'You can continue without all tools — CPU encoding will still work.';
+    }
+}
+
+async function installTool(tool, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Installing...';
+    btn.className = 'btn-sm installing';
+    setAllInstallButtons(true);
+    let logEl = document.getElementById('installLog');
+    if (logEl) {
+        logEl.style.display = 'block';
+        logEl.textContent = `Installing ${tool}...\n`;
+    }
+    // Show cancel button
+    let cancelBtn = document.getElementById('cancelInstallBtn');
+    if (!cancelBtn) {
+        cancelBtn = document.createElement('button');
+        cancelBtn.id = 'cancelInstallBtn';
+        cancelBtn.className = 'btn-sm';
+        cancelBtn.style.cssText = 'background:var(--red);color:#fff;margin-top:8px;';
+        cancelBtn.textContent = 'Cancel Install';
+        cancelBtn.onclick = cancelInstall;
+        if (logEl) logEl.parentNode.insertBefore(cancelBtn, logEl.nextSibling);
+    }
+    cancelBtn.style.display = 'inline-block';
+    try {
+        const res = await fetch('/api/setup/install-tool?tool=' + tool, {method: 'POST'});
+        const data = await res.json();
+        if (!data.ok) { throw new Error(data.error); }
+        // Poll for completion
+        const poll = setInterval(async () => {
+            try {
+                const sr = await fetch('/api/setup/install-status');
+                const sd = await sr.json();
+                const task = sd.tasks[tool];
+                if (task) {
+                    logEl = document.getElementById('installLog');
+                    if (logEl) {
+                        logEl.style.display = 'block';
+                        logEl.textContent = task.log;
+                        logEl.scrollTop = logEl.scrollHeight;
+                    }
+                    if (task.status === 'done' || task.status === 'cancelled') {
+                        clearInterval(poll);
+                        const cb = document.getElementById('cancelInstallBtn');
+                        if (cb) cb.style.display = 'none';
+                        if (task.status === 'cancelled') {
+                            setAllInstallButtons(false);
+                            const r2 = await fetch('/api/setup/status');
+                            sysInfo = await r2.json();
+                            renderSystemCheck();
+                            renderConcurrency();
+                            const cont2 = document.getElementById('btnContinue');
+                            if (cont2) cont2.disabled = false;
+                            return;
+                        }
+                        btn.textContent = 'Installed';
+                        btn.className = 'btn-sm done';
+                        if (tool === 'nvidia-drivers') {
+                            showFfmpegRebuildPrompt();
+                        } else {
+                            const savedLog = (logEl || {}).textContent || task.log;
+                            const r2 = await fetch('/api/setup/status');
+                            sysInfo = await r2.json();
+                            renderSystemCheck();
+                            renderConcurrency();
+                            // Re-enable Continue button after DOM rebuild
+                            const cont = document.getElementById('btnContinue');
+                            if (cont) cont.disabled = false;
+                            // If all requirements met, hide log. Otherwise keep it visible.
+                            const allGood = sysInfo.has_nvenc !== false && sysInfo.has_libplacebo !== false && sysInfo.has_dovi_tool && sysInfo.has_mkvmerge;
+                            const newLogEl = document.getElementById('installLog');
+                            if (newLogEl) {
+                                if (allGood || tool !== 'ffmpeg') {
+                                    newLogEl.style.display = 'none';
+                                } else {
+                                    newLogEl.style.display = 'block';
+                                    newLogEl.textContent = savedLog + '\n⚠ Some features still missing — see above.';
+                                    newLogEl.scrollTop = newLogEl.scrollHeight;
+                                }
+                            }
+                        }
+                    } else if (task.status === 'error') {
+                        clearInterval(poll);
+                        const cb2 = document.getElementById('cancelInstallBtn');
+                        if (cb2) cb2.style.display = 'none';
+                        setAllInstallButtons(false);
+                        btn.textContent = 'Failed — see log';
+                        btn.className = 'btn-sm';
+                        btn.disabled = false;
+                    }
+                }
+            } catch(e) {}
+        }, 2000);
+    } catch(e) {
+        logEl.textContent = 'Error: ' + e.message;
+        btn.textContent = 'Failed';
+        btn.className = 'btn-sm';
+        btn.disabled = false;
+    }
+}
+
+function driverStep(step) {
+    for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById('driverStep' + i);
+        if (el) el.style.display = (i === step || (step === 0 && i === 1)) ? 'block' : 'none';
+    }
+    if (step === 0) return;
+    if (step === 4) {
+        const status = document.getElementById('driverInstallStatus');
+        status.textContent = 'Installing drivers — this may take several minutes...';
+        const fakeBtn = {disabled: false, textContent: '', className: ''};
+        installTool('nvidia-drivers', fakeBtn);
+    }
+}
+
+function showFfmpegRebuildPrompt() {
+    rebootPending = true;
+    // Disable all install/build/continue buttons
+    setAllInstallButtons(true);
+    const note = document.getElementById('page1Note');
+    if (note) note.textContent = 'A reboot is required before you can continue.';
+    const logEl = document.getElementById('installLog');
+    if (!logEl) return;
+    const existing = document.getElementById('ffmpegRebuildPrompt');
+    if (existing) return;
+    const div = document.createElement('div');
+    div.id = 'ffmpegRebuildPrompt';
+    div.style.marginTop = '12px';
+    div.innerHTML = `
+        <div class="warn-box" style="margin:0;">
+            <strong style="color:var(--red);">REBOOT REQUIRED</strong><br><br>
+            NVIDIA drivers have been installed but a <strong>reboot is required</strong> before the GPU will be available.<br>
+            No further installs or builds can proceed until the server is rebooted.<br><br>
+            After reboot, this page will reload and you can rebuild ffmpeg with GPU support.<br><br>
+            <button class="btn" style="background:var(--red);color:#fff;font-weight:600;" onclick="rebootServer(this)">Reboot Now</button>
+            <button class="btn" style="background:var(--bg3);color:var(--text);margin-left:8px;" onclick="this.parentNode.querySelector('.reboot-later').style.display='block';this.style.display='none'">Reboot Later</button>
+            <div class="reboot-later" style="display:none;margin-top:10px;font-size:11px;color:var(--muted);">
+                Reboot manually with: <code>sudo reboot</code><br>
+                After reboot, return to this page to continue setup.
+            </div>
+        </div>
+    `;
+    logEl.parentNode.insertBefore(div, logEl.nextSibling);
+}
+
+async function rebootServer(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Rebooting...';
+    const logEl = document.getElementById('installLog');
+    if (logEl) {
+        logEl.textContent += '\nInitiating reboot...\n';
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+    try {
+        await fetch('/api/setup/install-tool?tool=reboot', {method: 'POST'});
+    } catch(e) {}
+    // Server will go down — show message
+    setTimeout(() => {
+        document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#c9d1d9;background:#0d1117;text-align:center;padding:20px;"><div><h2>Server is rebooting...</h2><p style="color:#8b949e;margin-top:12px;">This page will automatically reload when the server is back online.</p></div></div>';
+        const check = setInterval(async () => {
+            try {
+                const r = await fetch('/api/setup/status');
+                if (r.ok) { clearInterval(check); window.location.reload(); }
+            } catch(e) {}
+        }, 5000);
+    }, 3000);
+}
+
+function showPage1() {
+    document.getElementById('setupPage1').style.display = 'block';
+    document.getElementById('setupPage2').style.display = 'none';
+    window.scrollTo(0, 0);
+}
+
+function showPage2() {
+    document.getElementById('setupPage1').style.display = 'none';
+    document.getElementById('setupPage2').style.display = 'block';
+    window.scrollTo(0, 0);
+    // Refresh concurrency options based on latest system info
+    renderConcurrency();
+}
+
+function renderGpuConfig() {
+    const gpus = sysInfo.gpu_info || [];
+    if (gpus.length === 0) {
+        document.getElementById('gpuConfig').innerHTML = '<p style="color:var(--muted);font-size:13px;">No NVIDIA GPUs detected. CPU encoding will be used.</p>';
+        return;
+    }
+    let html = '<div style="display:grid;gap:8px;">';
+    let totalEnc = 0;
+    for (const g of gpus) {
+        const maxEnc = Math.max(1, Math.floor(g.vram_mb / 2048));
+        totalEnc += maxEnc;
+        html += `<div class="gpu-card">
+            <div><div class="gpu-name">GPU ${g.index}: ${g.name}</div><div style="font-size:11px;color:var(--muted);">Max ${maxEnc} concurrent encode${maxEnc > 1 ? 's' : ''}</div></div>
+            <div class="gpu-detail">${g.vram_mb} MiB VRAM</div>
+        </div>`;
+    }
+    html += '</div>';
+    html += `<div class="info-box">Total capacity: <strong>${totalEnc} concurrent encodes</strong> across ${gpus.length} GPU(s). Each encode uses approximately 1 GB VRAM (limit: 1 per 2 GB).</div>`;
+    document.getElementById('gpuConfig').innerHTML = html;
+}
+
+function renderPlexConfig() {
+    const s = sysInfo;
+    let html = '';
+    if (s.has_plex && s.plex_token_found) {
+        html = `<div class="check-item" style="background:var(--bg3);"><span class="dot dot-ok"></span><span><strong>Plex Detected</strong><br><span style="font-size:11px;color:var(--muted);">Token found — Plex library scanning and auto-rescan are ready.</span></span></div>`;
+        html += `<div class="info-box" style="margin-top:12px;">Plex webhook URL for auto-encoding new media:<br><code style="font-size:13px;color:var(--cyan);">http://${window.location.hostname}:${window.location.port || 9877}/api/plex-webhook</code></div>`;
+    } else if (s.has_plex) {
+        html = `<div class="check-item" style="background:var(--bg3);"><span class="dot dot-warn"></span><span><strong>Plex Found</strong><br><span style="font-size:11px;color:var(--muted);">Plex is installed but token could not be read. Library scanning may not work until token is configured.</span></span></div>`;
+    } else {
+        html = `<div class="check-item" style="background:var(--bg3);"><span class="dot dot-warn"></span><span><strong>Plex Not Detected</strong><br><span style="font-size:11px;color:var(--muted);">You can still use Recode to scan and encode files from any directory.</span></span></div>`;
+    }
+    document.getElementById('plexConfig').innerHTML = html;
+}
+
+function renderConcurrency() {
+    const gpus = sysInfo.gpu_info || [];
+    let maxEnc = 1;
+    if (gpus.length > 0) {
+        maxEnc = gpus.reduce((sum, g) => sum + Math.max(1, Math.floor(g.vram_mb / 2048)), 0);
+    }
+    const sel = document.getElementById('sConcurrent');
+    const defaultVal = Math.min(4, maxEnc);
+    for (let i = 1; i <= maxEnc; i++) {
+        sel.add(new Option(i === 1 ? '1 (sequential)' : String(i), String(i)));
+    }
+    sel.value = String(defaultVal);
+    document.getElementById('sConcurrentDesc').textContent = `Max ${maxEnc} based on ${gpus.length || 0} GPU(s)`;
+}
+
+async function saveSetup() {
+    const btn = document.getElementById('btnSave');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    const settings = {
+        preset: document.getElementById('sPreset').value,
+        encoder: document.getElementById('sEncoder').value,
+        audio_codec: document.getElementById('sAudioCodec').value,
+        audio_bitrate: '448k',
+        dv_mode: document.getElementById('sDvMode').value,
+        tmp_dir: document.getElementById('sTmpDir').value || '/tmp/recode',
+        encode_suffix: document.getElementById('sSuffix').value.replace(/[^A-Za-z0-9_-]/g, '') || 'recode',
+        allowed_paths: document.getElementById('sAllowedPaths').value.split(',').map(s => s.trim()).filter(Boolean),
+        max_concurrent_encodes: parseInt(document.getElementById('sConcurrent').value) || 1,
+        auto_start_queue: document.getElementById('sAutoStart').value === 'true',
+    };
+
+    try {
+        const res = await fetch('/api/setup/complete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(settings),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            btn.textContent = 'Applying settings...';
+            btn.style.background = 'var(--green)';
+            // Server restarts — wait for it to come back then redirect
+            setTimeout(() => {
+                const check = setInterval(async () => {
+                    try {
+                        const r = await fetch('/api/system/check');
+                        if (r.ok) { clearInterval(check); setTimeout(() => { window.location.href = '/'; }, 1000); }
+                    } catch(e) {}
+                }, 2000);
+            }, 3000);
+        } else {
+            btn.textContent = 'Error — try again';
+            btn.disabled = false;
+        }
+    } catch(e) {
+        btn.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+    }
+}
+
+init();
+</script>
+</body>
+</html>

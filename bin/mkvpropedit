@@ -1,0 +1,4 @@
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/../lib/mkvtoolnix"
+LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH}" exec "${LIB_DIR}/mkvpropedit" "$@"
