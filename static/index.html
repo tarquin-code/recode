@@ -1611,7 +1611,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <ul>
                     <li>A blue banner appears below the header &mdash; click it to view the changelog and update</li>
                     <li>The banner persists across page reloads until dismissed or the update is applied</li>
-                    <li>In Settings &rarr; General &rarr; Updates, you can manually check or apply updates</li>
+                    <li>Open Help &rarr; About to check for updates and apply them</li>
                     <li>The full changelog is shown before you update so you can review what changed</li>
                     <li><strong>Update Now</strong> downloads the release, backs up your current version, extracts the new files, and restarts the service</li>
                     <li>Your settings, queue, history, and configuration are preserved across updates</li>
@@ -1642,11 +1642,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>About</h4>
                 <p>Plex Re-Encoder is a web-based tool for batch re-encoding media libraries to HEVC (H.265) using GPU-accelerated encoding (NVENC) or CPU encoding (libx265). It integrates with Plex Media Server for library scanning, automatic webhook-triggered encoding, and post-encode library rescans.</p>
 
-                <h4>Updates</h4>
                 <div id="aboutUpdateSection" style="margin-bottom:16px;">
-                    <div style="display:flex;align-items:center;gap:12px;">
-                        <span style="font-size:11px;color:var(--text-muted);" id="aboutUpdateStatus">Checking for updates...</span>
-                    </div>
+                    <div id="aboutUpdateStatus" style="display:none;"></div>
                     <div id="aboutUpdateAvailable" style="display:none;margin-top:10px;padding:12px;background:rgba(88,166,255,0.1);border:1px solid var(--accent);border-radius:6px;">
                         <div style="display:flex;align-items:center;justify-content:space-between;">
                             <div>
@@ -2166,26 +2163,6 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         </div>
                     </div>
                     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
-                        <div class="set-section-title" style="font-size:14px;">Updates</div>
-                        <div id="updateSection" style="margin-top:8px;">
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <button class="btn btn-sm" style="font-size:12px;" onclick="checkForUpdates(this)">Check for Updates</button>
-                                <span style="font-size:11px;color:var(--text-muted);" id="updateStatus">Click to check GitHub for a newer version.</span>
-                            </div>
-                            <div id="updateAvailable" style="display:none;margin-top:10px;padding:12px;background:rgba(88,166,255,0.1);border:1px solid var(--accent);border-radius:6px;">
-                                <div style="display:flex;align-items:center;justify-content:space-between;">
-                                    <div>
-                                        <strong style="color:var(--accent);" id="updateVersionText">Update available</strong>
-                                        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;" id="updatePublished"></div>
-                                    </div>
-                                    <button class="btn btn-primary btn-sm" style="font-size:12px;" onclick="applyUpdate(this)" id="btnApplyUpdate">Update Now</button>
-                                </div>
-                                <div id="updateChangelog" style="margin-top:10px;padding:10px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;font-size:11px;color:var(--text-secondary);max-height:200px;overflow-y:auto;white-space:pre-wrap;line-height:1.5;"></div>
-                                <div id="updateLog" style="display:none;margin-top:8px;padding:8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);max-height:150px;overflow-y:auto;white-space:pre-wrap;"></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
                         <div class="set-section-title" style="font-size:14px;">Service</div>
                         <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
                             <button class="btn btn-danger btn-sm" style="font-size:12px;" onclick="restartService(this)">Restart Service</button>
@@ -4445,33 +4422,19 @@ function onSettingsPresetChange() {
 
 async function checkForUpdates(btn, silent) {
     const banner = document.getElementById('updateBanner');
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Checking...';
-    }
+    const statusEl = document.getElementById('aboutUpdateStatus');
+    const panelEl = document.getElementById('aboutUpdateAvailable');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking...'; }
     if (!silent) {
-        // Update both Settings and About status text
-        const s1 = document.getElementById('updateStatus');
-        const s2 = document.getElementById('aboutUpdateStatus');
-        if (s1) s1.textContent = 'Checking GitHub...';
-        if (s2) s2.textContent = 'Checking GitHub...';
-        const p1 = document.getElementById('updateAvailable');
-        const p2 = document.getElementById('aboutUpdateAvailable');
-        if (p1) p1.style.display = 'none';
-        if (p2) p2.style.display = 'none';
+        if (statusEl) statusEl.textContent = 'Checking GitHub...';
+        if (panelEl) panelEl.style.display = 'none';
     }
     try {
         const r = await fetch('/api/update/check');
         const data = await r.json();
         localStorage.setItem('lastUpdateCheck', Date.now().toString());
         if (data.error) {
-            if (!silent) {
-                const msg = 'Error: ' + data.error;
-                const s1 = document.getElementById('updateStatus');
-                const s2 = document.getElementById('aboutUpdateStatus');
-                if (s1) s1.textContent = msg;
-                if (s2) s2.textContent = msg;
-            }
+            if (!silent && statusEl) statusEl.textContent = 'Error: ' + data.error;
         } else if (data.update_available) {
             localStorage.setItem('updateAvailable', JSON.stringify({
                 version: data.latest_version, current: data.current_version,
@@ -4481,27 +4444,12 @@ async function checkForUpdates(btn, silent) {
         } else {
             localStorage.removeItem('updateAvailable');
             banner.style.display = 'none';
-            if (!silent) {
-                const msg = `You're on the latest version (v${data.current_version}).`;
-                const s1 = document.getElementById('updateStatus');
-                const s2 = document.getElementById('aboutUpdateStatus');
-                if (s1) s1.textContent = msg;
-                if (s2) s2.textContent = msg;
-            }
+            if (!silent && statusEl) statusEl.textContent = `You're on the latest version (v${data.current_version}).`;
         }
     } catch(e) {
-        if (!silent) {
-            const msg = 'Failed to check for updates.';
-            const s1 = document.getElementById('updateStatus');
-            const s2 = document.getElementById('aboutUpdateStatus');
-            if (s1) s1.textContent = msg;
-            if (s2) s2.textContent = msg;
-        }
+        if (!silent && statusEl) statusEl.textContent = 'Failed to check for updates.';
     }
-    if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Check for Updates';
-    }
+    if (btn) { btn.disabled = false; btn.textContent = 'Check for Updates'; }
 }
 
 function showUpdateInfo(current, latest, notes, published, name) {
@@ -4510,19 +4458,6 @@ function showUpdateInfo(current, latest, notes, published, name) {
     const pubText = pubDate ? `Released ${pubDate}` : '';
     const changelogText = notes || 'No release notes available.';
 
-    // Settings panel
-    const status = document.getElementById('updateStatus');
-    const panel = document.getElementById('updateAvailable');
-    if (status) status.textContent = `Current: v${current}`;
-    if (panel) {
-        document.getElementById('updateVersionText').textContent = versionText;
-        document.getElementById('updatePublished').textContent = pubText;
-        document.getElementById('updateChangelog').textContent = changelogText;
-        document.getElementById('btnApplyUpdate').disabled = false;
-        document.getElementById('btnApplyUpdate').textContent = 'Update Now';
-        document.getElementById('updateLog').style.display = 'none';
-        panel.style.display = '';
-    }
     // About tab panel
     const aboutStatus = document.getElementById('aboutUpdateStatus');
     const aboutPanel = document.getElementById('aboutUpdateAvailable');
@@ -4563,21 +4498,19 @@ function autoCheckForUpdates() {
 async function applyUpdate(btn) {
     btn.disabled = true;
     btn.textContent = 'Updating...';
-    // Show log in whichever panel is visible (Settings or About)
-    const logEl = document.getElementById('aboutUpdateLog') || document.getElementById('updateLog');
-    const logEl2 = document.getElementById('updateLog');
-    [logEl, logEl2].forEach(el => { if (el) { el.style.display = 'block'; el.textContent = 'Starting update...\n'; } });
+    const logEl = document.getElementById('aboutUpdateLog');
+    if (logEl) { logEl.style.display = 'block'; logEl.textContent = 'Starting update...\n'; }
     try {
         const r = await fetch('/api/update/apply', {method: 'POST'});
         const data = await r.json();
         if (!data.ok && data.error) {
-            [logEl, logEl2].forEach(el => { if (el) el.textContent += 'Error: ' + data.error + '\n'; });
+            if (logEl) logEl.textContent += 'Error: ' + data.error + '\n';
             btn.disabled = false;
             btn.textContent = 'Update Now';
             return;
         }
     } catch(e) {
-        [logEl, logEl2].forEach(el => { if (el) el.textContent += 'Failed to start update.\n'; });
+        if (logEl) logEl.textContent += 'Failed to start update.\n';
         btn.disabled = false;
         btn.textContent = 'Update Now';
         return;
@@ -4588,10 +4521,10 @@ async function applyUpdate(btn) {
             const r = await fetch('/api/setup/install-status');
             const data = await r.json();
             const task = (data.tasks || {}).update || {};
-            [logEl, logEl2].forEach(el => { if (el) { el.textContent = task.log || ''; el.scrollTop = el.scrollHeight; } });
+            if (logEl) { logEl.textContent = task.log || ''; logEl.scrollTop = logEl.scrollHeight; }
             if (task.status === 'done') {
                 clearInterval(poll);
-                [logEl, logEl2].forEach(el => { if (el) el.textContent += '\nUpdate complete! Restarting server...\n'; });
+                if (logEl) logEl.textContent += '\nUpdate complete! Restarting server...\n';
                 btn.textContent = 'Restarting...';
                 // Wait for restart then reload
                 setTimeout(() => {
