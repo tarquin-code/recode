@@ -59,7 +59,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.11.7"
+VERSION = "2.11.8"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -3300,7 +3300,9 @@ async def install_tool(tool: str):
                             "  sed -i 's/^Components:.*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; "
                             '  echo "Updated debian.sources (DEB822 format)"; '
                             'elif [ -f /etc/apt/sources.list ]; then '
-                            "  sed -i '/^deb /{/non-free/!s/main/main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
+                            # Rewrite each deb line to have all required components
+                            r"  sed -i '/^deb /{s/ main.*/ main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
+                            r"  sed -i '/^deb-src /{s/ main.*/ main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
                             '  echo "Updated sources.list (classic format)"; '
                             'fi && apt-get update -qq'
                         )
@@ -3310,10 +3312,26 @@ async def install_tool(tool: str):
                             if text:
                                 _install_tasks[tool]["log"] += text + "\n"
                         await p.wait()
-                        # Kernel headers + DKMS + build tools (required for module compilation)
+                        # Install kernel headers — if not available, upgrade kernel first
+                        _install_tasks[tool]["log"] += "Installing kernel headers...\n"
+                        p = await _run_sudo("apt-get", "install", "-y", f"linux-headers-{uname_r}")
+                        async for line in p.stdout:
+                            text = line.decode(errors="replace").rstrip()
+                            if text:
+                                _install_tasks[tool]["log"] += text + "\n"
+                        await p.wait()
+                        if p.returncode != 0:
+                            _install_tasks[tool]["log"] += "Headers for current kernel unavailable — installing latest kernel...\n"
+                            await _driver_prereq(["apt-get", "install", "-y",
+                                "linux-image-amd64", "linux-headers-amd64"],
+                                "Installing latest kernel + headers")
+                            _install_tasks[tool]["log"] += "\n⚠ A newer kernel was installed. You may need to REBOOT TWICE:\n"
+                            _install_tasks[tool]["log"] += "  1. First reboot loads the new kernel\n"
+                            _install_tasks[tool]["log"] += "  2. Second reboot after NVIDIA driver installs against new kernel\n\n"
+                        # Build tools
                         await _driver_prereq(["apt-get", "install", "-y",
-                            f"linux-headers-{uname_r}", "build-essential", "dkms", "gcc", "make"],
-                            "Installing kernel headers and build tools")
+                            "build-essential", "dkms", "gcc", "make"],
+                            "Installing build tools")
                         _install_tasks[tool]["log"] += "Installing nvidia-driver...\n"
                         pkg_cmd = ["apt-get", "install", "-y", "nvidia-driver", "firmware-misc-nonfree"]
                 elif shutil.which("dnf"):
@@ -3346,12 +3364,12 @@ async def install_tool(tool: str):
                             await p.wait()
                         pkg_cmd = ["dnf", "install", "-y", "akmod-nvidia", "xorg-x11-drv-nvidia-cuda"]
                     else:
-                        # RHEL/Alma/Rocky — NVIDIA CUDA repo
-                        el_ver = "rhel9"
+                        # RHEL/Alma/Rocky
+                        el_ver_num = 9
                         try:
                             r = subprocess.run(["rpm", "-E", "%rhel"], capture_output=True, text=True, timeout=5)
                             if r.returncode == 0 and r.stdout.strip().isdigit():
-                                el_ver = f"rhel{r.stdout.strip()}"
+                                el_ver_num = int(r.stdout.strip())
                         except Exception:
                             pass
                         # Kernel headers + DKMS deps
@@ -3359,25 +3377,31 @@ async def install_tool(tool: str):
                             "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
                             "libglvnd-devel", "elfutils-libelf-devel"],
                             "Installing kernel headers and build tools")
-                        _install_tasks[tool]["log"] += f"Adding NVIDIA CUDA repository ({el_ver})...\n"
-                        p = await _run_sudo("dnf", "install", "-y",
-                            f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-repo-{el_ver}-12-4-local-12.4.0_550.54.14-1.x86_64.rpm")
-                        async for line in p.stdout:
-                            text = line.decode(errors="replace").rstrip()
-                            if text:
-                                _install_tasks[tool]["log"] += text + "\n"
-                        await p.wait()
-                        if p.returncode != 0:
-                            # Try network repo as fallback
-                            _install_tasks[tool]["log"] += "Trying NVIDIA network repo...\n"
-                            p = await _run_sudo("dnf", "config-manager", "--add-repo",
-                                f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-{el_ver}.repo")
+                        if el_ver_num >= 10:
+                            # EL10+ — nvidia-driver available directly in distro repos
+                            _install_tasks[tool]["log"] += f"RHEL {el_ver_num} — using distro nvidia-driver package...\n"
+                            pkg_cmd = ["dnf", "install", "-y", "nvidia-driver", "nvidia-driver-cuda"]
+                        else:
+                            # EL8/9 — need NVIDIA CUDA repo
+                            el_ver = f"rhel{el_ver_num}"
+                            _install_tasks[tool]["log"] += f"Adding NVIDIA CUDA repository ({el_ver})...\n"
+                            p = await _run_sudo("dnf", "install", "-y",
+                                f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-repo-{el_ver}-12-4-local-12.4.0_550.54.14-1.x86_64.rpm")
                             async for line in p.stdout:
                                 text = line.decode(errors="replace").rstrip()
                                 if text:
                                     _install_tasks[tool]["log"] += text + "\n"
                             await p.wait()
-                        pkg_cmd = ["dnf", "module", "install", "-y", "nvidia-driver:latest-dkms"]
+                            if p.returncode != 0:
+                                _install_tasks[tool]["log"] += "Trying NVIDIA network repo...\n"
+                                p = await _run_sudo("dnf", "config-manager", "--add-repo",
+                                    f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-{el_ver}.repo")
+                                async for line in p.stdout:
+                                    text = line.decode(errors="replace").rstrip()
+                                    if text:
+                                        _install_tasks[tool]["log"] += text + "\n"
+                                await p.wait()
+                            pkg_cmd = ["dnf", "module", "install", "-y", "nvidia-driver:latest-dkms"]
                 elif shutil.which("zypper"):
                     # openSUSE / SLES
                     _install_tasks[tool]["log"] += "openSUSE/SLES detected — adding NVIDIA repo...\n"

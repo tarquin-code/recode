@@ -2719,6 +2719,135 @@ async function addSelectedToQueue() {
 /* =========================================================================
    Queue
    ========================================================================= */
+let queuePage = 1;
+let queuePageSize = 50;
+let queueSearch = '';
+let queueSort = 'position';
+let queueFilterCodec = '';
+let queueFilterHdr = '';
+let queueFilterTopN = '0';
+
+function goQueuePage(p) { queuePage = p; renderQueue(); }
+function changeQueuePageSize(v) { queuePageSize = parseInt(v) || 50; queuePage = 1; renderQueue(); }
+
+// Shared filter/sort/paginate logic for job lists (queue + history)
+function filterJobList(jobs, search, codecFilter, hdrFilter, topN) {
+    let out = [...jobs];
+    if (search) {
+        const s = search.toLowerCase();
+        out = out.filter(job => {
+            const f = job.file_info;
+            return (f.filename || '').toLowerCase().includes(s) ||
+                   (f.path || '').toLowerCase().includes(s) ||
+                   (f.codec || '').toLowerCase().includes(s) ||
+                   (f.hdr_type || '').toLowerCase().includes(s) ||
+                   ((job.settings || {}).preset || '').toLowerCase().includes(s);
+        });
+    }
+    if (codecFilter === 'hevc') out = out.filter(j => j.file_info.is_hevc);
+    else if (codecFilter === '!hevc') out = out.filter(j => !j.file_info.is_hevc);
+    else if (codecFilter === 'h264') out = out.filter(j => (j.file_info.codec || '') === 'h264');
+    if (hdrFilter === 'hdr') out = out.filter(j => j.file_info.is_hdr);
+    else if (hdrFilter === 'sdr') out = out.filter(j => (j.file_info.hdr_type || '') === 'SDR');
+    else if (hdrFilter === 'dv') out = out.filter(j => (j.file_info.hdr_type || '').startsWith('Dolby Vision'));
+    else if (hdrFilter === 'dv5') out = out.filter(j => j.file_info.dovi_profile === 5);
+    else if (hdrFilter === 'dv7') out = out.filter(j => j.file_info.dovi_profile === 7);
+    else if (hdrFilter === 'dv8') out = out.filter(j => j.file_info.dovi_profile === 8);
+    else if (hdrFilter === 'hdr10') out = out.filter(j => (j.file_info.hdr_type || '') === 'HDR10');
+    else if (hdrFilter === 'hlg') out = out.filter(j => (j.file_info.hdr_type || '') === 'HLG');
+    // TopN
+    const isBr = String(topN).startsWith('br');
+    const n = parseInt(isBr ? String(topN).slice(2) : topN) || 0;
+    if (n > 0) {
+        const br = f => (f.duration_secs && f.size_bytes) ? (f.size_bytes * 8 / f.duration_secs) : 0;
+        const sorted = isBr
+            ? [...out].sort((a, b) => br(b.file_info) - br(a.file_info))
+            : [...out].sort((a, b) => (b.file_info.size_bytes || 0) - (a.file_info.size_bytes || 0));
+        const topSet = new Set(sorted.slice(0, n).map(j => j.id));
+        out = out.filter(j => topSet.has(j.id));
+    }
+    return out;
+}
+
+function sortJobList(jobs, sort) {
+    const br = f => (f.duration_secs && f.size_bytes) ? (f.size_bytes * 8 / f.duration_secs) : 0;
+    if (sort === 'name') jobs.sort((a, b) => (a.file_info.filename || '').localeCompare(b.file_info.filename || ''));
+    else if (sort === 'size_desc') jobs.sort((a, b) => (b.file_info.size_bytes || 0) - (a.file_info.size_bytes || 0));
+    else if (sort === 'size_asc') jobs.sort((a, b) => (a.file_info.size_bytes || 0) - (b.file_info.size_bytes || 0));
+    else if (sort === 'bitrate_desc') jobs.sort((a, b) => br(b.file_info) - br(a.file_info));
+    else if (sort === 'bitrate_asc') jobs.sort((a, b) => br(a.file_info) - br(b.file_info));
+    else if (sort === 'res_desc') jobs.sort((a, b) => (b.file_info.width || 0) - (a.file_info.width || 0));
+    else if (sort === 'res_asc') jobs.sort((a, b) => (a.file_info.width || 0) - (b.file_info.width || 0));
+    return jobs;
+}
+
+function jobFilterBarHtml(prefix, searchVal, sortVal, topNVal, codecVal, hdrVal) {
+    return `<div class="filter-bar">
+        <input type="text" id="${prefix}SearchInput" placeholder="Search filename..." value="${escHtml(searchVal)}" oninput="clearTimeout(window._${prefix}Debounce); window._${prefix}Debounce=setTimeout(()=>{${prefix}Search=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();},300)">
+        <select onchange="${prefix}Sort=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
+            ${prefix === 'queue' ? `<option value="position" ${sortVal==='position'?'selected':''}>Sort: Queue order</option>` : ''}
+            ${prefix === 'history' ? `<option value="newest" ${sortVal==='newest'?'selected':''}>Sort: Newest first</option><option value="oldest" ${sortVal==='oldest'?'selected':''}>Sort: Oldest first</option>` : ''}
+            <option value="name" ${sortVal==='name'?'selected':''}>Sort: Name</option>
+            <option value="size_desc" ${sortVal==='size_desc'?'selected':''}>Sort: Largest first</option>
+            <option value="size_asc" ${sortVal==='size_asc'?'selected':''}>Sort: Smallest first</option>
+            <option value="bitrate_desc" ${sortVal==='bitrate_desc'?'selected':''}>Sort: Highest bitrate</option>
+            <option value="bitrate_asc" ${sortVal==='bitrate_asc'?'selected':''}>Sort: Lowest bitrate</option>
+            <option value="res_desc" ${sortVal==='res_desc'?'selected':''}>Sort: Highest res first</option>
+            <option value="res_asc" ${sortVal==='res_asc'?'selected':''}>Sort: Lowest res first</option>
+        </select>
+        <select onchange="${prefix}FilterTopN=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
+            <option value="0" ${topNVal==='0'?'selected':''}>Show: All</option>
+            <option value="10" ${topNVal==='10'?'selected':''}>Top 10 largest</option>
+            <option value="20" ${topNVal==='20'?'selected':''}>Top 20 largest</option>
+            <option value="50" ${topNVal==='50'?'selected':''}>Top 50 largest</option>
+            <option value="100" ${topNVal==='100'?'selected':''}>Top 100 largest</option>
+            <option value="br10" ${topNVal==='br10'?'selected':''}>Top 10 highest bitrate</option>
+            <option value="br20" ${topNVal==='br20'?'selected':''}>Top 20 highest bitrate</option>
+            <option value="br50" ${topNVal==='br50'?'selected':''}>Top 50 highest bitrate</option>
+        </select>
+        <select onchange="${prefix}FilterCodec=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
+            <option value="" ${codecVal===''?'selected':''}>Codec: All</option>
+            <option value="hevc" ${codecVal==='hevc'?'selected':''}>HEVC only</option>
+            <option value="!hevc" ${codecVal==='!hevc'?'selected':''}>Non-HEVC only</option>
+            <option value="h264" ${codecVal==='h264'?'selected':''}>H.264 only</option>
+        </select>
+        <select onchange="${prefix}FilterHdr=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
+            <option value="" ${hdrVal===''?'selected':''}>HDR: All</option>
+            <option value="hdr" ${hdrVal==='hdr'?'selected':''}>HDR only</option>
+            <option value="sdr" ${hdrVal==='sdr'?'selected':''}>SDR only</option>
+            <option value="dv" ${hdrVal==='dv'?'selected':''}>Dolby Vision</option>
+            <option value="dv5" ${hdrVal==='dv5'?'selected':''}>DV P5</option>
+            <option value="dv7" ${hdrVal==='dv7'?'selected':''}>DV P7</option>
+            <option value="dv8" ${hdrVal==='dv8'?'selected':''}>DV P8</option>
+            <option value="hdr10" ${hdrVal==='hdr10'?'selected':''}>HDR10</option>
+            <option value="hlg" ${hdrVal==='hlg'?'selected':''}>HLG</option>
+        </select>
+    </div>`;
+}
+
+function jobPagerHtml(prefix, page, pageSize, totalFiles, goFn, changeSizeFn) {
+    const totalPages = Math.max(1, Math.ceil(totalFiles / pageSize));
+    const startIdx = (page - 1) * pageSize;
+    const endIdx = Math.min(startIdx + pageSize, totalFiles);
+    if (totalFiles <= pageSize && pageSize <= 50) return '';
+    let p = '<div class="pager"><div class="pager-btns">';
+    p += `<button onclick="${goFn}(1)" ${page===1?'disabled':''}>&laquo;</button>`;
+    p += `<button onclick="${goFn}(${page-1})" ${page===1?'disabled':''}>&lsaquo;</button>`;
+    const range = 2;
+    let ps = Math.max(1, page - range), pe = Math.min(totalPages, page + range);
+    if (ps > 1) p += '<span style="padding:0 4px;color:var(--text-muted)">...</span>';
+    for (let i = ps; i <= pe; i++) p += `<button onclick="${goFn}(${i})" class="${i===page?'active':''}">${i}</button>`;
+    if (pe < totalPages) p += '<span style="padding:0 4px;color:var(--text-muted)">...</span>';
+    p += `<button onclick="${goFn}(${page+1})" ${page===totalPages?'disabled':''}>&rsaquo;</button>`;
+    p += `<button onclick="${goFn}(${totalPages})" ${page===totalPages?'disabled':''}>&raquo;</button>`;
+    p += `</div><div style="display:flex;align-items:center;gap:6px;">`;
+    p += `<span>${startIdx+1}-${endIdx} of ${totalFiles}</span>`;
+    p += `<select class="pager-size-select" onchange="${changeSizeFn}(this.value)">`;
+    for (const n of [25, 50, 100, 200]) p += `<option value="${n}" ${n===pageSize?'selected':''}>${n}</option>`;
+    p += `</select></div></div>`;
+    return p;
+}
+
 function renderQueue() {
     const container = document.getElementById('queueContent');
     const badge = document.getElementById('badgeQueue');
@@ -2730,6 +2859,18 @@ function renderQueue() {
         badge.style.display = 'none'; return;
     }
     badge.style.display = 'inline'; badge.textContent = q.length;
+
+    // Filter, sort, paginate
+    let filtered = filterJobList(q, queueSearch, queueFilterCodec, queueFilterHdr, queueFilterTopN);
+    if (queueSort !== 'position') sortJobList(filtered, queueSort);
+
+    const totalFiles = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiles / queuePageSize));
+    if (queuePage > totalPages) queuePage = totalPages;
+    if (queuePage < 1) queuePage = 1;
+    const startIdx = (queuePage - 1) * queuePageSize;
+    const endIdx = Math.min(startIdx + queuePageSize, totalFiles);
+    const pageItems = filtered.slice(startIdx, endIdx);
 
     // Queue controls
     const startBtn = enabled
@@ -2743,9 +2884,16 @@ function renderQueue() {
                         '<span style="color:#f39c12;font-weight:600;margin-right:8px;">Waiting</span>';
 
     let html = `<div class="toolbar"><div class="toolbar-left">${statusText}<span class="info-text">${q.length} file${q.length>1?'s':''} in queue</span></div><div class="toolbar-right">${startBtn} ${stopNowBtn} <button class="btn btn-danger" onclick="removeAllFromQueue()" style="font-size:12px;">Remove All</button></div></div>`;
-    q.forEach((job, i) => {
+
+    // Filter bar + pager at top
+    if (q.length > 0) {
+        html += jobFilterBarHtml('queue', queueSearch, queueSort, queueFilterTopN, queueFilterCodec, queueFilterHdr);
+        html += jobPagerHtml('queue', queuePage, queuePageSize, totalFiles, 'goQueuePage', 'changeQueuePageSize');
+    }
+
+    pageItems.forEach((job, pi) => {
+        const globalIdx = q.indexOf(job);
         const f = job.file_info;
-        // Show audio config summary
         const acfg = job.settings.audio_config || [];
         const includedCount = acfg.length > 0 ? acfg.filter(a => a.include).length : (f.audio_streams || []).length;
         const totalCount = (f.audio_streams || []).length;
@@ -2763,7 +2911,7 @@ function renderQueue() {
 
         html += `<div class="queue-item" draggable="true" ondragstart="onDragStart(event,'${job.id}')" ondragend="onDragEnd(event)" ondragover="onDragOver(event)" ondrop="onDrop(event,'${job.id}')">
             <span class="drag-handle" title="Drag to reorder">${svgIcon('grip-vertical', 14)}</span>
-            <div class="qi-num">${i + 1}</div>
+            <div class="qi-num">${globalIdx + 1}</div>
             <div class="qi-info">
                 <div class="qi-name" title="${escHtml(f.path)}">${escHtml(f.filename)}</div>
                 <div style="font-size:11px;color:var(--text-muted);margin:-2px 0 2px 0;">→ ${escHtml(buildOutputFilename(f, job.settings))}</div>
@@ -2788,6 +2936,8 @@ function renderQueue() {
             <button class="btn btn-danger btn-sm" onclick="removeFromQueue('${job.id}')">Remove</button>
         </div>`;
     });
+
+    html += jobPagerHtml('queue', queuePage, queuePageSize, totalFiles, 'goQueuePage', 'changeQueuePageSize');
     container.innerHTML = html;
 }
 
@@ -3355,7 +3505,16 @@ async function killTranscode(pid) {
    History
    ========================================================================= */
 let historyFilter = 'all';
-function setHistoryFilter(f) { historyFilter = f; renderHistory(); }
+let historyPage = 1;
+let historyPageSize = 50;
+let historySearch = '';
+let historySort = 'newest';
+let historyFilterCodec = '';
+let historyFilterHdr = '';
+let historyFilterTopN = '0';
+function setHistoryFilter(f) { historyFilter = f; historyPage = 1; renderHistory(); }
+function goHistoryPage(p) { historyPage = p; renderHistory(); }
+function changeHistoryPageSize(v) { historyPageSize = parseInt(v) || 50; historyPage = 1; renderHistory(); }
 
 function renderHistory() {
     const container = document.getElementById('historyContent');
@@ -3368,7 +3527,6 @@ function renderHistory() {
     badge.style.display = 'inline'; badge.textContent = h.length;
     const counts = { all: h.length, done: 0, failed: 0, skipped: 0, cancelled: 0 };
     for (const j of h) { if (counts[j.status] !== undefined) counts[j.status]++; }
-    const failedGroup = counts.failed + counts.cancelled;
     const filterBtn = (key, label, count) => `<button class="btn btn-sm${historyFilter === key ? ' active' : ''}" style="font-size:10px;padding:2px 8px;${historyFilter === key ? 'background:var(--accent);color:#fff;' : ''}" onclick="setHistoryFilter('${key}')">${label} ${count > 0 ? '<span style=\"opacity:0.7\">' + count + '</span>' : ''}</button>`;
     let html = `<div class="toolbar"><div class="toolbar-left" style="display:flex;gap:4px;align-items:center;">
         ${filterBtn('all', 'All', counts.all)}
@@ -3381,15 +3539,35 @@ function renderHistory() {
         ${(counts.failed + counts.cancelled) > 0 ? `<button class="btn btn-sm" onclick="retryAllFailed()" title="Re-queue all failed and cancelled jobs">${svgIcon('rotate-cw', 12)} Retry All</button>` : ''}
         <button class="btn btn-sm" onclick="clearHistory()">Clear ${historyFilter === 'all' ? 'History' : historyFilter === 'failed' ? 'Failed' : historyFilter.charAt(0).toUpperCase() + historyFilter.slice(1)}</button></div></div>`;
 
-    const filtered = [...h].reverse().filter(job => {
-        if (historyFilter === 'all') return true;
-        return job.status === historyFilter;
-    });
+    // Filter bar + pager at top
+    html += jobFilterBarHtml('history', historySearch, historySort, historyFilterTopN, historyFilterCodec, historyFilterHdr);
+
+    // Filter by status tab first, then apply shared filters
+    let statusFiltered = historyFilter === 'all' ? [...h] : h.filter(j => j.status === historyFilter);
+    let filtered = filterJobList(statusFiltered, historySearch, historyFilterCodec, historyFilterHdr, historyFilterTopN);
+
+    // Sort
+    if (historySort === 'newest') filtered.reverse();
+    else if (historySort === 'oldest') { /* already chronological */ }
+    else sortJobList(filtered, historySort);
+
+    // Pagination
+    const totalFiles = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiles / historyPageSize));
+    if (historyPage > totalPages) historyPage = totalPages;
+    if (historyPage < 1) historyPage = 1;
+    const startIdx = (historyPage - 1) * historyPageSize;
+    const endIdx = Math.min(startIdx + historyPageSize, totalFiles);
+    const pageItems = filtered.slice(startIdx, endIdx);
+
+    html += jobPagerHtml('history', historyPage, historyPageSize, totalFiles, 'goHistoryPage', 'changeHistoryPageSize');
+
     if (!filtered.length) {
-        html += `<div style="text-align:center;padding:20px;color:var(--text-muted);">No ${historyFilter} encodes</div>`;
+        html += `<div style="text-align:center;padding:20px;color:var(--text-muted);">No ${historySearch ? 'matching' : historyFilter} encodes</div>`;
     }
-    for (let _hi = 0; _hi < filtered.length; _hi++) {
-        const job = filtered[_hi];
+    for (let _pi = 0; _pi < pageItems.length; _pi++) {
+        const _hi = startIdx + _pi;
+        const job = pageItems[_pi];
         const huid = job.id + '_' + _hi;  // unique ID even for duplicate job IDs
         const f = job.file_info;
         let icon, badgeClass, statusText;
@@ -3513,6 +3691,7 @@ function renderHistory() {
             </div>
         </div>`;
     }
+    html += jobPagerHtml('history', historyPage, historyPageSize, totalFiles, 'goHistoryPage', 'changeHistoryPageSize');
     container.innerHTML = html;
 }
 

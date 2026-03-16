@@ -60,27 +60,29 @@ elif command -v apt-get &>/dev/null; then
         pip3 install --break-system-packages --upgrade meson ninja 2>/dev/null || pip3 install --upgrade meson ninja 2>/dev/null || true
         hash -r  # refresh PATH cache
     fi
-    # ffmpeg n7.1 requires Vulkan >= 1.3.277 — install newer headers if needed
+    # Vulkan SDK upgrade — only available for Ubuntu via LunarG
     VK_VER=$(pkg-config --modversion vulkan 2>/dev/null || echo "0")
     VK_MINOR=$(echo "$VK_VER" | cut -d. -f3)
-    if [[ -n "$VK_MINOR" ]] && [[ "$VK_MINOR" -lt 277 ]] 2>/dev/null; then
-        log "Vulkan $VK_VER too old (need >= 1.3.277) — installing newer Vulkan headers..."
-        # Install Vulkan SDK headers from LunarG
+    IS_UBUNTU=false
+    [ -f /etc/os-release ] && . /etc/os-release && [[ "$ID" == "ubuntu" || "$ID_LIKE" == *"ubuntu"* ]] && IS_UBUNTU=true
+    if [[ -n "$VK_MINOR" ]] && [[ "$VK_MINOR" -lt 277 ]] 2>/dev/null && $IS_UBUNTU; then
+        log "Vulkan $VK_VER too old (need >= 1.3.277) — installing LunarG Vulkan SDK..."
         if [[ ! -f /etc/apt/sources.list.d/lunarg-vulkan.list ]]; then
             wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc 2>/dev/null | apt-key add - 2>/dev/null || true
             CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
             echo "deb https://packages.lunarg.com/vulkan/ ${CODENAME} main" > /etc/apt/sources.list.d/lunarg-vulkan.list 2>/dev/null || true
             apt-get update -qq 2>/dev/null
         fi
-        apt-get install -y vulkan-headers libvulkan-dev 2>/dev/null || true
-        # LunarG repo also provides shaderc and glslang-dev
-        apt-get install -y shaderc glslang-dev 2>/dev/null || true
+        apt-get install -y vulkan-headers libvulkan-dev shaderc glslang-dev 2>/dev/null || true
         NEW_VK=$(pkg-config --modversion vulkan 2>/dev/null || echo "unknown")
         log "Vulkan updated to: $NEW_VK"
+    elif [[ -n "$VK_MINOR" ]] && [[ "$VK_MINOR" -lt 277 ]] 2>/dev/null; then
+        log "Vulkan $VK_VER is older than 1.3.277 — ffmpeg will use n7.0.2 for compatibility"
     fi
-    # If LunarG repo was already present, still try shaderc/glslang-dev
-    if ! pkg-config --exists shaderc 2>/dev/null && [[ -f /etc/apt/sources.list.d/lunarg-vulkan.list ]]; then
-        apt-get install -y shaderc glslang-dev 2>/dev/null || true
+    # Remove broken LunarG repo if it was added for a non-Ubuntu distro
+    if [[ -f /etc/apt/sources.list.d/lunarg-vulkan.list ]] && ! $IS_UBUNTU; then
+        rm -f /etc/apt/sources.list.d/lunarg-vulkan.list
+        apt-get update -qq 2>/dev/null
     fi
 elif command -v zypper &>/dev/null; then
     zypper install -y gcc gcc-c++ make cmake meson ninja git nasm yasm pkg-config \
