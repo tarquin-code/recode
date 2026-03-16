@@ -43,11 +43,23 @@ if command -v dnf &>/dev/null; then
     fi
 elif command -v apt-get &>/dev/null; then
     apt-get update -qq
-    apt-get install -y build-essential cmake meson ninja-build git nasm yasm pkg-config \
-        libdrm-dev libvulkan-dev libshaderc-dev glslang-tools \
+    # Core build deps (must succeed)
+    apt-get install -y build-essential cmake git nasm yasm pkg-config \
         libnuma-dev libfreetype-dev libfribidi-dev libass-dev \
-        libopus-dev libx265-dev libx264-dev libmp3lame-dev \
-        vulkan-tools mesa-vulkan-drivers 2>/dev/null
+        libopus-dev libx265-dev libx264-dev libmp3lame-dev
+    # Optional GPU/Vulkan deps (may not exist on older distros)
+    for pkg in meson ninja-build libdrm-dev libvulkan-dev libshaderc-dev glslang-tools glslang-dev \
+               vulkan-tools mesa-vulkan-drivers; do
+        apt-get install -y "$pkg" 2>/dev/null || warn "$pkg not available — skipping"
+    done
+    # Ensure meson >= 0.63 (libplacebo requires it; Ubuntu 22.04 ships 0.61)
+    MESON_VER=$(meson --version 2>/dev/null || echo "0")
+    MESON_MINOR=$(echo "$MESON_VER" | cut -d. -f2)
+    if ! command -v meson &>/dev/null || [[ "${MESON_MINOR:-0}" -lt 63 ]] 2>/dev/null; then
+        log "Upgrading meson via pip (system version ${MESON_VER} too old, need >= 0.63)..."
+        pip3 install --break-system-packages --upgrade meson ninja 2>/dev/null || pip3 install --upgrade meson ninja 2>/dev/null || true
+        hash -r  # refresh PATH cache
+    fi
     # ffmpeg n7.1 requires Vulkan >= 1.3.277 — install newer headers if needed
     VK_VER=$(pkg-config --modversion vulkan 2>/dev/null || echo "0")
     VK_MINOR=$(echo "$VK_VER" | cut -d. -f3)
@@ -61,8 +73,14 @@ elif command -v apt-get &>/dev/null; then
             apt-get update -qq 2>/dev/null
         fi
         apt-get install -y vulkan-headers libvulkan-dev 2>/dev/null || true
+        # LunarG repo also provides shaderc and glslang-dev
+        apt-get install -y shaderc glslang-dev 2>/dev/null || true
         NEW_VK=$(pkg-config --modversion vulkan 2>/dev/null || echo "unknown")
         log "Vulkan updated to: $NEW_VK"
+    fi
+    # If LunarG repo was already present, still try shaderc/glslang-dev
+    if ! pkg-config --exists shaderc 2>/dev/null && [[ -f /etc/apt/sources.list.d/lunarg-vulkan.list ]]; then
+        apt-get install -y shaderc glslang-dev 2>/dev/null || true
     fi
 elif command -v zypper &>/dev/null; then
     zypper install -y gcc gcc-c++ make cmake meson ninja git nasm yasm pkg-config \
@@ -92,7 +110,16 @@ if ! pkg-config --exists libplacebo 2>/dev/null; then
     git clone --depth 1 --branch v7.349.0 https://code.videolan.org/videolan/libplacebo.git 2>/dev/null || true
     cd libplacebo
     git submodule update --init --recursive 2>/dev/null || true
-    meson setup build --prefix="$INSTALL_PREFIX" -Dvulkan=enabled -Dshaderc=enabled -Ddemos=false
+    # Use shaderc if available, otherwise fall back to glslang
+    PLACEBO_OPTS="-Dvulkan=enabled -Ddemos=false"
+    if pkg-config --exists shaderc 2>/dev/null; then
+        PLACEBO_OPTS="$PLACEBO_OPTS -Dshaderc=enabled"
+        log "  Using shaderc for shader compilation"
+    else
+        PLACEBO_OPTS="$PLACEBO_OPTS -Dshaderc=disabled -Dglslang=enabled"
+        log "  shaderc not available — using glslang instead"
+    fi
+    meson setup build --prefix="$INSTALL_PREFIX" $PLACEBO_OPTS
     ninja -C build
     ninja -C build install
     cd "$BUILD_DIR"
