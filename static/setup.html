@@ -246,7 +246,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
                 <div style="color:var(--muted);">MKV muxing tool for Dolby Vision output. Bundled with the installer — no package manager needed.</div>
             </div>
             <div class="info-box" style="margin-bottom:16px;">
-                <strong>Missing items?</strong> Click the Install button next to any missing tool. ffmpeg will be compiled from source with all available features (takes 15-30 minutes). dovi_tool and mkvtoolnix are bundled as pre-built binaries — no package repos needed. mediainfo is installed via your system's package manager. Only one install can run at a time — a Cancel button allows stopping a build in progress.
+                <strong>Missing items?</strong> Click the Install button next to any missing tool. A <strong>bundled static ffmpeg</strong> is included for instant CPU encoding — no build needed. For GPU encoding (NVENC + Dolby Vision), ffmpeg must be built from source (15-30 minutes). dovi_tool and mkvtoolnix are bundled as pre-built binaries. Only one install can run at a time — a Cancel button allows stopping a build. If you refresh the page during an install, it will reconnect and show the progress.
             </div>
 
             <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">Step 2: GPU Configuration</h3>
@@ -319,7 +319,9 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
                 <div style="padding:6px 12px;background:rgba(63,185,80,0.15);border:1px solid var(--green);border-radius:6px;font-size:12px;">4. Install + Reboot</div>
             </div>
             <div class="warn-box" style="margin-bottom:16px;">
-                <strong>Important:</strong> Driver installation requires a server reboot. After reboot, return to the setup page to rebuild ffmpeg with GPU support (NVENC + Vulkan + libplacebo). Ubuntu/Debian uses ubuntu-drivers autoinstall for the best driver match. RHEL/Alma/Rocky automatically adds the NVIDIA CUDA repository before installing.
+                <strong>Important:</strong> Driver installation requires a server reboot. After reboot, return to the setup page to build ffmpeg with GPU support (NVENC + Vulkan + libplacebo).<br><br>
+                <strong>Distro support:</strong> Ubuntu/Mint/Pop!_OS (ubuntu-drivers), Debian 11-13 (non-free repos), Fedora (RPM Fusion + akmod-nvidia), RHEL/Alma/Rocky (NVIDIA CUDA repo), openSUSE/SLES (NVIDIA repo), Arch/Manjaro (nvidia-dkms). Kernel headers and build tools are installed automatically for DKMS module compilation.<br><br>
+                <strong>Secure Boot:</strong> If Secure Boot is enabled, the NVIDIA kernel module may fail to load after install. The install log will warn you. Run <code style="font-size:11px;color:var(--cyan);">mokutil --disable-validation</code> and reboot to disable Secure Boot validation, or disable Secure Boot in BIOS.
             </div>
 
             <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">ffmpeg Build</h3>
@@ -336,7 +338,8 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
                     <div style="font-size:11px;color:var(--muted);margin-top:4px;">libx265 + libx264 + libopus + libass (CPU encoding only)</div>
                 </div>
             </div>
-            <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Build time: 15-30 minutes depending on your CPU. You can cancel the build at any time. Without a GPU, ffmpeg is built for CPU-only encoding (libx265). DV P5 files can still be converted to HDR10 without libplacebo — only DV P8.4 conversion requires GPU + Vulkan.</p>
+            <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">A <strong>bundled static ffmpeg</strong> is included for instant CPU encoding &mdash; no build required. Building from source is only needed for GPU encoding (NVENC), Dolby Vision P8.4 (libplacebo + Vulkan), and other GPU-accelerated features.</p>
+            <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Build time: 15-30 minutes depending on your CPU. You can cancel at any time. The build automatically selects the right ffmpeg version based on your system's x265 library. DV P5 files can be converted to HDR10 without libplacebo &mdash; only DV P8.4 conversion requires GPU + Vulkan.</p>
 
             <h3 style="color:var(--accent);font-size:15px;margin:20px 0 8px 0;">After Setup</h3>
             <p style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:8px;">

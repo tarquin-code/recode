@@ -6,3 +6,5 @@ settings.json
 scan_cache.db
 *.tar.gz
 .claude/
+*.db-shm
+*.db-wal

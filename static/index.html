@@ -1411,6 +1411,15 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     </div>
                 </div>
 
+                <h4>Profile Settings</h4>
+                <p>Each profile (Default and Library) includes all encode settings:</p>
+                <ul>
+                    <li>Preset, video codec, hardware (GPU/CPU), output resolution, speed</li>
+                    <li>CQ, max bitrate, audio codec, audio bitrate, audio filter</li>
+                    <li>DV mode, skip 4K, HDR only, discard if larger, delete original, English only</li>
+                </ul>
+                <div class="tip">All settings are saved when you click Save in Settings. If a profile is missing a field (e.g. from an older version), it automatically inherits the Default profile's value.</div>
+
                 <h4>Manual Encodes</h4>
                 <p>When you manually scan and queue files, the settings on the left sidebar are used directly — library profiles do <strong>not</strong> override manual settings. This gives you full control when hand-picking files.</p>
 
@@ -1609,13 +1618,21 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li>A live log shows download and install progress</li>
                 </ul>
                 <div class="tip">Backups are saved to the <code>backups/</code> folder inside the app directory. You can roll back manually if needed by copying the backup files back.</div>
+
+                <h4>Resolution Labels</h4>
+                <p>All resolution displays use standard labels: <strong>4K</strong>, <strong>1440p</strong>, <strong>1080p</strong>, <strong>720p</strong>, <strong>480p</strong>, <strong>360p</strong>, <strong>SD</strong>. Both the source and target resolution are always shown in queue items, encoding cards, and history entries.</p>
+
+                <h4>Installation</h4>
+                <p>One-liner install from GitHub:</p>
+                <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">wget -qO- https://github.com/tarquin-code/plex-recencoder/releases/latest/download/plex-recode.tar.gz | tar xz &amp;&amp; cd plex-recode &amp;&amp; sudo bash install.sh</div>
+                <p style="margin-top:8px;">The installer includes a <strong>bundled static ffmpeg</strong> for CPU encoding &mdash; no build step needed. GPU encoding requires building ffmpeg from source via the Setup Wizard (15-30 minutes). Supported distributions: Ubuntu, Debian, Fedora, RHEL/Alma/Rocky, openSUSE/SLES, Arch/Manjaro.</p>
             </div>
 
             <!-- ABOUT -->
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.10.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.11.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1629,14 +1646,33 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.11.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li>Bundled static ffmpeg &mdash; CPU encoding works out of the box, no build step needed</li>
+                                <li>Setup wizard: instant "Install ffmpeg (CPU only)" option alongside GPU build</li>
+                                <li>Multi-distro NVIDIA driver install with kernel headers and build tools</li>
+                                <li>Secure Boot detection with warning in driver install log</li>
+                                <li>Supports Ubuntu, Debian 11-13, Fedora, RHEL/Alma/Rocky, openSUSE/SLES, Arch/Manjaro</li>
+                                <li>ffmpeg build auto-detects x265 API compatibility (n7.0.2 or n7.1)</li>
+                                <li>Output Resolution added to Default Profile and Library Profiles</li>
+                                <li>Library profiles backfill missing keys &mdash; fixes webhook audio codec bug</li>
+                                <li>New profiles initialize with all fields to prevent silent defaults</li>
+                                <li>Clean resolution labels: 4K, 1440p, 1080p, 720p, 480p, SD everywhere</li>
+                                <li>Target resolution always shown in queue, encoding, and history badges</li>
+                                <li>Auto-updater: daily check, persistent header banner, full changelog before updating</li>
+                                <li>Auto-updater handles root-owned files and subdirectories correctly</li>
+                                <li>Setup wizard: all buttons disabled during install, page reload recovery</li>
+                                <li>History badge only cycles statuses with values</li>
+                                <li>One-liner install: <code>wget -qO- .../plex-recode.tar.gz | tar xz &amp;&amp; cd plex-recode &amp;&amp; sudo bash install.sh</code></li>
+                            </ul>
+                        </div>
+                        <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.10.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
                                 <li>Built-in auto-updater: checks GitHub releases for new versions</li>
                                 <li>Automatic daily update check with persistent header banner when update available</li>
                                 <li>Full changelog shown in Settings before applying update</li>
                                 <li>One-click update: downloads, backs up current version, extracts, restarts service</li>
-                                <li>Live install log with progress during update</li>
-                                <li>Update banner dismissible, persists across page reloads via localStorage</li>
                                 <li>Cancelled encodes tracked separately in History with dedicated filter tab</li>
                                 <li>History badge cycles through Done/Failed/Cancelled/Skipped counts every 10 seconds</li>
                                 <li>Resize moved to Encode Preset card, "Keep Source" renamed to "Original"</li>
