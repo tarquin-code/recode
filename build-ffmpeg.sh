@@ -19,9 +19,13 @@ APP_BIN="/opt/Recode/bin"
 
 log "Installing build dependencies..."
 if command -v dnf &>/dev/null; then
-    # Enable EPEL and CRB/PowerTools for dev packages
-    dnf install -y epel-release 2>/dev/null || true
-    dnf config-manager --set-enabled crb 2>/dev/null || dnf config-manager --set-enabled powertools 2>/dev/null || true
+    # Enable EPEL and CRB/PowerTools for dev packages (RHEL only, not Fedora)
+    IS_FEDORA=false
+    [ -f /etc/os-release ] && . /etc/os-release && [[ "$ID" == "fedora" ]] && IS_FEDORA=true
+    if ! $IS_FEDORA; then
+        dnf install -y epel-release 2>/dev/null || true
+        dnf config-manager --set-enabled crb 2>/dev/null || dnf config-manager --set-enabled powertools 2>/dev/null || true
+    fi
     # Install available packages (some may not exist on minimal installs)
     dnf install -y gcc gcc-c++ make cmake git pkg-config \
         libdrm-devel vulkan-loader-devel \
@@ -60,6 +64,17 @@ elif command -v apt-get &>/dev/null; then
         NEW_VK=$(pkg-config --modversion vulkan 2>/dev/null || echo "unknown")
         log "Vulkan updated to: $NEW_VK"
     fi
+elif command -v zypper &>/dev/null; then
+    zypper install -y gcc gcc-c++ make cmake meson ninja git nasm yasm pkg-config \
+        libdrm-devel libvulkan1 vulkan-devel vulkan-headers \
+        libnuma-devel freetype2-devel fribidi-devel libass-devel \
+        libopus-devel libx265-devel libx264-devel libmp3lame-devel \
+        shaderc Mesa-vulkan-drivers 2>/dev/null || true
+    # If meson not found via package, install via pip
+    if ! command -v meson &>/dev/null; then
+        log "Installing meson via pip..."
+        pip3 install --break-system-packages meson ninja 2>/dev/null || pip3 install meson ninja 2>/dev/null || true
+    fi
 elif command -v pacman &>/dev/null; then
     pacman -S --noconfirm base-devel cmake meson ninja git nasm yasm pkg-config \
         libdrm vulkan-icd-loader shaderc glslang \
@@ -91,6 +106,10 @@ if ! pkg-config --exists libplacebo 2>/dev/null; then
 else
     log "libplacebo already installed"
 fi
+
+# Check system x265 version for ffmpeg compatibility
+X265_VER=$(pkg-config --modversion x265 2>/dev/null || echo "0")
+log "System x265 version: ${X265_VER}"
 
 # Detect NVIDIA GPU and headers
 NVENC_OPTS=""
@@ -166,9 +185,48 @@ log "Vulkan pkg-config check:"
 pkg-config --modversion vulkan 2>&1 && log "  vulkan version: $(pkg-config --modversion vulkan)" || warn "  vulkan not found via pkg-config"
 pkg-config --cflags --libs vulkan 2>&1 || true
 
-# Build ffmpeg
-log "Building ffmpeg (this takes 10-20 minutes)..."
-git clone --depth 1 --branch n7.1 https://git.ffmpeg.org/ffmpeg.git 2>/dev/null || true
+# Build ffmpeg — pick version based on x265 API compatibility
+# ffmpeg n7.1 requires x265 with multi-layer encoder_encode(... x265_picture**)
+# Some distros ship x265 4.x without multi-layer support, so we compile-test
+FFMPEG_BRANCH="n7.1"
+X265_NEW_VER=$(pkg-config --modversion x265 2>/dev/null || echo "0")
+log "System x265 version: ${X265_NEW_VER}"
+
+X265_MULTILAYER=false
+if pkg-config --exists x265 2>/dev/null; then
+    X265_TEST_SRC=$(mktemp /tmp/x265_test_XXXXXX.c)
+    cat > "$X265_TEST_SRC" << 'X265TEST'
+#include <x265.h>
+int main() {
+    const x265_api *api = x265_api_get(0);
+    x265_encoder *enc = NULL;
+    x265_picture pic_in, *pic_out;
+    x265_nal *nals;
+    uint32_t num_nals;
+    /* ffmpeg n7.1 passes x265_picture** as 5th arg */
+    x265_picture *pic_out_ptr;
+    api->encoder_encode(enc, &nals, &num_nals, &pic_in, &pic_out_ptr);
+    return 0;
+}
+X265TEST
+    X265_CF=$(pkg-config --cflags x265 2>/dev/null)
+    X265_LF=$(pkg-config --libs x265 2>/dev/null)
+    if gcc -fsyntax-only $X265_CF "$X265_TEST_SRC" 2>/dev/null; then
+        X265_MULTILAYER=true
+        log "x265 multi-layer API: supported — using ffmpeg n7.1"
+    else
+        log "x265 multi-layer API: not supported — using ffmpeg n7.0.2"
+        FFMPEG_BRANCH="n7.0.2"
+    fi
+    rm -f "$X265_TEST_SRC"
+else
+    log "x265 not found — using ffmpeg n7.0.2"
+    FFMPEG_BRANCH="n7.0.2"
+fi
+
+log "Building ffmpeg ${FFMPEG_BRANCH} (this takes 10-20 minutes)..."
+rm -rf ffmpeg
+git clone --depth 1 --branch "$FFMPEG_BRANCH" https://git.ffmpeg.org/ffmpeg.git 2>/dev/null || true
 cd ffmpeg
 
 run_configure() {

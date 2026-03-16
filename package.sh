@@ -2,9 +2,14 @@
 # Package Plex Re-Encoder for distribution
 set -e
 
-# Read version from recode_server.py
+# Read version from recode_server.py and increment patch
 VERSION=$(grep -oP 'VERSION = "\K[^"]+' /opt/Recode/recode_server.py)
 [[ -z "$VERSION" ]] && VERSION="0.0.0"
+IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+PATCH=$((PATCH + 1))
+VERSION="${MAJOR}.${MINOR}.${PATCH}"
+# Write new version back to recode_server.py
+sed -i "s/^VERSION = \".*\"/VERSION = \"${VERSION}\"/" /opt/Recode/recode_server.py
 
 DIST_DIR="/tmp/recode-dist"
 TARBALL="/tmp/plex-recode-v${VERSION}.tar.gz"
@@ -72,6 +77,31 @@ WRAPPER
     fi
     cd /tmp
     rm -rf "$MKV_TMP"
+fi
+
+# Download static ffmpeg (CPU-only, works on any Linux x86_64)
+echo "Downloading static ffmpeg..."
+FFMPEG_TMP="/tmp/ffmpeg_dl"
+mkdir -p "$FFMPEG_TMP"
+FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+if curl -sL "$FFMPEG_URL" -o "${FFMPEG_TMP}/ffmpeg-static.tar.xz"; then
+    cd "$FFMPEG_TMP"
+    tar -xf ffmpeg-static.tar.xz
+    FFMPEG_DIR=$(find . -maxdepth 1 -type d -name "ffmpeg-*" | head -1)
+    if [[ -n "$FFMPEG_DIR" && -f "${FFMPEG_DIR}/ffmpeg" ]]; then
+        mkdir -p "${DIST_DIR}/plex-recode/bin/static"
+        cp "${FFMPEG_DIR}/ffmpeg" "${DIST_DIR}/plex-recode/bin/static/ffmpeg"
+        cp "${FFMPEG_DIR}/ffprobe" "${DIST_DIR}/plex-recode/bin/static/ffprobe"
+        chmod +x "${DIST_DIR}/plex-recode/bin/static/ffmpeg" "${DIST_DIR}/plex-recode/bin/static/ffprobe"
+        STATIC_VER=$("${DIST_DIR}/plex-recode/bin/static/ffmpeg" -version 2>/dev/null | head -1 || echo "unknown")
+        echo "  ffmpeg static bundled: ${STATIC_VER}"
+    else
+        echo "  WARNING: failed to extract static ffmpeg"
+    fi
+    cd /tmp
+    rm -rf "$FFMPEG_TMP"
+else
+    echo "  WARNING: failed to download static ffmpeg"
 fi
 
 # Create tarball

@@ -69,12 +69,16 @@ elif command -v apt-get &>/dev/null; then
     PKG_MGR="apt"
     PKG_INSTALL="apt-get install -y"
     PKG_GROUP=""
+elif command -v zypper &>/dev/null; then
+    PKG_MGR="zypper"
+    PKG_INSTALL="zypper install -y"
+    PKG_GROUP=""
 elif command -v pacman &>/dev/null; then
     PKG_MGR="pacman"
     PKG_INSTALL="pacman -S --noconfirm"
     PKG_GROUP=""
 else
-    err "Unsupported package manager. Requires dnf, yum, apt-get, or pacman."
+    err "Unsupported package manager. Requires dnf, yum, apt-get, zypper, or pacman."
 fi
 log "Detected package manager: ${PKG_MGR}"
 
@@ -135,15 +139,32 @@ log "Installing system dependencies..."
 
 case "$PKG_MGR" in
     dnf|yum)
-        # Enable EPEL for mkvtoolnix, mediainfo, etc.
-        if ! rpm -q epel-release &>/dev/null; then
-            log "Enabling EPEL repository..."
-            $PKG_INSTALL epel-release 2>/dev/null || dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-$(rpm -E %rhel).noarch.rpm 2>/dev/null || true
+        # Detect if Fedora or RHEL-based
+        IS_FEDORA=false
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            [[ "$ID" == "fedora" ]] && IS_FEDORA=true
         fi
-        # Enable RPM Fusion Free for additional multimedia tools
-        if ! rpm -q rpmfusion-free-release &>/dev/null; then
-            log "Enabling RPM Fusion Free repository..."
-            dnf install -y "https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-$(rpm -E %rhel).noarch.rpm" 2>/dev/null || true
+        if $IS_FEDORA; then
+            # Fedora — doesn't need EPEL, use RPM Fusion for multimedia
+            if ! rpm -q rpmfusion-free-release &>/dev/null; then
+                log "Enabling RPM Fusion repositories..."
+                FEDORA_VER=$(rpm -E %fedora)
+                dnf install -y \
+                    "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${FEDORA_VER}.noarch.rpm" \
+                    "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${FEDORA_VER}.noarch.rpm" \
+                    2>/dev/null || true
+            fi
+        else
+            # RHEL/Alma/Rocky — enable EPEL + RPM Fusion
+            if ! rpm -q epel-release &>/dev/null; then
+                log "Enabling EPEL repository..."
+                $PKG_INSTALL epel-release 2>/dev/null || dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-$(rpm -E %rhel).noarch.rpm 2>/dev/null || true
+            fi
+            if ! rpm -q rpmfusion-free-release &>/dev/null; then
+                log "Enabling RPM Fusion Free repository..."
+                dnf install -y "https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-$(rpm -E %rhel).noarch.rpm" 2>/dev/null || true
+            fi
         fi
         # Remove stale mkvtoolnix repo if present (we bundle it now)
         rm -f /etc/yum.repos.d/mkvtoolnix.repo 2>/dev/null
@@ -155,6 +176,10 @@ case "$PKG_MGR" in
     apt)
         apt-get update -qq
         $PKG_INSTALL python3 python3-pip python3-venv mkvtoolnix mediainfo curl wget
+        ;;
+    zypper)
+        zypper refresh
+        $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils mediainfo
         ;;
     pacman)
         $PKG_INSTALL python python-pip mkvtoolnix-cli mediainfo curl wget
@@ -275,6 +300,22 @@ if [[ -f "${SCRIPT_DIR}/recode_server.py" ]]; then
     if [[ -d "${SCRIPT_DIR}/lib" ]]; then
         cp -a "${SCRIPT_DIR}/lib" "${APP_DIR}/"
         log "Bundled libraries copied to ${APP_DIR}/lib/"
+    fi
+    # Copy static ffmpeg directory
+    if [[ -d "${SCRIPT_DIR}/bin/static" ]]; then
+        mkdir -p "${APP_DIR}/bin/static"
+        cp "${SCRIPT_DIR}/bin/static/"* "${APP_DIR}/bin/static/" 2>/dev/null || true
+        chmod +x "${APP_DIR}/bin/static/"* 2>/dev/null || true
+        log "Static ffmpeg bundled to ${APP_DIR}/bin/static/"
+    fi
+    # Install bundled static ffmpeg as default if no system ffmpeg found
+    if [[ ! -x "${APP_DIR}/bin/ffmpeg" || -L "${APP_DIR}/bin/ffmpeg" && ! -e "${APP_DIR}/bin/ffmpeg" ]]; then
+        if [[ -x "${APP_DIR}/bin/static/ffmpeg" ]]; then
+            ln -sf "${APP_DIR}/bin/static/ffmpeg" "${APP_DIR}/bin/ffmpeg"
+            ln -sf "${APP_DIR}/bin/static/ffprobe" "${APP_DIR}/bin/ffprobe"
+            log "ffmpeg: ${GREEN}using bundled static build${NC} (CPU encoding ready)"
+            log "  GPU encoding requires building ffmpeg — use the Setup Wizard"
+        fi
     fi
     log "Application files copied"
 else

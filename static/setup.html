@@ -379,6 +379,81 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
 let sysInfo = {};
 let rebootPending = false;
 
+async function checkActiveInstalls() {
+    try {
+        const res = await fetch('/api/setup/install-status');
+        const data = await res.json();
+        const tasks = data.tasks || {};
+        // Find any running task
+        for (const [tool, task] of Object.entries(tasks)) {
+            if (task.status === 'running') {
+                // Resume: lock UI and start polling
+                isInstalling = true;
+                setAllInstallButtons(true);
+                const logEl = document.getElementById('installLog');
+                if (logEl) {
+                    logEl.style.display = 'block';
+                    logEl.textContent = task.log || `Resuming ${tool} install...\n`;
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+                // Show cancel button
+                let cancelBtn = document.getElementById('cancelInstallBtn');
+                if (!cancelBtn) {
+                    cancelBtn = document.createElement('button');
+                    cancelBtn.id = 'cancelInstallBtn';
+                    cancelBtn.className = 'btn-sm';
+                    cancelBtn.style.cssText = 'background:var(--red);color:#fff;margin-top:8px;';
+                    cancelBtn.textContent = 'Cancel Install';
+                    cancelBtn.onclick = cancelInstall;
+                    if (logEl) logEl.parentNode.insertBefore(cancelBtn, logEl.nextSibling);
+                }
+                cancelBtn.style.display = 'inline-block';
+                // Create a fake btn for the completion handler
+                const fakeBtn = { disabled: false, textContent: '', className: '' };
+                // Poll for completion
+                const poll = setInterval(async () => {
+                    try {
+                        const sr = await fetch('/api/setup/install-status');
+                        const sd = await sr.json();
+                        const t = sd.tasks[tool];
+                        if (!t) { clearInterval(poll); setAllInstallButtons(false); return; }
+                        const el = document.getElementById('installLog');
+                        if (el) {
+                            el.style.display = 'block';
+                            el.textContent = t.log;
+                            el.scrollTop = el.scrollHeight;
+                        }
+                        if (t.status === 'done' || t.status === 'cancelled') {
+                            clearInterval(poll);
+                            const cb = document.getElementById('cancelInstallBtn');
+                            if (cb) cb.style.display = 'none';
+                            if (t.status === 'cancelled') {
+                                setAllInstallButtons(false);
+                            } else if (tool === 'nvidia-drivers') {
+                                showFfmpegRebuildPrompt();
+                            } else {
+                                setAllInstallButtons(false);
+                            }
+                            const r2 = await fetch('/api/setup/status');
+                            sysInfo = await r2.json();
+                            renderSystemCheck();
+                            renderConcurrency();
+                            const cont = document.getElementById('btnContinue');
+                            if (cont) cont.disabled = rebootPending;
+                        } else if (t.status === 'error') {
+                            clearInterval(poll);
+                            const cb = document.getElementById('cancelInstallBtn');
+                            if (cb) cb.style.display = 'none';
+                            setAllInstallButtons(false);
+                        }
+                    } catch(e) {}
+                }, 2000);
+                return; // Only handle one active install
+            }
+        }
+    } catch(e) {}
+}
+
 async function init() {
     try {
         const res = await fetch('/api/setup/status');
@@ -395,6 +470,8 @@ async function init() {
         renderGpuConfig();
         renderPlexConfig();
         renderConcurrency();
+        // Check for in-progress installs (recover from page reload)
+        await checkActiveInstalls();
         // Auto-select GPU/CPU based on detection
         if (!sysInfo.has_nvenc) {
             document.getElementById('sEncoder').value = 'cpu';
@@ -473,20 +550,21 @@ function renderSystemCheck() {
     const gpuHwNoDrivers = s.has_nvidia_hw && !s.has_gpu;  // lspci sees GPU but no drivers
 
     if (!hasFFmpeg) {
-        // No ffmpeg at all — must build
+        // No ffmpeg at all
         if (gpuDriversWorking) {
             html += `<div class="info-box" style="margin-top:12px;">
                 <strong>ffmpeg is not installed.</strong> It is required for encoding.<br>
-                <span style="font-size:11px;color:var(--muted);">GPU drivers detected — ffmpeg will be built with NVENC + Vulkan + libplacebo for GPU encoding.</span><br><br>
+                <span style="font-size:11px;color:var(--muted);">GPU drivers detected — build ffmpeg with NVENC + Vulkan + libplacebo for GPU encoding.</span><br><br>
                 <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg with GPU support</button>
-                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
+                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span><br>
+                <button class="btn-sm" style="margin-top:6px;" onclick="this.disabled=true; this.textContent='Installing...'; this.className='btn-sm installing'; installTool('ffmpeg-static', this)">Install static ffmpeg (CPU only, instant)</button>
             </div>`;
         } else {
             html += `<div class="info-box" style="margin-top:12px;">
                 <strong>ffmpeg is not installed.</strong> It is required for encoding.<br>
-                <span style="font-size:11px;color:var(--muted);">${gpuHwNoDrivers ? 'GPU hardware detected but drivers not installed — ' : ''}ffmpeg will be built for CPU encoding (libx265). ${gpuHwNoDrivers ? 'Install GPU drivers first, then rebuild ffmpeg to add GPU support.' : ''}</span><br><br>
-                <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg (CPU only)</button>
-                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
+                <span style="font-size:11px;color:var(--muted);">${gpuHwNoDrivers ? 'GPU hardware detected but drivers not installed. ' : ''}Install the bundled static ffmpeg for CPU encoding. ${gpuHwNoDrivers ? 'After installing GPU drivers, rebuild ffmpeg to add GPU support.' : ''}</span><br><br>
+                <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Installing...'; this.className='btn-sm installing'; installTool('ffmpeg-static', this)">Install ffmpeg (CPU encoding)</button>
+                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Instant — no build needed</span>
             </div>`;
         }
     } else if (gpuDriversWorking && (!s.has_nvenc || !s.has_libplacebo)) {
@@ -495,23 +573,24 @@ function renderSystemCheck() {
         if (!s.has_nvenc) missing.push('NVENC (GPU encoding)');
         if (!s.has_libplacebo) missing.push('libplacebo (DV P5 conversion)');
         html += `<div class="info-box" style="margin-top:12px;">
-            <strong>ffmpeg is missing GPU features:</strong> ${missing.join(', ')}<br><br>
-            GPU drivers are installed. Rebuilding ffmpeg will add GPU-accelerated encoding and Dolby Vision support.<br><br>
-            <button class="btn-sm" id="rebuildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Rebuild ffmpeg with GPU support</button>
+            <strong>ffmpeg is missing GPU features:</strong> ${missing.join(', ')}<br>
+            <span style="font-size:11px;color:var(--muted);">CPU encoding works. Build ffmpeg with GPU support for hardware-accelerated encoding.</span><br><br>
+            <button class="btn-sm" id="rebuildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg with GPU support</button>
             <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
         </div>`;
     } else if (hasFFmpeg && gpuHwNoDrivers && !s.has_nvenc) {
-        // ffmpeg exists (CPU only), GPU hardware present but no drivers
         html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
-            ffmpeg installed for CPU encoding. Install GPU drivers above, then rebuild ffmpeg to add GPU support.
+            ffmpeg ready for CPU encoding. Install GPU drivers above, then rebuild ffmpeg to add GPU support.
         </div>`;
     } else if (hasFFmpeg && !s.has_gpu && !s.has_nvidia_hw) {
         html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
-            ffmpeg installed for CPU encoding. If you add a GPU later, re-run setup to rebuild with GPU support.
+            ffmpeg ready for CPU encoding. If you add a GPU later, re-run setup to rebuild with GPU support.
         </div>`;
     }
     html += '<div id="installLog" style="display:none;margin-top:12px;padding:10px;background:#0d1117;border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:11px;color:var(--muted);max-height:200px;overflow-y:auto;white-space:pre-wrap;"></div>';
     document.getElementById('systemChecks').innerHTML = html;
+    // Re-apply disabled state if an install is in progress
+    if (isInstalling || rebootPending) setAllInstallButtons(true);
 }
 
 function checkItem(name, ok, detail, installTool) {
@@ -536,10 +615,15 @@ async function cancelInstall() {
     } catch(e) {}
 }
 
+let isInstalling = false;
+
 function setAllInstallButtons(disabled) {
+    isInstalling = disabled;
     if (!disabled && rebootPending) return; // Never re-enable if reboot pending
-    document.querySelectorAll('.btn-sm[onclick*="installTool"], .btn-sm[onclick*="driverStep"], .btn-sm[onclick*="rebootServer"]').forEach(b => {
+    // Disable ALL .btn-sm buttons except Cancel Install and Help
+    document.querySelectorAll('.btn-sm').forEach(b => {
         if (b.id === 'cancelInstallBtn') return;
+        if (b.onclick && b.getAttribute('onclick') && b.getAttribute('onclick').includes('setupHelpModal')) return;
         if (disabled) {
             b.disabled = true;
             if (!b.dataset.origText) b.dataset.origText = b.textContent;
@@ -559,6 +643,7 @@ function setAllInstallButtons(disabled) {
 }
 
 async function installTool(tool, btn) {
+    if (isInstalling) return;
     btn.disabled = true;
     btn.textContent = 'Installing...';
     btn.className = 'btn-sm installing';
@@ -658,6 +743,7 @@ async function installTool(tool, btn) {
 }
 
 function driverStep(step) {
+    if (isInstalling && step !== 0) return;
     for (let i = 1; i <= 4; i++) {
         const el = document.getElementById('driverStep' + i);
         if (el) el.style.display = (i === step || (step === 0 && i === 1)) ? 'block' : 'none';

@@ -59,7 +59,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.10.0"
+VERSION = "2.10.12"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -288,6 +288,25 @@ def load_settings() -> dict:
     if "convert_dv" in settings:
         if settings.pop("convert_dv", False):
             settings.setdefault("dv_mode", "hdr10")
+    # Backfill missing keys in library profiles so webhooks/folder-watch work correctly
+    profile_defaults = {
+        "preset": settings.get("preset", "auto"),
+        "video_codec": settings.get("video_codec", "hevc"),
+        "encoder": settings.get("encoder", "gpu"),
+        "resize": settings.get("resize", "original"),
+        "speed": settings.get("speed", "p5"),
+        "cq": settings.get("cq", 24),
+        "maxbitrate": settings.get("maxbitrate", "20M"),
+        "audio_filter": settings.get("audio_filter", "all"),
+        "audio_codec": settings.get("audio_codec", "libopus"),
+        "audio_bitrate": settings.get("audio_bitrate", "448k"),
+        "skip_4k": False, "hdr_only": False, "dv_mode": settings.get("dv_mode", "skip"),
+        "discard_larger": False, "delete_original": False, "english_only": False,
+    }
+    for lpath, lprofile in settings.get("library_profiles", {}).items():
+        for k, v in profile_defaults.items():
+            if k not in lprofile:
+                lprofile[k] = v
     return settings
 
 def save_settings(settings: dict):
@@ -543,16 +562,18 @@ async def detect_dolby_vision(path: str) -> tuple[bool, Optional[int]]:
 
 def resolution_label(w: int, h: int) -> str:
     if w >= 3840 or h >= 2160:
-        return f"4K ({w}x{h})"
+        return "4K"
     elif w >= 2560 or h >= 1440:
-        return f"2K ({w}x{h})"
+        return "1440p"
     elif w >= 1920 or h >= 1080:
-        return f"1080p ({w}x{h})"
+        return "1080p"
     elif w >= 1280 or h >= 720:
-        return f"720p ({w}x{h})"
+        return "720p"
     elif h >= 480:
-        return f"480p ({w}x{h})"
-    return f"{w}x{h}"
+        return "480p"
+    elif h >= 360:
+        return "360p"
+    return "SD"
 
 
 def patch_dvvc_compat_id(mkv_path: str, compat_id: int = 4):
@@ -3221,50 +3242,186 @@ async def install_tool(tool: str):
             elif tool == "nvidia-drivers":
                 _install_tasks[tool]["log"] += "Installing NVIDIA drivers...\n"
                 _install_tasks[tool]["log"] += "WARNING: A reboot will be required after installation.\n\n"
-                pkg_cmd = None
-                if shutil.which("apt-get"):
-                    # Ubuntu/Debian — install recommended driver
-                    _install_tasks[tool]["log"] += "Detecting recommended driver...\n"
-                    proc = await _run_sudo("ubuntu-drivers", "list")
-                    stdout, _ = await proc.communicate()
-                    drivers = stdout.decode(errors="replace").strip()
-                    _install_tasks[tool]["log"] += f"Available: {drivers}\n"
-                    # Use ubuntu-drivers autoinstall for best match
-                    pkg_cmd = ["ubuntu-drivers", "autoinstall"]
-                elif shutil.which("dnf"):
-                    # RHEL/Alma/Rocky — need NVIDIA CUDA repo
-                    el_ver = "rhel9"
-                    try:
-                        r = subprocess.run(["rpm", "-E", "%rhel"], capture_output=True, text=True, timeout=5)
-                        if r.returncode == 0 and r.stdout.strip().isdigit():
-                            el_ver = f"rhel{r.stdout.strip()}"
-                    except Exception:
-                        pass
-                    _install_tasks[tool]["log"] += "Adding NVIDIA CUDA repository...\n"
-                    p = await _run_sudo("dnf", "install", "-y",
-                        f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-repo-{el_ver}-12-4-local-12.4.0_550.54.14-1.x86_64.rpm")
+                # Detect distro for driver install
+                distro_id = ""
+                try:
+                    with open("/etc/os-release") as f:
+                        for line in f:
+                            if line.startswith("ID="):
+                                distro_id = line.strip().split("=", 1)[1].strip('"').lower()
+                                break
+                except Exception:
+                    pass
+                _install_tasks[tool]["log"] += f"Detected distro: {distro_id or 'unknown'}\n"
+
+                # Check for Secure Boot
+                try:
+                    sb = subprocess.run(["mokutil", "--sb-state"], capture_output=True, text=True, timeout=5)
+                    if "enabled" in sb.stdout.lower():
+                        _install_tasks[tool]["log"] += "\n⚠ WARNING: Secure Boot is ENABLED.\n"
+                        _install_tasks[tool]["log"] += "The NVIDIA kernel module may fail to load after install.\n"
+                        _install_tasks[tool]["log"] += "If nvidia-smi fails after reboot, disable Secure Boot in BIOS\n"
+                        _install_tasks[tool]["log"] += "or run: mokutil --disable-validation (then reboot).\n\n"
+                except Exception:
+                    pass
+
+                # Helper to run a prereq install and stream log
+                async def _driver_prereq(cmd_list, label):
+                    _install_tasks[tool]["log"] += f"{label}...\n"
+                    p = await _run_sudo(*cmd_list)
                     async for line in p.stdout:
                         text = line.decode(errors="replace").rstrip()
                         if text:
                             _install_tasks[tool]["log"] += text + "\n"
                     await p.wait()
-                    if p.returncode != 0:
-                        # Try the network repo instead
-                        _install_tasks[tool]["log"] += "Trying NVIDIA network repo...\n"
-                        p = await _run_sudo("dnf", "config-manager", "--add-repo",
-                            f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-{el_ver}.repo")
+
+                uname_r = subprocess.run(["uname", "-r"], capture_output=True, text=True, timeout=5).stdout.strip()
+                _install_tasks[tool]["log"] += f"Kernel: {uname_r}\n"
+
+                pkg_cmd = None
+                if shutil.which("apt-get"):
+                    if shutil.which("ubuntu-drivers"):
+                        # Ubuntu / Pop!_OS / Linux Mint (ubuntu-based)
+                        _install_tasks[tool]["log"] += "Using ubuntu-drivers for best match...\n"
+                        # Kernel headers + DKMS deps
+                        await _driver_prereq(["apt-get", "install", "-y",
+                            f"linux-headers-{uname_r}", "build-essential", "dkms"],
+                            "Installing kernel headers and build tools")
+                        proc = await _run_sudo("ubuntu-drivers", "list")
+                        stdout, _ = await proc.communicate()
+                        drivers = stdout.decode(errors="replace").strip()
+                        _install_tasks[tool]["log"] += f"Available: {drivers}\n"
+                        pkg_cmd = ["ubuntu-drivers", "autoinstall"]
+                    else:
+                        # Debian / other apt-based — enable non-free repos
+                        _install_tasks[tool]["log"] += "Enabling non-free repos...\n"
+                        enable_script = (
+                            'if [ -f /etc/apt/sources.list.d/debian.sources ]; then '
+                            "  sed -i 's/^Components:.*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; "
+                            '  echo "Updated debian.sources (DEB822 format)"; '
+                            'elif [ -f /etc/apt/sources.list ]; then '
+                            "  sed -i '/^deb /{/non-free/!s/main/main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
+                            '  echo "Updated sources.list (classic format)"; '
+                            'fi && apt-get update -qq'
+                        )
+                        p = await _run_sudo("bash", "-c", enable_script)
                         async for line in p.stdout:
                             text = line.decode(errors="replace").rstrip()
                             if text:
                                 _install_tasks[tool]["log"] += text + "\n"
                         await p.wait()
-                    pkg_cmd = ["dnf", "module", "install", "-y", "nvidia-driver:latest-dkms"]
+                        # Kernel headers + DKMS + build tools (required for module compilation)
+                        await _driver_prereq(["apt-get", "install", "-y",
+                            f"linux-headers-{uname_r}", "build-essential", "dkms", "gcc", "make"],
+                            "Installing kernel headers and build tools")
+                        _install_tasks[tool]["log"] += "Installing nvidia-driver...\n"
+                        pkg_cmd = ["apt-get", "install", "-y", "nvidia-driver", "firmware-misc-nonfree"]
+                elif shutil.which("dnf"):
+                    # Check if Fedora or RHEL-based
+                    is_fedora = distro_id == "fedora"
+                    if is_fedora:
+                        # Fedora — install RPM Fusion then akmod-nvidia
+                        _install_tasks[tool]["log"] += "Fedora detected — adding RPM Fusion repos...\n"
+                        # Kernel headers + build tools for akmod
+                        await _driver_prereq(["dnf", "install", "-y",
+                            "kernel-devel", "kernel-headers", "gcc", "make", "dkms", "acpid",
+                            "libglvnd-glx", "libglvnd-opengl", "libglvnd-devel", "pkgconfig"],
+                            "Installing kernel headers and build tools")
+                        fedora_ver = ""
+                        try:
+                            r = subprocess.run(["rpm", "-E", "%fedora"], capture_output=True, text=True, timeout=5)
+                            if r.returncode == 0 and r.stdout.strip().isdigit():
+                                fedora_ver = r.stdout.strip()
+                        except Exception:
+                            pass
+                        for repo in [
+                            f"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-{fedora_ver}.noarch.rpm",
+                            f"https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-{fedora_ver}.noarch.rpm",
+                        ]:
+                            p = await _run_sudo("dnf", "install", "-y", repo)
+                            async for line in p.stdout:
+                                text = line.decode(errors="replace").rstrip()
+                                if text:
+                                    _install_tasks[tool]["log"] += text + "\n"
+                            await p.wait()
+                        pkg_cmd = ["dnf", "install", "-y", "akmod-nvidia", "xorg-x11-drv-nvidia-cuda"]
+                    else:
+                        # RHEL/Alma/Rocky — NVIDIA CUDA repo
+                        el_ver = "rhel9"
+                        try:
+                            r = subprocess.run(["rpm", "-E", "%rhel"], capture_output=True, text=True, timeout=5)
+                            if r.returncode == 0 and r.stdout.strip().isdigit():
+                                el_ver = f"rhel{r.stdout.strip()}"
+                        except Exception:
+                            pass
+                        # Kernel headers + DKMS deps
+                        await _driver_prereq(["dnf", "install", "-y",
+                            "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
+                            "libglvnd-devel", "elfutils-libelf-devel"],
+                            "Installing kernel headers and build tools")
+                        _install_tasks[tool]["log"] += f"Adding NVIDIA CUDA repository ({el_ver})...\n"
+                        p = await _run_sudo("dnf", "install", "-y",
+                            f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-repo-{el_ver}-12-4-local-12.4.0_550.54.14-1.x86_64.rpm")
+                        async for line in p.stdout:
+                            text = line.decode(errors="replace").rstrip()
+                            if text:
+                                _install_tasks[tool]["log"] += text + "\n"
+                        await p.wait()
+                        if p.returncode != 0:
+                            # Try network repo as fallback
+                            _install_tasks[tool]["log"] += "Trying NVIDIA network repo...\n"
+                            p = await _run_sudo("dnf", "config-manager", "--add-repo",
+                                f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-{el_ver}.repo")
+                            async for line in p.stdout:
+                                text = line.decode(errors="replace").rstrip()
+                                if text:
+                                    _install_tasks[tool]["log"] += text + "\n"
+                            await p.wait()
+                        pkg_cmd = ["dnf", "module", "install", "-y", "nvidia-driver:latest-dkms"]
+                elif shutil.which("zypper"):
+                    # openSUSE / SLES
+                    _install_tasks[tool]["log"] += "openSUSE/SLES detected — adding NVIDIA repo...\n"
+                    # Kernel headers + build tools
+                    await _driver_prereq(["zypper", "install", "-y",
+                        f"kernel-devel", "gcc", "make", "dkms"],
+                        "Installing kernel headers and build tools")
+                    # Detect openSUSE version for correct repo URL
+                    suse_ver = "leap/15.5"
+                    if distro_id == "opensuse-tumbleweed":
+                        suse_ver = "tumbleweed"
+                    else:
+                        try:
+                            r = subprocess.run(["bash", "-c", ". /etc/os-release && echo $VERSION_ID"],
+                                               capture_output=True, text=True, timeout=5)
+                            ver = r.stdout.strip()
+                            if ver:
+                                suse_ver = f"leap/{ver}"
+                        except Exception:
+                            pass
+                    p = await _run_sudo("zypper", "addrepo", "--refresh",
+                        f"https://download.nvidia.com/opensuse/{suse_ver}", "NVIDIA")
+                    async for line in p.stdout:
+                        text = line.decode(errors="replace").rstrip()
+                        if text:
+                            _install_tasks[tool]["log"] += text + "\n"
+                    await p.wait()
+                    pkg_cmd = ["zypper", "install", "-y", "--auto-agree-with-licenses",
+                               "nvidia-driver", "nvidia-driver-G06-kmp-default"]
                 elif shutil.which("yum"):
+                    await _driver_prereq(["yum", "install", "-y",
+                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms"],
+                        "Installing kernel headers and build tools")
                     pkg_cmd = ["yum", "install", "-y", "nvidia-driver"]
                 elif shutil.which("pacman"):
-                    pkg_cmd = ["pacman", "-S", "--noconfirm", "nvidia"]
+                    # Arch / Manjaro / EndeavourOS — linux-headers auto-matched to kernel
+                    await _driver_prereq(["pacman", "-S", "--noconfirm", "--needed",
+                        "linux-headers", "base-devel", "dkms"],
+                        "Installing kernel headers and build tools")
+                    pkg_cmd = ["pacman", "-S", "--noconfirm", "nvidia-dkms", "nvidia-utils", "nvidia-settings"]
                 if not pkg_cmd:
-                    raise RuntimeError("No supported package manager found for driver install")
+                    raise RuntimeError("No supported package manager found for driver install. "
+                                       "Supported: apt (Ubuntu/Debian/Mint/Pop!_OS), dnf (Fedora/RHEL/Alma/Rocky), "
+                                       "zypper (openSUSE/SLES), pacman (Arch/Manjaro), yum (older RHEL)")
                 _install_tasks[tool]["log"] += f"Running: {' '.join(pkg_cmd)}\n"
                 proc = await _run_sudo(*pkg_cmd)
                 async for line in proc.stdout:
@@ -3296,6 +3453,65 @@ async def install_tool(tool: str):
                 _install_tasks[tool]["status"] = "done"
                 _install_tasks[tool]["log"] += "Restart flag created — systemd will restart the service.\n"
                 return
+
+            elif tool == "ffmpeg-static":
+                _install_tasks[tool]["log"] += "Installing static ffmpeg (CPU encoding)...\n"
+                static_dir = os.path.join(BASE_DIR, "bin", "static")
+                if os.path.isfile(os.path.join(static_dir, "ffmpeg")):
+                    # Use bundled static binary
+                    for binary in ["ffmpeg", "ffprobe"]:
+                        src = os.path.join(static_dir, binary)
+                        dst = os.path.join(BIN_DIR, binary)
+                        if os.path.exists(dst) or os.path.islink(dst):
+                            os.remove(dst)
+                        os.symlink(src, dst)
+                        _install_tasks[tool]["log"] += f"Linked {binary} → {dst}\n"
+                else:
+                    # Download if not bundled
+                    _install_tasks[tool]["log"] += "Downloading static ffmpeg from johnvansickle.com...\n"
+                    import tempfile
+                    tmp = tempfile.mkdtemp(prefix="ffmpeg_static_")
+                    url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+                    proc = await asyncio.create_subprocess_exec(
+                        "curl", "-sL", url, "-o", f"{tmp}/ffmpeg.tar.xz",
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                    await proc.communicate()
+                    _install_tasks[tool]["log"] += "Extracting...\n"
+                    proc = await asyncio.create_subprocess_exec(
+                        "tar", "-xf", f"{tmp}/ffmpeg.tar.xz", "-C", tmp,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                    await proc.communicate()
+                    # Find extracted ffmpeg binary
+                    extracted = None
+                    for d in os.listdir(tmp):
+                        p = os.path.join(tmp, d, "ffmpeg")
+                        if os.path.isfile(p):
+                            extracted = os.path.join(tmp, d)
+                            break
+                    if not extracted:
+                        shutil.rmtree(tmp, ignore_errors=True)
+                        raise RuntimeError("Failed to extract static ffmpeg")
+                    os.makedirs(os.path.join(BIN_DIR, "static"), exist_ok=True)
+                    for binary in ["ffmpeg", "ffprobe"]:
+                        src = os.path.join(extracted, binary)
+                        static_dst = os.path.join(BIN_DIR, "static", binary)
+                        shutil.copy2(src, static_dst)
+                        os.chmod(static_dst, 0o755)
+                        dst = os.path.join(BIN_DIR, binary)
+                        if os.path.exists(dst) or os.path.islink(dst):
+                            os.remove(dst)
+                        os.symlink(static_dst, dst)
+                        _install_tasks[tool]["log"] += f"Installed {binary} → {dst}\n"
+                    shutil.rmtree(tmp, ignore_errors=True)
+                FFMPEG = _find_bin("ffmpeg")
+                FFPROBE = _find_bin("ffprobe")
+                _install_tasks[tool]["log"] += f"ffmpeg ready: {FFMPEG}\n"
+                try:
+                    r = subprocess.run([FFMPEG, "-version"], capture_output=True, text=True, timeout=5)
+                    _install_tasks[tool]["log"] += r.stdout.split("\n")[0] + "\n"
+                except Exception:
+                    pass
+                _install_tasks[tool]["log"] += "CPU encoding ready. Build ffmpeg with GPU support for hardware acceleration.\n"
 
             elif tool == "ffmpeg":
                 _install_tasks[tool]["log"] += "Building ffmpeg from source (this takes 15-30 minutes)...\n"

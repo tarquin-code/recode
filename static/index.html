@@ -2523,6 +2523,7 @@ function renderScanResults() {
 }
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function cleanRes(r) { r = (r || '').replace(/\s*\(.*\)/, ''); if (r === '2160p') return '4K'; if (r === '2K') return '1440p'; if (/^\d+x\d+$/.test(r)) return 'SD'; return r; }
 function buildOutputFilename(fileInfo, settings) {
     const stem = fileInfo.filename.replace(/\.[^.]+$/, '');
     const codec = (settings.video_codec || 'hevc') === 'hevc' ? 'h265' : 'h264';
@@ -2733,13 +2734,13 @@ function renderQueue() {
                 <div class="qi-detail">
                     <span style="color:var(--text-muted);font-size:10px;">Source:</span>
                     <span class="badge badge-sm badge-codec">${f.codec ? f.codec.toUpperCase() : '?'}</span>
-                    <span class="badge badge-sm badge-res">${f.resolution_label}</span>
+                    <span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${origHdrBadge}">${origHdr}</span>
                     <span class="badge badge-sm badge-size">${f.size_human}</span>
                     <span class="badge badge-sm badge-audio">${audioLabel}</span>
                     <span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span>
                     <span class="badge badge-sm badge-codec">${hwLabel} ${vcLabel}</span>
-                    ${(job.settings.resize && job.settings.resize !== 'original') ? `<span class="badge badge-sm badge-res">${job.settings.resize}</span>` : ''}
+                    <span class="badge badge-sm badge-res">${(job.settings.resize && job.settings.resize !== 'original') ? cleanRes(job.settings.resize) : cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${targetHdrBadge}">${targetHdr}</span>
                     <span class="badge badge-sm badge-sdr">${job.settings.preset || 'auto'}</span>
                     <span class="badge badge-sm badge-audio">CQ${job.settings.resolved_cq || job.settings.cq || '?'}</span>
@@ -2872,11 +2873,11 @@ function renderEncoding() {
                     <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;padding-left:22px;font-size:10px;">
                         <span style="color:var(--text-muted);">Source:</span>
                         <span class="badge badge-sm badge-codec">${f.codec ? f.codec.toUpperCase() : '?'}</span>
-                        <span class="badge badge-sm badge-res">${f.resolution_label}</span>
+                        <span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>
                         <span class="badge badge-sm ${(() => { const h = f.hdr_type||'SDR'; return h.startsWith('Dolby') ? 'badge-dv' : h === 'SDR' ? 'badge-sdr' : 'badge-hdr'; })()}">${(() => { const h = f.hdr_type||'SDR'; return h.startsWith('Dolby Vision') ? h.replace('Dolby Vision','DV') : h; })()}</span>
                         <span style="color:var(--text-muted);margin:0 2px;">→</span>
                         <span class="badge badge-sm badge-codec">${encoder}</span>
-                        ${(s.resize && s.resize !== 'original') ? `<span class="badge badge-sm badge-res">${s.resize}</span>` : ''}
+                        <span class="badge badge-sm badge-res">${(s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label)}</span>
                         <span class="badge badge-sm ${(() => { const dm = s.dv_mode||'skip'; const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); const t = (dm==='encode_dv'&&(isDv||f.hdr_type==='HDR10'))?'DV P8.4':(dm==='hdr10'&&isDv)?'HDR10':(f.hdr_type||'SDR'); return t.startsWith('DV')?'badge-dv':t==='SDR'?'badge-sdr':'badge-hdr'; })()}">${(() => { const dm = s.dv_mode||'skip'; const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return (dm==='encode_dv'&&(isDv||f.hdr_type==='HDR10'))?'DV P8.4':(dm==='hdr10'&&isDv)?'HDR10':(f.hdr_type||'SDR'); })()}</span>
                         <span class="badge badge-sm badge-sdr">${presetLabel}</span>
                         <span class="badge badge-sm badge-audio">CQ${rcq}</span>
@@ -2896,7 +2897,7 @@ function renderEncoding() {
                         <div style="padding:8px;background:var(--bg-tertiary);border-radius:4px;">
                             <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;margin-bottom:4px;">Original</div>
                             <div style="font-weight:600;">${f.size_human}</div>
-                            <div>${f.codec.toUpperCase()} · ${f.resolution_label} · ${f.hdr_type}</div>
+                            <div>${f.codec.toUpperCase()} · ${cleanRes(f.resolution_label)} · ${f.hdr_type}</div>
                             <div style="font-size:11px;color:var(--text-secondary);">${f.duration_secs && f.size_bytes ? 'Bitrate ' + (f.size_bytes * 8 / f.duration_secs / 1000000).toFixed(1) + ' Mbps' : ''}${f.audio_streams && f.audio_streams.length ? ' · Audio: ' + f.audio_streams.map(a => a.codec.toUpperCase() + ' ' + (a.channels === 6 ? '5.1' : a.channels === 8 ? '7.1' : a.channels + 'ch')).join(', ') : ''}</div>
                             <div style="color:var(--text-muted);margin-top:2px;word-break:break-all;font-size:11px;">${escHtml(f.path)}</div>
                         </div>
@@ -2912,7 +2913,7 @@ function renderEncoding() {
                                 const dm = s.dv_mode || 'skip';
                                 const isDv = (f.hdr_type||'').startsWith('Dolby Vision');
                                 const tgtHdr = (dm === 'encode_dv' && (isDv || f.hdr_type === 'HDR10')) ? 'Dolby Vision P8.4' : (dm === 'hdr10' && isDv) ? 'HDR10' : f.hdr_type;
-                                const tgtRes = (s.resize && s.resize !== 'original') ? s.resize : f.resolution_label;
+                                const tgtRes = (s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label);
                                 return enc + ' · ' + vcLabel + ' · ' + tgtRes + ' · ' + tgtHdr;
                             })()}</div>
                             <div style="font-size:11px;color:var(--text-secondary);">Bitrate ${parseInt(rbit)} Mbps · ${presetLabel} · CQ${rcq} · ${rspd} · Audio: ${s.audio_codec === 'copy' ? 'Passthrough' : (s.audio_codec || 'auto').replace('lib','')}</div>
@@ -2928,7 +2929,7 @@ function renderEncoding() {
                             <span class="badge badge-res">Max ${rbit}</span>
                             <span class="badge badge-codec">${rspd}</span>
                             <span class="badge badge-audio">${audioCodec} ${audioBr}</span>
-                            ${(s.resize && s.resize !== 'original') ? `<span class="badge badge-res">Resize: ${s.resize}</span>` : ''}
+                            ${(s.resize && s.resize !== 'original') ? `<span class="badge badge-res">Resize: ${cleanRes(s.resize)}</span>` : ''}
                             ${s.delete_original ? '<span class="badge badge-fail">Delete original</span>' : ''}
                             ${s.discard_larger ? '<span class="badge badge-skip">Discard if larger</span>' : ''}
                             ${s.english_only ? '<span class="badge badge-sdr">English only</span>' : ''}
@@ -3399,7 +3400,7 @@ function renderHistory() {
         const origAudioStr = f.audio_streams && f.audio_streams.length ? f.audio_streams.map(a => a.codec.toUpperCase() + ' ' + (a.channels === 6 ? '5.1' : a.channels === 8 ? '7.1' : a.channels + 'ch')).join(', ') : '';
         const origDetails = `
             <div style="font-weight:600;margin-bottom:4px;">${r.orig_size || f.size_human || '?'}</div>
-            <div>${f.codec ? f.codec.toUpperCase() : '?'} · ${f.resolution_label || '?'} · ${f.hdr_type || 'SDR'}</div>
+            <div>${f.codec ? f.codec.toUpperCase() : '?'} · ${cleanRes(f.resolution_label || '?')} · ${f.hdr_type || 'SDR'}</div>
             <div style="font-size:11px;color:var(--text-secondary);">${f.duration_secs && f.size_bytes ? 'Bitrate ' + (f.size_bytes * 8 / f.duration_secs / 1000000).toFixed(1) + ' Mbps' : ''}${origAudioStr ? ' · Audio: ' + origAudioStr : ''}</div>
             <div style="color:var(--text-muted);margin-top:2px;word-break:break-all;">${escHtml(f.path)}</div>`;
 
@@ -3407,7 +3408,7 @@ function renderHistory() {
         const hisDv = (f.hdr_type||'').startsWith('Dolby Vision');
         const hisTargetHdr = (hdm === 'encode_dv' && (hisDv || f.hdr_type === 'HDR10')) ? 'Dolby Vision P8.4' : (hdm === 'hdr10' && hisDv) ? 'HDR10' : (f.hdr_type||'SDR');
         const hisEnc = s.use_cpu ? 'CPU' : 'GPU';
-        const hisTgtRes = (s.resize && s.resize !== 'original') ? s.resize : (f.resolution_label || '?');
+        const hisTgtRes = (s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label || '?');
         const hisAudioCodec = s.audio_codec === 'copy' ? 'Passthrough' : (s.audio_codec || 'auto').replace('lib','');
         const encDetails = r.new_size ? `
             <div style="font-weight:600;margin-bottom:4px;">${r.new_size}${r.saved_pct !== undefined ? ` <span style="color:${r.saved_pct >= 0 ? 'var(--success)' : 'var(--warning)'};font-size:11px;">(${r.saved_pct >= 0 ? 'saved' : 'grew'} ${Math.abs(r.saved_pct)}%)</span>` : ''}</div>
@@ -3437,7 +3438,7 @@ function renderHistory() {
                 <span class="badge badge-res">Max ${rbit}</span>
                 <span class="badge badge-codec">${rspd}</span>
                 <span class="badge badge-audio">${audioCodec} ${audioBitrate}</span>
-                ${(s.resize && s.resize !== 'original') ? `<span class="badge badge-res">Resize: ${s.resize}</span>` : ''}
+                ${(s.resize && s.resize !== 'original') ? `<span class="badge badge-res">Resize: ${cleanRes(s.resize)}</span>` : ''}
                 ${s.delete_original ? '<span class="badge badge-fail">Delete original</span>' : ''}
                 ${s.discard_larger ? '<span class="badge badge-skip">Discard if larger</span>' : ''}
                 ${s.english_only ? '<span class="badge badge-sdr">English only</span>' : ''}
@@ -3884,7 +3885,7 @@ function renderScanResultsFiltered(files) {
         }
 
         // Resolution label
-        const resLabel = f.width >= 3840 ? '4K' : f.width >= 2560 ? '2K' : f.height >= 1080 ? 'HD' : f.height >= 720 ? '720p' : 'SD';
+        const resLabel = cleanRes(f.resolution_label) || (f.width >= 3840 ? '4K' : f.width >= 2560 ? '1440p' : f.height >= 1080 ? '1080p' : f.height >= 720 ? '720p' : f.height >= 480 ? '480p' : f.height >= 360 ? '360p' : 'SD');
 
         // Audio detail lines (show max 2, plus indicator for more)
         let audioHtml = '';
@@ -3910,7 +3911,7 @@ function renderScanResultsFiltered(files) {
                 <div class="file-name" title="${escHtml(f.path)}">${escHtml(f.filename)}</div>
             </td>
             <td>
-                <span class="badge badge-res">${resLabel} ${f.width}x${f.height}</span>
+                <span class="badge badge-res">${resLabel}</span>
                 <div class="file-meta" style="margin-top:3px;">
                     <span class="badge ${codecBadge}">${f.codec.toUpperCase()}</span>
                     <span class="badge ${hdrBadge}" title="${f.hdr_type}">${f.hdr_type.startsWith('Dolby Vision') ? f.hdr_type.replace('Dolby Vision', 'DV') : f.hdr_type}</span>
@@ -4143,6 +4144,19 @@ async function openSettings() {
         document.getElementById('setWatchPaths').value = (s.watch_paths || []).join('\n');
         // Library profiles
         libraryProfiles = s.library_profiles || {};
+        // Backfill missing keys in existing profiles so webhooks/folder-watch use correct values
+        const profileDefaults = {
+            preset: 'auto', video_codec: 'hevc', encoder: 'gpu', resize: 'original',
+            speed: 'p5', cq: 24, maxbitrate: '20M',
+            audio_filter: 'all', audio_codec: s.audio_codec || 'libopus', audio_bitrate: s.audio_bitrate || '448k',
+            skip_4k: false, hdr_only: false, dv_mode: 'skip',
+            discard_larger: false, delete_original: false, english_only: false
+        };
+        for (const [path, prof] of Object.entries(libraryProfiles)) {
+            for (const [k, v] of Object.entries(profileDefaults)) {
+                if (prof[k] === undefined) prof[k] = v;
+            }
+        }
         renderLibraryProfiles();
         // Theme
         document.getElementById('setTheme').value = s.theme || 'dark';
@@ -4972,7 +4986,13 @@ function addLibraryProfile() {
     const path = input.value.trim();
     if (!path) { input.focus(); return; }
     if (libraryProfiles[path]) { input.focus(); return; }
-    libraryProfiles[path] = { preset: 'auto' };
+    libraryProfiles[path] = {
+        preset: 'auto', video_codec: 'hevc', encoder: 'gpu', resize: 'original',
+        speed: 'p5', cq: 24, maxbitrate: '20M',
+        audio_filter: 'all', audio_codec: 'libopus', audio_bitrate: '448k',
+        skip_4k: false, hdr_only: false, dv_mode: 'skip',
+        discard_larger: false, delete_original: false, english_only: false
+    };
     input.value = '';
     renderLibraryProfiles();
 }
