@@ -59,7 +59,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.10.12"
+VERSION = "2.10.13"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -3900,8 +3900,11 @@ async def update_apply():
                 for f in os.listdir(extracted_bin):
                     src = os.path.join(extracted_bin, f)
                     dst = os.path.join(BASE_DIR, "bin", f)
-                    shutil.copy2(src, dst)
-                    os.chmod(dst, 0o755)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(src, dst)
+                        os.chmod(dst, 0o755)
             # Update lib (bundled libraries)
             extracted_lib = os.path.join(extracted, "lib")
             if os.path.isdir(extracted_lib):
