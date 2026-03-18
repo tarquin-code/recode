@@ -135,6 +135,11 @@ log "Will run as: ${BOLD}${RUN_USER}:${RUN_GROUP}${NC}"
 # ─────────────────────────────────────────────────────────────────
 # Install system dependencies
 # ─────────────────────────────────────────────────────────────────
+# Check if compiled binary is bundled — fewer system deps needed
+SCRIPT_DIR_PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HAS_BINARY=false
+[[ -x "${SCRIPT_DIR_PKG}/bin/recode" ]] && HAS_BINARY=true
+
 log "Installing system dependencies..."
 
 case "$PKG_MGR" in
@@ -168,63 +173,109 @@ case "$PKG_MGR" in
         fi
         # Remove stale mkvtoolnix repo if present (we bundle it now)
         rm -f /etc/yum.repos.d/mkvtoolnix.repo 2>/dev/null
-        $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils
+        if $HAS_BINARY; then
+            $PKG_INSTALL curl wget pciutils fuse3
+        else
+            $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils fuse3
+        fi
         # mediainfo from EPEL — install separately so failure doesn't block
         $PKG_INSTALL mediainfo 2>/dev/null || warn "mediainfo not available — install via web UI"
         # mkvtoolnix is bundled in the package — no need to install from repos
         ;;
     apt)
         apt-get update -qq
-        $PKG_INSTALL python3 python3-pip python3-venv mkvtoolnix mediainfo curl wget
+        if $HAS_BINARY; then
+            $PKG_INSTALL curl wget fuse3
+        else
+            $PKG_INSTALL python3 python3-pip python3-venv mkvtoolnix mediainfo curl wget fuse3
+        fi
         ;;
     zypper)
         zypper refresh
-        $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils mediainfo
+        if $HAS_BINARY; then
+            $PKG_INSTALL curl wget pciutils fuse3
+        else
+            $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils mediainfo fuse3
+        fi
         ;;
     pacman)
-        $PKG_INSTALL python python-pip mkvtoolnix-cli mediainfo curl wget
+        if $HAS_BINARY; then
+            $PKG_INSTALL curl wget fuse3
+        else
+            $PKG_INSTALL python python-pip mkvtoolnix-cli mediainfo curl wget fuse3
+        fi
         ;;
 esac
 
 # ─────────────────────────────────────────────────────────────────
-# Check Python version
+# Configure FUSE (required for remote GPU mount mode)
 # ─────────────────────────────────────────────────────────────────
-PYTHON_BIN=$(command -v python3 || command -v python)
-[[ -z "$PYTHON_BIN" ]] && err "Python 3 not found"
-
-PYTHON_VER=$($PYTHON_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PYTHON_MAJOR=$($PYTHON_BIN -c "import sys; print(sys.version_info.major)")
-PYTHON_MINOR=$($PYTHON_BIN -c "import sys; print(sys.version_info.minor)")
-
-if [[ "$PYTHON_MAJOR" -lt 3 ]] || [[ "$PYTHON_MAJOR" -eq 3 && "$PYTHON_MINOR" -lt 9 ]]; then
-    err "Python ${MIN_PYTHON}+ required (found ${PYTHON_VER})"
-fi
-log "Python ${PYTHON_VER} found at ${PYTHON_BIN}"
-
-# ─────────────────────────────────────────────────────────────────
-# Install Python packages (using venv for Python 3.12+ compatibility)
-# ─────────────────────────────────────────────────────────────────
-log "Installing Python packages..."
-VENV_DIR="${APP_DIR}/venv"
-mkdir -p "$APP_DIR"
-
-# Always use a virtual environment — most reliable across all distros
-if [[ -d "${VENV_DIR}" && -x "${VENV_DIR}/bin/python3" ]]; then
-    log "Existing virtual environment found"
+if [[ -f /etc/fuse.conf ]]; then
+    if ! grep -q '^user_allow_other' /etc/fuse.conf; then
+        echo 'user_allow_other' >> /etc/fuse.conf
+        log "FUSE: enabled user_allow_other in /etc/fuse.conf"
+    else
+        log "FUSE: user_allow_other already configured"
+    fi
 else
-    log "Creating Python virtual environment at ${VENV_DIR}..."
-    $PYTHON_BIN -m venv "$VENV_DIR" || err "Failed to create virtual environment. Install python3-venv."
+    echo 'user_allow_other' > /etc/fuse.conf
+    log "FUSE: created /etc/fuse.conf with user_allow_other"
 fi
-PYTHON_BIN="${VENV_DIR}/bin/python3"
-"${VENV_DIR}/bin/pip" install --quiet --upgrade pip 2>/dev/null || true
-"${VENV_DIR}/bin/pip" install --quiet fastapi uvicorn psutil requests pydantic python-multipart websockets \
-    || err "Failed to install Python packages in virtual environment"
-chown -R "${RUN_USER}:${RUN_GROUP}" "$VENV_DIR"
 
-# Verify imports
-$PYTHON_BIN -c "import fastapi, uvicorn, psutil, requests, pydantic" \
-    || err "Failed to verify Python packages"
-log "Python packages installed (venv: ${VENV_DIR})"
+# ─────────────────────────────────────────────────────────────────
+# Check Python version (skip if compiled binary is bundled)
+# ─────────────────────────────────────────────────────────────────
+if $HAS_BINARY; then
+    PYTHON_BIN=$(command -v python3 2>/dev/null || echo "/usr/bin/python3")
+    log "Compiled binary mode — Python check skipped"
+else
+    PYTHON_BIN=$(command -v python3 || command -v python)
+    [[ -z "$PYTHON_BIN" ]] && err "Python 3 not found"
+
+    PYTHON_VER=$($PYTHON_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    PYTHON_MAJOR=$($PYTHON_BIN -c "import sys; print(sys.version_info.major)")
+    PYTHON_MINOR=$($PYTHON_BIN -c "import sys; print(sys.version_info.minor)")
+
+    if [[ "$PYTHON_MAJOR" -lt 3 ]] || [[ "$PYTHON_MAJOR" -eq 3 && "$PYTHON_MINOR" -lt 9 ]]; then
+        err "Python ${MIN_PYTHON}+ required (found ${PYTHON_VER})"
+    fi
+    log "Python ${PYTHON_VER} found at ${PYTHON_BIN}"
+fi
+
+# ─────────────────────────────────────────────────────────────────
+# Install Python packages (skip if compiled binary is bundled)
+# ─────────────────────────────────────────────────────────────────
+# Check early if we have a compiled binary in the source package
+SCRIPT_DIR_CHECK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -x "${SCRIPT_DIR_CHECK}/bin/recode" ]]; then
+    log "Compiled binary found — skipping Python venv setup"
+    VENV_DIR="${APP_DIR}/venv"
+    mkdir -p "$APP_DIR"
+    # Still need PYTHON_BIN for the service file fallback path
+    PYTHON_BIN="${VENV_DIR}/bin/python3"
+else
+    log "Installing Python packages..."
+    VENV_DIR="${APP_DIR}/venv"
+    mkdir -p "$APP_DIR"
+
+    # Always use a virtual environment — most reliable across all distros
+    if [[ -d "${VENV_DIR}" && -x "${VENV_DIR}/bin/python3" ]]; then
+        log "Existing virtual environment found"
+    else
+        log "Creating Python virtual environment at ${VENV_DIR}..."
+        $PYTHON_BIN -m venv "$VENV_DIR" || err "Failed to create virtual environment. Install python3-venv."
+    fi
+    PYTHON_BIN="${VENV_DIR}/bin/python3"
+    "${VENV_DIR}/bin/pip" install --quiet --upgrade pip 2>/dev/null || true
+    "${VENV_DIR}/bin/pip" install --quiet fastapi uvicorn psutil requests pydantic python-multipart websockets \
+        || err "Failed to install Python packages in virtual environment"
+    chown -R "${RUN_USER}:${RUN_GROUP}" "$VENV_DIR"
+
+    # Verify imports
+    $PYTHON_BIN -c "import fastapi, uvicorn, psutil, requests, pydantic" \
+        || err "Failed to verify Python packages"
+    log "Python packages installed (venv: ${VENV_DIR})"
+fi
 
 # ─────────────────────────────────────────────────────────────────
 # Check for NVIDIA GPU (optional)
@@ -343,6 +394,15 @@ log "Sudoers configured for tool installs"
 # ─────────────────────────────────────────────────────────────────
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
+# Determine how to start the server — prefer compiled binary, fall back to Python
+if [[ -x "${APP_DIR}/bin/recode" ]]; then
+    EXEC_START="${APP_DIR}/bin/recode"
+    log "Using compiled binary: ${EXEC_START}"
+else
+    EXEC_START="${PYTHON_BIN} ${APP_DIR}/recode_server.py"
+    log "Using Python: ${EXEC_START}"
+fi
+
 cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=Plex Re-Encoder Web UI
@@ -353,7 +413,7 @@ Type=simple
 User=${RUN_USER}
 Group=${RUN_GROUP}
 WorkingDirectory=${APP_DIR}
-ExecStart=${PYTHON_BIN} ${APP_DIR}/recode_server.py
+ExecStart=${EXEC_START}
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

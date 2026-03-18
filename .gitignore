@@ -10,4 +10,12 @@ scan_cache.db
 *.db-wal
 bin/ffmpeg
 bin/ffprobe
-bin/ffmpeg-over-ip-*
+bin/recode
+bin/recode-remote
+bin/recode-remote-*
+dist/
+build/
+*.spec
+rrp/target/
+rrp-server.log
+remote-gpu/

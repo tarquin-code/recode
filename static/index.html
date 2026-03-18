@@ -908,7 +908,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="settings-nav-item" onclick="switchHelpTab('encoding',this)">Encoding</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('audio',this)">Audio</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('dolby-vision',this)">Dolby Vision</div>
-                <div class="settings-nav-item" onclick="switchHelpTab('gpu',this)">GPU &amp; Concurrency</div>
+                <div class="settings-nav-item" onclick="switchHelpTab('gpu',this)">GPU &amp; Remote</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('profiles',this)">Profiles</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('plex',this)">Plex Integration</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('automation',this)">Automation</div>
@@ -964,6 +964,78 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </div>
 
                 <div class="tip">Already-HEVC files are automatically detected and marked — they won't be re-encoded.</div>
+
+                <h3 style="margin-top:24px;">Features</h3>
+
+                <h4>Encoding</h4>
+                <ul>
+                    <li><strong>GPU Encoding</strong> &mdash; NVIDIA NVENC hardware acceleration (10-50x faster than realtime)</li>
+                    <li><strong>CPU Encoding</strong> &mdash; libx265 software encoding when no GPU is available</li>
+                    <li><strong>H.265 (HEVC) &amp; H.264</strong> &mdash; Configurable codec and quality</li>
+                    <li><strong>Presets</strong> &mdash; Auto, Film, Animation, Grain, Custom with per-preset CQ/bitrate/speed</li>
+                    <li><strong>Resolution Scaling</strong> &mdash; Downscale 4K to 1080p, 1440p, 720p, or keep original</li>
+                    <li><strong>Test Mode</strong> &mdash; Encode only the first 5 minutes for quick quality checks</li>
+                </ul>
+
+                <h4>HDR &amp; Dolby Vision</h4>
+                <ul>
+                    <li><strong>HDR10 &amp; HLG</strong> &mdash; Passthrough and metadata preservation</li>
+                    <li><strong>Dolby Vision</strong> &mdash; DV Profile 5, 7, 8 with P8.4 conversion</li>
+                    <li><strong>DV P5 Conversion</strong> &mdash; Convert DV P5 to P8.4 using libplacebo + Vulkan</li>
+                    <li><strong>HDR to DV Upgrade</strong> &mdash; Convert HDR10 to Dolby Vision P8.4</li>
+                </ul>
+
+                <h4>Audio</h4>
+                <ul>
+                    <li><strong>Codec Options</strong> &mdash; Passthrough, Opus, AAC, AC3, EAC3</li>
+                    <li><strong>Per-Stream Control</strong> &mdash; Configure codec and bitrate per audio track</li>
+                    <li><strong>Filters</strong> &mdash; All tracks, first only, English only, or specific language</li>
+                </ul>
+
+                <h4>Multi-GPU &amp; Remote</h4>
+                <ul>
+                    <li><strong>Auto Detection</strong> &mdash; Detects all NVIDIA GPUs with VRAM-based concurrency</li>
+                    <li><strong>Load Balancing</strong> &mdash; Across local GPUs and remote servers</li>
+                    <li><strong>Remote GPU (RRP)</strong> &mdash; Offload to remote servers via FUSE mount over TCP</li>
+                    <li><strong>GPU Server Mode</strong> &mdash; Share your GPU with other Recode instances</li>
+                    <li><strong>Single Binary</strong> &mdash; <code>recode-remote</code> handles server, client, and ping</li>
+                    <li><strong>Secure</strong> &mdash; HMAC-SHA256 auth, SHA256 output verification</li>
+                </ul>
+
+                <h4>Plex Integration</h4>
+                <ul>
+                    <li><strong>Library Scanner</strong> &mdash; Scan Plex libraries for re-encoding candidates</li>
+                    <li><strong>Webhook Auto-Encode</strong> &mdash; New media added to Plex is automatically queued</li>
+                    <li><strong>Post-Encode Rescan</strong> &mdash; Plex library refreshed after each encode</li>
+                    <li><strong>Library Profiles</strong> &mdash; Different settings per Plex library</li>
+                </ul>
+
+                <h4>Queue &amp; Automation</h4>
+                <ul>
+                    <li><strong>Drag &amp; Drop</strong> reordering, <strong>Pause / Resume</strong> individual encodes</li>
+                    <li><strong>Search &amp; Filter</strong> &mdash; By name, codec, HDR type, status with pagination</li>
+                    <li><strong>Folder Watch</strong> &mdash; Monitor directories and auto-queue new files</li>
+                    <li><strong>Scheduled Encoding</strong> &mdash; Set active hours (e.g., overnight only)</li>
+                    <li><strong>Unlimited History</strong> with detailed logs and one-click retry</li>
+                </ul>
+
+                <h4>Interface</h4>
+                <ul>
+                    <li><strong>Real-Time Progress</strong> via WebSocket with live GPU/CPU/RAM stats</li>
+                    <li><strong>GPU Graphs</strong> &mdash; Per-GPU utilization, VRAM, and temperature</li>
+                    <li><strong>Dark / Light Theme</strong> &mdash; System transcodes, remote GPU jobs, find duplicates</li>
+                    <li><strong>Mobile Responsive</strong> &mdash; Desktop, tablet, and mobile</li>
+                    <li><strong>Auto-Updates</strong> &mdash; Daily GitHub check, one-click update with backup</li>
+                    <li><strong>Setup Wizard</strong> &mdash; First-run detection, GPU config, Plex integration</li>
+                </ul>
+
+                <h4>Deployment</h4>
+                <ul>
+                    <li><strong>Bundled Binaries</strong> &mdash; ffmpeg, recode-remote, dovi_tool, mediainfo, mkvmerge</li>
+                    <li><strong>Multi-Distro</strong> &mdash; Ubuntu, Debian, Fedora, RHEL, Alma, Rocky, openSUSE, Arch, Manjaro</li>
+                    <li><strong>Per-Distro NVIDIA</strong> &mdash; Separate driver install handlers</li>
+                    <li><strong>Systemd Service</strong> &mdash; Auto-start on boot with restart watcher</li>
+                </ul>
             </div>
 
             <!-- ENCODING -->
@@ -1358,6 +1430,83 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <p>Each active encode card shows which GPU it's assigned to (e.g. "GPU 0", "GPU 1").</p>
 
                 <div class="tip">GPU stats poll every 2 seconds during encoding, every 5 seconds when idle. Polling pauses entirely when the browser tab is hidden.</div>
+
+                <h4>Remote GPU Encoding</h4>
+                <p>Recode includes RRP (Recode Remote Protocol) for offloading encodes to remote GPU servers. Everything runs over a single TCP connection &mdash; authentication, file transfer, progress, and output &mdash; using a single binary: <code>recode-remote</code>.</p>
+                <div class="example-box">
+                    <div class="example-title">How remote encoding works</div>
+                    <div class="flow-diagram">
+                        <div class="flow-step">Client sends job</div>
+                        <span class="flow-arrow">&rarr;</span>
+                        <div class="flow-step active">Auth (HMAC-SHA256)</div>
+                        <span class="flow-arrow">&rarr;</span>
+                        <div class="flow-step">FUSE mount input</div>
+                        <span class="flow-arrow">&rarr;</span>
+                        <div class="flow-step success">Remote ffmpeg encodes</div>
+                        <span class="flow-arrow">&rarr;</span>
+                        <div class="flow-step">Output returned (SHA256 verified)</div>
+                    </div>
+                </div>
+                <p>The remote server mounts the input file on-demand via FUSE &mdash; encoding starts immediately without uploading the entire file. Only the bytes ffmpeg reads are transferred over the network. Output is sent back with SHA256 verification.</p>
+                <ul>
+                    <li>CUDA hardware decode on the remote GPU</li>
+                    <li>Live progress streamed back to the client</li>
+                    <li>Cancel propagation &mdash; cancelling a job kills ffmpeg on the remote server</li>
+                    <li>Automatic temp file cleanup on cancel, failure, or disconnect</li>
+                    <li>Load balancing across multiple remote servers</li>
+                </ul>
+
+                <h4>GPU Server Mode</h4>
+                <p>Any Recode instance can share its GPU with other instances. Enable in Settings &rarr; Remote GPU &rarr; GPU Server Mode. Configure a port and shared secret, then add this machine as a remote server on other Recode instances.</p>
+                <p>The GPU server uses the Temp Directory from Settings for job working files. Remote GPU Jobs appear in the Encoding tab on the server showing the client IP and original filename.</p>
+
+                <h4>Remote Server Setup</h4>
+                <ol style="font-size:12px;color:var(--text-secondary);">
+                    <li>Install Recode on the GPU server (same installer)</li>
+                    <li>Enable GPU Server Mode in Settings &rarr; Remote GPU, set a port and shared secret</li>
+                    <li>On the client machine, add the server in Settings &rarr; Remote GPU &rarr; Remote Servers</li>
+                    <li>Select "Remote" targets in the GPU Target dropdown</li>
+                </ol>
+
+                <h4>Firewall Configuration</h4>
+                <p>The GPU server needs one port open for RRP (default <strong>9878</strong>). The web UI uses port <strong>9877</strong>.</p>
+                <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># firewalld (RHEL/Fedora/Rocky/Alma)</div>
+                    firewall-cmd --permanent --add-port=9878/tcp<br>
+                    firewall-cmd --reload<br><br>
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># ufw (Ubuntu/Debian)</div>
+                    ufw allow 9878/tcp<br><br>
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># iptables</div>
+                    iptables -A INPUT -p tcp --dport 9878 -j ACCEPT
+                </div>
+                <div class="tip">If you change the GPU Server port in Settings, update the firewall rule accordingly. Only the RRP port needs to be open &mdash; the web UI port (9877) only needs to be accessible from your browser.</div>
+
+                <h4>FUSE Requirements</h4>
+                <p>The GPU server needs FUSE support for mount mode. The installer handles this automatically, but if setting up manually:</p>
+                <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># Install fuse3</div>
+                    dnf install fuse3 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># RHEL/Fedora</span><br>
+                    apt install fuse3 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># Debian/Ubuntu</span><br>
+                    pacman -S fuse3 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># Arch</span><br><br>
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># Enable user_allow_other in /etc/fuse.conf</div>
+                    echo 'user_allow_other' >> /etc/fuse.conf
+                </div>
+
+                <h4>Remote Server Status</h4>
+                <ul>
+                    <li><span style="color:var(--success);">&bull;</span> <strong>Green</strong> &mdash; Enabled and online (authenticated successfully)</li>
+                    <li><span style="color:var(--warning);">&bull;</span> <strong>Orange</strong> &mdash; Enabled but offline or unreachable</li>
+                    <li><span style="color:var(--error);">&bull;</span> <strong>Red</strong> &mdash; Disabled</li>
+                </ul>
+                <p>Status is checked automatically when settings are saved. The power button toggles enable/disable per server.</p>
+
+                <h4>RRP Binary</h4>
+                <p>All remote functionality is in a single binary: <code>recode-remote</code></p>
+                <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">
+                    recode-remote server --port 9878 --secret xxx &nbsp;&nbsp;<span style="color:var(--text-muted);"># GPU server mode</span><br>
+                    recode-remote client [ffmpeg args] &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># Send encode job</span><br>
+                    recode-remote ping &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># Test auth</span>
+                </div>
             </div>
 
             <!-- PROFILES -->
@@ -1573,7 +1722,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </ul>
 
                 <h4>System Transcodes</h4>
-                <p>The Encoding tab shows all ffmpeg and Plex Transcoder processes on the system — not just Recode jobs. External transcodes appear in a collapsible section below your encode jobs.</p>
+                <p>The Encoding tab shows all ffmpeg and Plex Transcoder processes on the system &mdash; not just Recode jobs. External transcodes appear in a collapsible section below your encode jobs. On GPU servers, incoming RRP jobs appear in a separate "Remote GPU Jobs" section showing the client IP and original filename.</p>
 
                 <h4>Space Savings &amp; Duplicates</h4>
                 <ul>
@@ -1591,7 +1740,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Encoding Detail Cards</h4>
                 <p>Each active encode shows:</p>
                 <ul>
-                    <li>GPU assignment badge (GPU 0, GPU 1, etc.)</li>
+                    <li>GPU assignment badge (GPU 0, GPU 1, Remote: Server Name, CPU)</li>
                     <li>Source info: codec, resolution, HDR type, original bitrate</li>
                     <li>Target info: codec, resolution, target HDR, preset bitrate, output filename</li>
                     <li>Live stats: progress, speed, bitrate, frame count, movie time, output size</li>
@@ -1626,7 +1775,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Installation</h4>
                 <p>One-liner install from GitHub:</p>
                 <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">wget -qO- https://github.com/tarquin-code/plex-recencoder/releases/latest/download/plex-recode.tar.gz | tar xz &amp;&amp; cd plex-recode &amp;&amp; sudo bash install.sh</div>
-                <p style="margin-top:8px;">The installer includes a <strong>bundled static ffmpeg</strong> for CPU encoding &mdash; no build step needed. GPU encoding requires building ffmpeg from source via the Setup Wizard (15-30 minutes). Supported distributions: Ubuntu, Debian, Fedora, RHEL/Alma/Rocky, openSUSE/SLES, Arch/Manjaro.</p>
+                <p style="margin-top:8px;">The installer includes a <strong>bundled static ffmpeg</strong> for CPU encoding and <strong>RRP binaries</strong> for remote GPU encoding &mdash; no build step needed. GPU encoding requires building ffmpeg from source via the Setup Wizard (15-30 minutes). Supported distributions: Ubuntu, Debian, Fedora, RHEL/Alma/Rocky, openSUSE/SLES, Arch/Manjaro.</p>
             </div>
 
             <!-- ABOUT -->
@@ -1667,16 +1816,34 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.15.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li>Custom RRP (Recode Remote Protocol) over TCP &mdash; replaced ffmpeg-over-ip</li>
+                                <li>FUSE mount mode &mdash; stream input files on-demand to remote servers (no full upload needed)</li>
+                                <li>Per-server transfer mode (Upload or Mount) configurable in Settings</li>
+                                <li>Remote server health check via authenticated --ping (validates auth, not just TCP)</li>
+                                <li>Cancel propagation &mdash; cancelling a job kills ffmpeg on the remote server</li>
+                                <li>Client disconnect detection &mdash; remote ffmpeg killed if client drops</li>
+                                <li>Automatic temp file cleanup on remote servers (cancel, fail, disconnect)</li>
+                                <li>GPU server temp directory now uses configured Temp Directory from Settings</li>
+                                <li>Remote GPU Jobs section on GPU servers showing client IP and original filename</li>
+                                <li>Current output size displayed during remote encodes (parsed from stats line)</li>
+                                <li>Per-server power button with status indicator (green/orange/red)</li>
+                                <li>Removed all ffmpeg-over-ip dependencies &mdash; fully replaced by RRP</li>
+                                <li>RRP server log file for debugging (<code>rrp-server.log</code>)</li>
+                            </ul>
+                        </div>
+                        <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.14.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
-                                <li>Remote GPU encoding via ffmpeg-over-ip &mdash; encode on remote GPU servers</li>
+                                <li>Remote GPU encoding via RRP &mdash; encode on remote GPU servers</li>
                                 <li>Multiple remote servers with enable/disable, status check, load balancing</li>
                                 <li>GPU Server Mode &mdash; share local GPU with other Recode instances</li>
                                 <li>Unified GPU Target selector: Auto, All Local, All Remote, specific GPU/server</li>
                                 <li>Remote server auth validation (tests actual encode, not just TCP connect)</li>
                                 <li>CUDA hwaccel for remote encodes (hardware decode on remote GPU)</li>
                                 <li>Live progress for remote encodes via stderr stats parsing</li>
-                                <li>Orphan ffmpeg-over-ip-client process cleanup on restart</li>
+                                <li>Orphan process cleanup on restart</li>
                                 <li>Settings: unsaved changes indicator, save without closing modal</li>
                                 <li>Settings: Remote GPU tab, reorganized General tab, consistent profile layouts</li>
                                 <li>Header: GPU Server indicator, restarting... badge on disconnect</li>
@@ -2170,7 +2337,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <!-- Remote GPU -->
                 <div class="set-section" id="setTab-remote-gpu">
                     <div class="set-section-title">Remote GPU</div>
-                    <div class="set-section-desc">Use remote GPU servers for hardware-accelerated encoding via <a href="https://github.com/steelbrain/ffmpeg-over-ip" target="_blank" style="color:var(--accent);">ffmpeg-over-ip</a>. Jobs are load-balanced across enabled servers. Select "Remote" targets in the Hardware &rarr; GPU Target dropdown.</div>
+                    <div class="set-section-desc">Use remote GPU servers for hardware-accelerated encoding. Jobs are load-balanced across enabled servers. Select "Remote" targets in the Hardware &rarr; GPU Target dropdown.</div>
 
                     <!-- Remote Servers -->
                     <div style="margin-top:16px;">
@@ -2289,6 +2456,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
    SVG Icon System
    ========================================================================= */
 const _icons = {
+    power: '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
     moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/>',
     sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
@@ -2365,6 +2533,7 @@ function connectWs() {
         document.getElementById('dotWs').className = 'dot ok';
         const vBadge = document.getElementById('appVersionBadge');
         if (vBadge && vBadge._wasRestarting) { vBadge.textContent = vBadge._savedVersion || ''; vBadge.style.color = ''; vBadge._wasRestarting = false; }
+        updateGpuServerStatus();
     };
     ws.onclose = () => {
         state.connected = false;
@@ -2408,6 +2577,31 @@ function handleMessage(msg) {
     }
 }
 
+function updateGpuServerStatus() {
+    fetch('/api/ffmpeg-server/status').then(r => r.json()).then(d => {
+        // Update header dot
+        const wrap = document.getElementById('dotGpuServerWrap');
+        const dot = document.getElementById('dotGpuServer');
+        if (d.enabled) {
+            if (wrap) wrap.style.display = '';
+            if (dot) dot.className = d.running ? 'dot ok' : 'dot err';
+        } else {
+            if (wrap) wrap.style.display = 'none';
+        }
+        // Update settings panel status text
+        const el = document.getElementById('ffmpegServerStatus');
+        if (el) {
+            if (d.running) {
+                el.innerHTML = '<span style="color:var(--success);">Server running on port ' + d.port + '</span>';
+            } else if (d.enabled) {
+                el.innerHTML = '<span style="color:var(--error);">Server enabled but not running</span>';
+            } else {
+                el.textContent = 'Server disabled';
+            }
+        }
+    }).catch(() => {});
+}
+
 async function checkSystem() {
     try {
         const res = await fetch('/api/system/check');
@@ -2415,16 +2609,7 @@ async function checkSystem() {
         document.getElementById('dotFfmpeg').className = state.system.ffmpeg ? 'dot ok' : 'dot err';
         document.getElementById('dotGpu').className = state.system.gpu ? 'dot ok' : 'dot err';
         // GPU Server indicator
-        fetch('/api/ffmpeg-server/status').then(r => r.json()).then(d => {
-            const wrap = document.getElementById('dotGpuServerWrap');
-            const dot = document.getElementById('dotGpuServer');
-            if (d.enabled) {
-                if (wrap) wrap.style.display = '';
-                if (dot) dot.className = d.running ? 'dot ok' : 'dot err';
-            } else {
-                if (wrap) wrap.style.display = 'none';
-            }
-        }).catch(() => {});
+        updateGpuServerStatus();
         // Show version in header
         const verEl = document.getElementById('appVersion');
         if (state.system.version) {
@@ -3311,13 +3496,54 @@ function renderEncoding() {
 
 function renderExternalTranscodes() {
     if (systemTranscodes.length === 0) return '';
-    let html = `<div id="extTranscodesSection" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+    const rrpJobs = systemTranscodes.filter(t => t.source === 'remote');
+    const otherJobs = systemTranscodes.filter(t => t.source !== 'remote');
+    let html = '';
+    // RRP remote jobs served by this machine
+    if (rrpJobs.length > 0) {
+        html += `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <h3 style="margin:0;font-size:13px;color:var(--text-secondary);">Remote GPU Jobs</h3>
+                <span class="badge badge-sm badge-res">${rrpJobs.length}</span>
+            </div>`;
+        for (const t of rrpJobs) {
+            const inputName = t.rrp_input ? t.rrp_input.split('/').pop() : (t.input ? t.input.split('/').pop() : 'Unknown');
+            const clientBadge = t.rrp_client ? `<span class="badge badge-sm" style="background:rgba(99,204,153,0.15);color:#6c9;">Client: ${escHtml(t.rrp_client)}</span>` : '';
+            const isOpen = expandedExtTranscodes.has(t.pid);
+            html += `
+            <div class="ext-transcode" style="padding:6px 8px;margin-bottom:4px;background:var(--bg-secondary);border-radius:4px;border-left:3px solid #58a6ff;">
+                <div style="display:flex;align-items:center;gap:6px;cursor:pointer;" onclick="toggleExtTranscode(${t.pid})">
+                    <span class="expand-arrow" id="extarr-${t.pid}" style="transition:transform 0.2s;display:inline-flex;${isOpen ? 'transform:rotate(90deg);' : ''}">${svgIcon('chevron-right', 12)}</span>
+                    <span class="badge badge-sm" style="background:rgba(88,166,255,0.15);color:#58a6ff;">Remote</span>
+                    ${clientBadge}
+                    <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(t.rrp_input || t.input || '')}">${escHtml(inputName)}</span>
+                    ${t.video_codec ? `<span class="badge badge-sm badge-codec">${escHtml(t.video_codec)}</span>` : ''}
+                    <span style="font-size:10px;color:var(--text-secondary);">CPU: ${t.cpu}%</span>
+                </div>
+                <div id="extdet-${t.pid}" class="ext-detail" style="${isOpen ? '' : 'display:none;'}margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+                    <div class="file-detail" style="margin-bottom:6px;">${escHtml(t.rrp_input || t.input || 'N/A')}</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+                        ${t.video_codec ? `<span class="badge badge-codec">${escHtml(t.video_codec)}</span>` : ''}
+                        ${t.audio_codec ? `<span class="badge badge-audio">${escHtml(t.audio_codec)}</span>` : ''}
+                        <span class="badge badge-sdr">PID: ${t.pid}</span>
+                        <span class="badge badge-sdr">CPU: ${t.cpu}%</span>
+                        <span class="badge badge-sdr">MEM: ${t.mem}%</span>
+                    </div>
+                    <div class="file-detail" style="font-size:10px;font-family:monospace;word-break:break-all;color:var(--text-secondary);">${escHtml(t.command)}</div>
+                </div>
+            </div>`;
+        }
+        html += `</div>`;
+    }
+    // Other system transcodes (Plex, local ffmpeg)
+    if (otherJobs.length === 0) return html;
+    html += `<div id="extTranscodesSection" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
             <h3 style="margin:0;font-size:13px;color:var(--text-secondary);">Other System Transcodes</h3>
-            <span class="badge badge-sm badge-res">${systemTranscodes.length}</span>
+            <span class="badge badge-sm badge-res">${otherJobs.length}</span>
         </div>`;
-    for (let ti = 0; ti < systemTranscodes.length; ti++) {
-        const t = systemTranscodes[ti];
+    for (let ti = 0; ti < otherJobs.length; ti++) {
+        const t = otherJobs[ti];
         const inputName = t.input ? t.input.split('/').pop() : 'Unknown';
         const sourceBadge = t.source === 'plex'
             ? '<span class="badge badge-sm badge-hdr">Plex</span>'
@@ -4471,12 +4697,16 @@ async function openSettings() {
         const setTgtSel = document.getElementById('setGpuTarget');
         if (setTgtSel) {
             const gpuCnt = (state.system?.gpu_count) || 0;
-            setTgtSel.innerHTML = '<option value="auto">Auto</option>';
-            if (gpuCnt > 1) setTgtSel.add(new Option('All Local', 'local'));
-            for (let i = 0; i < gpuCnt; i++) setTgtSel.add(new Option('Local GPU ' + i, 'gpu:' + i));
-            const remotes = s.remote_gpu_servers || [];
-            if (remotes.length > 1) setTgtSel.add(new Option('All Remote', 'remote'));
-            remotes.forEach((srv, i) => { if (srv.enabled !== false) setTgtSel.add(new Option('Remote: ' + (srv.name || srv.address), 'remote:' + i)); });
+            setTgtSel.innerHTML = '<option value="auto">Auto (all local + remote)</option>';
+            if (gpuCnt > 0) {
+                if (gpuCnt > 1) setTgtSel.add(new Option('\u00A0\u00A0All Local', 'local'));
+                for (let i = 0; i < gpuCnt; i++) setTgtSel.add(new Option('\u00A0\u00A0\u00A0\u00A0GPU ' + i, 'gpu:' + i));
+            }
+            const remotes = (s.remote_gpu_servers || []).filter(srv => srv.enabled !== false);
+            if (remotes.length > 0) {
+                setTgtSel.add(new Option('\u00A0\u00A0All Remote', 'remote'));
+                remotes.forEach((srv) => { const origIdx = (s.remote_gpu_servers || []).indexOf(srv); setTgtSel.add(new Option('\u00A0\u00A0\u00A0\u00A0' + (srv.name || srv.address), 'remote:' + origIdx)); });
+            }
             if (s.gpu_target) setTgtSel.value = s.gpu_target;
         }
         const setCqVal = s.cq || 24;
@@ -4506,18 +4736,7 @@ async function openSettings() {
         document.getElementById('setFfmpegServerPort').value = s.ffmpeg_server_port || 5050;
         document.getElementById('setFfmpegServerSecret').value = s.ffmpeg_server_secret || '';
         // Check server status
-        fetch('/api/ffmpeg-server/status').then(r => r.json()).then(d => {
-            const el = document.getElementById('ffmpegServerStatus');
-            if (el) {
-                if (d.running) {
-                    el.innerHTML = '<span style="color:var(--success);">Server running on port ' + d.port + '</span>';
-                } else if (d.enabled) {
-                    el.innerHTML = '<span style="color:var(--error);">Server enabled but not running</span>';
-                } else {
-                    el.textContent = 'Server disabled';
-                }
-            }
-        }).catch(() => {});
+        updateGpuServerStatus();
         // General
         document.getElementById('setAllowedPaths').value = (s.allowed_paths || ['/mnt']).join(', ');
         document.getElementById('setTmpDir').value = s.tmp_dir || '/var/lib/plex/tmp';
@@ -4655,19 +4874,21 @@ async function loadAboutSystemInfo() {
 // GPU target population with remote server status check
 async function populateGpuTargets(sel, localGpuCount) {
     const savedVal = sel.value;
-    sel.innerHTML = '<option value="auto">Auto (least loaded)</option>';
+    sel.innerHTML = '<option value="auto">Auto (all local + remote)</option>';
     // Local GPUs
-    if (localGpuCount > 1) sel.add(new Option('All Local GPUs', 'local'));
-    for (let i = 0; i < localGpuCount; i++) sel.add(new Option('Local GPU ' + i, 'gpu:' + i));
+    if (localGpuCount > 0) {
+        if (localGpuCount > 1) { const o = new Option('\u00A0\u00A0All Local GPUs', 'local'); sel.add(o); }
+        for (let i = 0; i < localGpuCount; i++) { const o = new Option('\u00A0\u00A0\u00A0\u00A0GPU ' + i, 'gpu:' + i); sel.add(o); }
+    }
     // Check remote servers
     const remoteServers = (state.settings?.remote_gpu_servers || []).filter(s => s.enabled !== false);
     if (remoteServers.length > 0) {
-        if (remoteServers.length > 1) sel.add(new Option('All Remote GPUs', 'remote'));
+        sel.add(new Option('\u00A0\u00A0All Remote GPUs', 'remote'));
         // Add enabled remote servers as "checking..."
         remoteServers.forEach((srv, i) => {
             // Find original index in full server list
             const origIdx = (state.settings?.remote_gpu_servers || []).indexOf(srv);
-            const opt = new Option('Remote: ' + (srv.name || srv.address) + ' (checking...)', 'remote:' + origIdx);
+            const opt = new Option('\u00A0\u00A0\u00A0\u00A0' + (srv.name || srv.address) + ' (checking...)', 'remote:' + origIdx);
             opt.id = 'gpuTarget_remote_' + origIdx;
             sel.add(opt);
         });
@@ -4679,10 +4900,10 @@ async function populateGpuTargets(sel, localGpuCount) {
                 const opt = document.getElementById('gpuTarget_remote_' + srv.index);
                 if (opt) {
                     if (srv.online) {
-                        opt.textContent = 'Remote: ' + srv.name + ' (online)';
+                        opt.textContent = '\u00A0\u00A0\u00A0\u00A0' + srv.name + ' (online)';
                         opt.style.color = '';
                     } else {
-                        opt.textContent = 'Remote: ' + srv.name + ' (offline)';
+                        opt.textContent = '\u00A0\u00A0\u00A0\u00A0' + srv.name + ' (offline)';
                         opt.disabled = true;
                         opt.style.color = 'var(--error)';
                     }
@@ -4709,19 +4930,24 @@ function renderRemoteGpuServers() {
         container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0;">No remote servers configured.</div>';
         return;
     }
-    let html = `<div style="display:grid;grid-template-columns:auto 1fr 1.5fr 1fr auto;gap:8px 8px;padding:0 10px;margin-bottom:4px;">
-        <span></span><label style="font-size:11px;">Name</label><label style="font-size:11px;">Address</label><label style="font-size:11px;">Secret</label><span></span>
-    </div>`;
+    let html = '';
     servers.forEach((srv, i) => {
         const disabled = srv.enabled === false;
         const statusId = 'rgs-status-' + i;
-        html += `<div style="display:grid;grid-template-columns:auto 1fr 1.5fr 1fr auto;gap:8px;align-items:center;margin-bottom:4px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
-            <input type="checkbox" ${disabled ? '' : 'checked'} title="${disabled ? 'Enable' : 'Disable'} server" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;" onchange="window._remoteGpuServers[${i}].enabled=this.checked;renderRemoteGpuServers();">
-            <input type="text" value="${escHtml(srv.name || '')}" placeholder="Server name" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].name=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'">
-            <input type="text" value="${escHtml(srv.address || '')}" placeholder="192.168.1.100:5050" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].address=this.value" oninput="const v=this.value.trim();const ok=/^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$/.test(v)||/^\\[[\\da-fA-F:]+\\]:\\d{1,5}$/.test(v)||/^[\\w.-]+:\\d{1,5}$/.test(v);this.style.borderColor=(!v||ok)?'':'var(--error)'">
-            <input type="text" value="${escHtml(srv.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].secret=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'">
-            <div style="display:flex;gap:6px;align-items:center;">
-                <span id="${statusId}" class="badge badge-sm" style="font-size:10px;min-width:44px;text-align:center;${disabled ? 'background:rgba(139,148,158,0.15);color:var(--text-muted);' : ''}">${disabled ? 'disabled' : ''}</span>
+        // const tm = srv.transfer_mode || 'mount'; // Transfer mode UI disabled — defaulting to mount
+        const tm = 'mount';
+        const lbl = i === 0 ? (f) => `<label style="display:block;font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:4px;">${f}</label>` : () => '';
+        html += `<div style="display:grid;grid-template-columns:1fr 1.5fr 1fr auto;gap:6px 8px;align-items:end;margin-bottom:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
+            <div>${lbl('Name')}<input type="text" value="${escHtml(srv.name || '')}" placeholder="Server name" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].name=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'"></div>
+            <div>${lbl('Address')}<input type="text" value="${escHtml(srv.address || '')}" placeholder="192.168.1.100:9878" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].address=this.value" oninput="const v=this.value.trim();const ok=/^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$/.test(v)||/^\\[[\\da-fA-F:]+\\]:\\d{1,5}$/.test(v)||/^[\\w.-]+:\\d{1,5}$/.test(v);this.style.borderColor=(!v||ok)?'':'var(--error)'"></div>
+            <div>${lbl('Secret')}<input type="text" value="${escHtml(srv.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].secret=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'"></div>
+            <!-- Transfer mode UI hidden — defaulting to mount. Uncomment to restore per-server mode selection:
+            <div>` + lbl('Mode') + `<select style="width:100%;" ` + (disabled ? 'disabled' : '') + ` onchange="window._remoteGpuServers[` + i + `].transfer_mode=this.value">
+                <option value="upload" ` + (tm === 'upload' ? 'selected' : '') + `>Upload</option>
+                <option value="mount" ` + (tm === 'mount' ? 'selected' : '') + `>Mount</option>
+            </select></div> -->
+            <div style="display:flex;gap:6px;align-items:center;align-self:${i === 0 ? 'end' : 'center'};padding-bottom:2px;">
+                <button id="${statusId}" class="btn btn-sm" title="${disabled ? 'Enable server' : 'Disable server'}" style="padding:7px 10px;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;" onclick="window._remoteGpuServers[${i}].enabled=${disabled};renderRemoteGpuServers();">${svgIcon('power', 14)}</button>
                 <button class="btn btn-danger btn-sm" style="padding:7px 10px;" onclick="window._remoteGpuServers.splice(${i},1);renderRemoteGpuServers();">Remove</button>
             </div>
         </div>`;
@@ -4735,9 +4961,8 @@ async function checkAllRemoteServers() {
     servers.forEach((srv, i) => {
         const el = document.getElementById('rgs-status-' + i);
         if (el && srv.enabled !== false) {
-            el.textContent = '...';
-            el.className = 'badge badge-sm';
-            el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;background:rgba(139,148,158,0.15);color:var(--text-muted);';
+            el.style.background = 'var(--warning)';
+            el.title = 'Checking...';
         }
     });
     try {
@@ -4756,17 +4981,14 @@ async function checkAllRemoteServers() {
             const el = document.getElementById('rgs-status-' + srv.index);
             if (!el) continue;
             if (window._remoteGpuServers[srv.index]?.enabled === false) {
-                el.textContent = 'disabled';
-                el.className = 'badge badge-sm';
-                el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;background:rgba(139,148,158,0.15);color:var(--text-muted);';
+                el.style.background = 'var(--error)';
+                el.title = 'Disabled — click to enable';
             } else if (srv.online) {
-                el.textContent = 'online';
-                el.className = 'badge badge-sm badge-done';
-                el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;';
+                el.style.background = 'var(--success)';
+                el.title = 'Online — click to disable';
             } else {
-                el.textContent = 'offline';
-                el.className = 'badge badge-sm badge-fail';
-                el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;';
+                el.style.background = 'var(--warning)';
+                el.title = (srv.error || 'Offline') + ' — click to disable';
             }
         }
     } catch(e) {}
@@ -5000,6 +5222,8 @@ async function saveSettings() {
         const data = await res.json();
         if (data.ok) {
             applySettingsToSidebar(data.settings);
+            // Refresh GPU server status and re-check remote servers after save
+            setTimeout(() => { updateGpuServerStatus(); checkAllRemoteServers(); }, 1000);
             btn.textContent = 'Saved';
             btn.style.background = 'var(--success)';
             const unsaved = document.getElementById('settingsUnsaved');
