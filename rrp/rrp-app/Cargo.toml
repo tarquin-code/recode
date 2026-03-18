@@ -7,6 +7,10 @@ edition = "2021"
 name = "recode-remote"
 path = "src/main.rs"
 
+[features]
+default = ["fuse"]
+fuse = ["dep:fuser", "dep:libc"]
+
 [dependencies]
 rrp-proto = { path = "../rrp-proto" }
 tokio = { workspace = true }
@@ -18,5 +22,5 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 bincode = { workspace = true }
-fuser = "0.14"
-libc = "0.2"
+fuser = { version = "0.14", optional = true }
+libc = { version = "0.2", optional = true }

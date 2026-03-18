@@ -1071,12 +1071,17 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
         pass
 
     is_remote = settings.get("_remote_server_idx", -1) >= 0
+    remote_encoder_type = settings.get("_remote_encoder_type", "nvenc")
+    is_videotoolbox = is_remote and remote_encoder_type == "videotoolbox"
     if not use_cpu:
         pix_fmt = info.get("pix_fmt", "unknown")
         cuda_safe_fmts = ("yuv420p", "nv12", "p010le", "yuv420p10le")
         gpu_id = str(settings.get("gpu_id", 0))
-        if is_remote:
-            # Remote GPU — add hwaccel without specifying device (remote server picks its own GPU)
+        if is_remote and is_videotoolbox:
+            # VideoToolbox — no hwaccel flags needed (Apple handles decode internally)
+            pass
+        elif is_remote:
+            # Remote NVENC GPU — add hwaccel without specifying device
             if pix_fmt in cuda_safe_fmts:
                 cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16"]
             # Skip Vulkan/libplacebo for remote — the server handles DV conversion locally
@@ -1222,6 +1227,25 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
             ]
         if cpu_threads and cpu_threads > 0:
             cmd += ["-threads", str(cpu_threads)]
+    elif is_videotoolbox:
+        # Apple VideoToolbox hardware encoder
+        # Map CQ (lower=better, 0-51) to VT quality (higher=better, 1-100)
+        vt_quality = max(1, min(100, int(100 - (cq * 1.8))))
+        if is_h264:
+            cmd += [
+                "-c:v", "h264_videotoolbox",
+                "-q:v", str(vt_quality),
+                "-b:v", maxbitrate,
+                "-allow_sw", "1",
+            ]
+        else:
+            cmd += [
+                "-c:v", "hevc_videotoolbox",
+                "-q:v", str(vt_quality),
+                "-b:v", maxbitrate,
+                "-tag:v", "hvc1",
+                "-allow_sw", "1",
+            ]
     else:
         gpu_id = str(settings.get("gpu_id", 0))
         if is_h264:
@@ -2141,6 +2165,11 @@ async def encode_worker(worker_id: int):
                     continue
 
             next_job.settings["_remote_server_idx"] = remote_server_idx
+            # Store the detected encoder type for this remote server
+            if remote_server_idx >= 0:
+                srv_list = app_settings.get("remote_gpu_servers", [])
+                if remote_server_idx < len(srv_list):
+                    next_job.settings["_remote_encoder_type"] = srv_list[remote_server_idx].get("_encoder_type", "nvenc")
             encode_queue.running = True
             next_job.status = JobStatus.ENCODING
             next_job.started_at = time.time()
@@ -2279,8 +2308,12 @@ async def encode_worker(worker_id: int):
             ffmpeg_bin = _get_remote_ffmpeg_bin(remote_idx)
             ffmpeg_env = _get_remote_ffmpeg_env(remote_idx)
             servers = app_settings.get("remote_gpu_servers", [])
-            # Default to mount mode (FUSE); upload mode is commented out in the UI but still supported
-            remote_transfer_mode = servers[remote_idx].get("transfer_mode", "mount") if remote_idx < len(servers) else "mount"
+            # Use mount mode if server supports FUSE, otherwise fall back to upload
+            if remote_idx < len(servers):
+                has_fuse = servers[remote_idx].get("_has_fuse", True)
+                remote_transfer_mode = "mount" if has_fuse else "upload"
+            else:
+                remote_transfer_mode = "mount"
             if not os.path.isfile(ffmpeg_bin):
                 ffmpeg_bin = FFMPEG
                 ffmpeg_env = None
@@ -3667,19 +3700,8 @@ async def install_tool(tool: str):
                 # ============================================================
                 # ALMA LINUX 10+ (nvidia-driver in distro repos)
                 # ============================================================
-                elif distro_id == "almalinux" and el_ver_num >= 10:
-                    _install_tasks[tool]["log"] += f"AlmaLinux {el_ver_num} — using distro nvidia-driver...\n"
-                    await _drv_run(["dnf", "install", "-y",
-                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
-                        "libglvnd-devel", "elfutils-libelf-devel"],
-                        "Installing kernel headers and build tools")
-                    pkg_cmd = ["dnf", "install", "-y", "nvidia-driver", "nvidia-driver-cuda"]
-
-                # ============================================================
-                # ROCKY LINUX 10+ (NVIDIA CUDA repo needed)
-                # ============================================================
-                elif distro_id == "rocky" and el_ver_num >= 10:
-                    _install_tasks[tool]["log"] += f"Rocky Linux {el_ver_num} — adding NVIDIA repo...\n"
+                elif (distro_id in ("almalinux", "rocky")) and el_ver_num >= 10:
+                    _install_tasks[tool]["log"] += f"{distro_id.title()} {el_ver_num} — adding NVIDIA repo...\n"
                     await _drv_run(["dnf", "install", "-y",
                         "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
                         "libglvnd-devel", "elfutils-libelf-devel"],
@@ -5598,7 +5620,30 @@ async def remote_gpu_status():
                     timeout=10)
                 _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
                 if proc.returncode == 0:
-                    results.append({"index": i, "name": name, "online": True, "address": addr})
+                    # Parse ping response: "OK encoder1,encoder2 os/arch fuse=true/false"
+                    ping_out = stderr.decode(errors="replace").strip() if stderr else "OK"
+                    parts = ping_out.split()
+                    encoders = parts[1].split(",") if len(parts) > 1 else []
+                    server_os = parts[2] if len(parts) > 2 else ""
+                    has_fuse = any(p.startswith("fuse=true") for p in parts)
+                    # Determine primary encoder type
+                    if "nvenc" in encoders:
+                        encoder_type = "nvenc"
+                    elif "videotoolbox" in encoders:
+                        encoder_type = "videotoolbox"
+                    elif "qsv" in encoders:
+                        encoder_type = "qsv"
+                    elif "amf" in encoders:
+                        encoder_type = "amf"
+                    else:
+                        encoder_type = "cpu"
+                    # Cache encoder type and FUSE support on the server config
+                    if i < len(servers):
+                        servers[i]["_encoder_type"] = encoder_type
+                        servers[i]["_has_fuse"] = has_fuse
+                    results.append({"index": i, "name": name, "online": True, "address": addr,
+                                    "encoders": encoders, "encoder_type": encoder_type,
+                                    "server_os": server_os, "has_fuse": has_fuse})
                 else:
                     err = stderr.decode(errors="replace").strip().split("\n")[-1][:100] if stderr else "Connection failed"
                     results.append({"index": i, "name": name, "online": False, "error": err})

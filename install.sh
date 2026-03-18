@@ -299,11 +299,12 @@ fi
 # ─────────────────────────────────────────────────────────────────
 # Create app directory and backup existing
 # ─────────────────────────────────────────────────────────────────
-if [[ -d "$APP_DIR" ]] && [[ -f "${APP_DIR}/recode_server.py" ]]; then
+if [[ -d "$APP_DIR" ]] && [[ -f "${APP_DIR}/bin/recode" || -f "${APP_DIR}/recode_server.py" ]]; then
     info "Existing installation found at ${APP_DIR}"
     BACKUP_DIR="${APP_DIR}/backups/pre-install-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BACKUP_DIR"
     cp "${APP_DIR}/recode_server.py" "$BACKUP_DIR/" 2>/dev/null || true
+    cp "${APP_DIR}/bin/recode" "$BACKUP_DIR/" 2>/dev/null || true
     cp "${APP_DIR}/static/index.html" "$BACKUP_DIR/" 2>/dev/null || true
     cp "${APP_DIR}/settings.json" "$BACKUP_DIR/" 2>/dev/null || true
     log "Existing files backed up to ${BACKUP_DIR}"
@@ -314,7 +315,6 @@ mkdir -p "${APP_DIR}/static" "${APP_DIR}/bin"
 # Link system tools to app bin dir (only for tools not bundled)
 # ─────────────────────────────────────────────────────────────────
 for tool in nvidia-smi; do
-    # Skip if already exists in bin
     if [[ -x "${APP_DIR}/bin/$tool" ]]; then
         continue
     fi
@@ -333,39 +333,49 @@ done
 # ─────────────────────────────────────────────────────────────────
 # Copy application files
 # ─────────────────────────────────────────────────────────────────
-# If this script is run from the repo, copy files
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/recode_server.py" ]]; then
-    cp "${SCRIPT_DIR}/recode_server.py" "${APP_DIR}/"
-    cp "${SCRIPT_DIR}/requirements.txt" "${APP_DIR}/" 2>/dev/null || true
-    cp "${SCRIPT_DIR}/build-ffmpeg.sh" "${APP_DIR}/" 2>/dev/null || true
-    cp "${SCRIPT_DIR}/LICENSE" "${APP_DIR}/" 2>/dev/null || true
-    cp "${SCRIPT_DIR}/README.md" "${APP_DIR}/" 2>/dev/null || true
+
+# Copy core files
+for f in build-ffmpeg.sh LICENSE README.md VERSION recode_server.py; do
+    [[ -f "${SCRIPT_DIR}/$f" ]] && cp "${SCRIPT_DIR}/$f" "${APP_DIR}/"
+done
+
+# Copy static files
+if [[ -d "${SCRIPT_DIR}/static" ]]; then
     mkdir -p "${APP_DIR}/static"
-    cp "${SCRIPT_DIR}/static/"*.html "${APP_DIR}/static/"
-    # Copy bundled binaries to app bin dir
-    if [[ -d "${SCRIPT_DIR}/bin" ]]; then
-        for bin_file in "${SCRIPT_DIR}/bin/"*; do
-            [[ -f "$bin_file" ]] || continue
-            cp "$bin_file" "${APP_DIR}/bin/"
-            chmod +x "${APP_DIR}/bin/$(basename "$bin_file")"
-            log "Installed $(basename "$bin_file") to ${APP_DIR}/bin/"
-        done
-    fi
-    # Copy bundled libraries (mkvtoolnix etc.)
-    if [[ -d "${SCRIPT_DIR}/lib" ]]; then
-        cp -a "${SCRIPT_DIR}/lib" "${APP_DIR}/"
-        log "Bundled libraries copied to ${APP_DIR}/lib/"
-    fi
-    # Bundled ffmpeg (Jellyfin build with NVENC, libplacebo, Vulkan, libx265)
-    if [[ -x "${APP_DIR}/bin/ffmpeg" && ! -L "${APP_DIR}/bin/ffmpeg" ]]; then
-        FFVER=$("${APP_DIR}/bin/ffmpeg" -version 2>/dev/null | head -1 || echo "")
-        log "ffmpeg: ${GREEN}bundled${NC} — ${FFVER}"
-    fi
-    log "Application files copied"
-else
-    info "Run this installer from the Recode source directory, or copy files to ${APP_DIR} manually"
+    cp "${SCRIPT_DIR}/static/"*.html "${APP_DIR}/static/" 2>/dev/null || true
+    log "Static files copied"
 fi
+
+# Copy all bundled binaries
+if [[ -d "${SCRIPT_DIR}/bin" ]]; then
+    for bin_file in "${SCRIPT_DIR}/bin/"*; do
+        [[ -f "$bin_file" ]] || continue
+        cp "$bin_file" "${APP_DIR}/bin/"
+        chmod +x "${APP_DIR}/bin/$(basename "$bin_file")"
+        log "Installed $(basename "$bin_file") to ${APP_DIR}/bin/"
+    done
+fi
+
+# Copy bundled libraries (mkvtoolnix etc.)
+if [[ -d "${SCRIPT_DIR}/lib" ]]; then
+    cp -a "${SCRIPT_DIR}/lib" "${APP_DIR}/"
+    log "Bundled libraries copied to ${APP_DIR}/lib/"
+fi
+
+# Copy macOS binaries if present
+if [[ -d "${SCRIPT_DIR}/macos" ]]; then
+    mkdir -p "${APP_DIR}/macos"
+    cp -a "${SCRIPT_DIR}/macos/"* "${APP_DIR}/macos/" 2>/dev/null || true
+    log "macOS binaries copied to ${APP_DIR}/macos/"
+fi
+
+# Show bundled ffmpeg version
+if [[ -x "${APP_DIR}/bin/ffmpeg" && ! -L "${APP_DIR}/bin/ffmpeg" ]]; then
+    FFVER=$("${APP_DIR}/bin/ffmpeg" -version 2>/dev/null | head -1 || echo "")
+    log "ffmpeg: ${GREEN}bundled${NC} — ${FFVER}"
+fi
+log "Application files copied"
 
 # ─────────────────────────────────────────────────────────────────
 # Create tmp directory

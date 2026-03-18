@@ -995,11 +995,18 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Multi-GPU &amp; Remote</h4>
                 <ul>
                     <li><strong>Auto Detection</strong> &mdash; Detects all NVIDIA GPUs with VRAM-based concurrency</li>
-                    <li><strong>Load Balancing</strong> &mdash; Across local GPUs and remote servers</li>
+                    <li><strong>Auto Load-Balance</strong> &mdash; Distributes across all local GPUs and remote servers equally</li>
                     <li><strong>Remote GPU (RRP)</strong> &mdash; Offload to remote servers via FUSE mount over TCP</li>
+                    <li><strong>FUSE Mount</strong> &mdash; Stream input on-demand, encoding starts immediately, only transfers bytes ffmpeg reads</li>
                     <li><strong>GPU Server Mode</strong> &mdash; Share your GPU with other Recode instances</li>
-                    <li><strong>Single Binary</strong> &mdash; <code>recode-remote</code> handles server, client, and ping</li>
-                    <li><strong>Secure</strong> &mdash; HMAC-SHA256 auth, SHA256 output verification</li>
+                    <li><strong>Cancel Propagation</strong> &mdash; Cancelling kills ffmpeg on remote, disconnect auto-kills</li>
+                    <li><strong>Auto Cleanup</strong> &mdash; Temp files removed on cancel, failure, or disconnect</li>
+                    <li><strong>Health Check</strong> &mdash; Authenticated ping, live status dots in GPU Target dropdown</li>
+                    <li><strong>Per-Server Controls</strong> &mdash; Power button (green/orange/red), enable/disable per server</li>
+                    <li><strong>Secure</strong> &mdash; HMAC-SHA256 auth, SHA256 output verification, single port</li>
+                    <li><strong>macOS Support</strong> &mdash; Apple Silicon VideoToolbox encoding as remote GPU server</li>
+                    <li><strong>Auto-Detect</strong> &mdash; Server encoder type detected via ping (NVENC, VideoToolbox, QSV, AMF, CPU)</li>
+                    <li><strong>Remote GPU Jobs</strong> &mdash; GPU servers show incoming jobs with client IP and filename</li>
                 </ul>
 
                 <h4>Plex Integration</h4>
@@ -1017,24 +1024,33 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li><strong>Folder Watch</strong> &mdash; Monitor directories and auto-queue new files</li>
                     <li><strong>Scheduled Encoding</strong> &mdash; Set active hours (e.g., overnight only)</li>
                     <li><strong>Unlimited History</strong> with detailed logs and one-click retry</li>
+                    <li><strong>Discard Larger</strong> &mdash; Automatically discard encodes larger than the original</li>
                 </ul>
 
                 <h4>Interface</h4>
                 <ul>
                     <li><strong>Real-Time Progress</strong> via WebSocket with live GPU/CPU/RAM stats</li>
-                    <li><strong>GPU Graphs</strong> &mdash; Per-GPU utilization, VRAM, and temperature</li>
-                    <li><strong>Dark / Light Theme</strong> &mdash; System transcodes, remote GPU jobs, find duplicates</li>
-                    <li><strong>Mobile Responsive</strong> &mdash; Desktop, tablet, and mobile</li>
-                    <li><strong>Auto-Updates</strong> &mdash; Daily GitHub check, one-click update with backup</li>
-                    <li><strong>Setup Wizard</strong> &mdash; First-run detection, GPU config, Plex integration</li>
+                    <li><strong>GPU Graphs</strong> &mdash; Per-GPU utilization, VRAM, and temperature charts</li>
+                    <li><strong>System Transcodes</strong> &mdash; View all ffmpeg/Plex processes, remote GPU jobs on servers</li>
+                    <li><strong>Dark / Light Theme</strong> &mdash; Toggle from header or Settings</li>
+                    <li><strong>Mobile Responsive</strong> &mdash; Adapts to desktop, tablet, and mobile</li>
+                    <li><strong>Find Duplicates</strong> &mdash; Detect original + encoded file pairs</li>
+                    <li><strong>Space Savings</strong> &mdash; Total potential savings for scanned libraries</li>
+                    <li><strong>Scan Cache</strong> &mdash; Instant re-scans with local metadata cache</li>
+                    <li><strong>Settings</strong> &mdash; Unsaved changes indicator, save without closing modal</li>
+                    <li><strong>Stats Tab</strong> &mdash; Aggregate stats: files encoded, space saved, compression ratio</li>
                 </ul>
 
-                <h4>Deployment</h4>
+                <h4>Updates &amp; Deployment</h4>
                 <ul>
-                    <li><strong>Bundled Binaries</strong> &mdash; ffmpeg, recode-remote, dovi_tool, mediainfo, mkvmerge</li>
+                    <li><strong>Compiled Binary</strong> &mdash; No Python, venv, or pip required on target</li>
+                    <li><strong>Auto-Updates</strong> &mdash; Daily GitHub check, one-click update with backup and live log</li>
+                    <li><strong>Setup Wizard</strong> &mdash; System detection, GPU config, Plex integration, GPU Server Mode</li>
+                    <li><strong>Bundled Tools</strong> &mdash; ffmpeg, recode-remote, dovi_tool, mediainfo, mkvmerge</li>
                     <li><strong>Multi-Distro</strong> &mdash; Ubuntu, Debian, Fedora, RHEL, Alma, Rocky, openSUSE, Arch, Manjaro</li>
-                    <li><strong>Per-Distro NVIDIA</strong> &mdash; Separate driver install handlers</li>
+                    <li><strong>Per-Distro NVIDIA</strong> &mdash; Separate driver install handlers per distribution</li>
                     <li><strong>Systemd Service</strong> &mdash; Auto-start on boot with restart watcher</li>
+                    <li><strong>FUSE Auto-Setup</strong> &mdash; Installer installs fuse3 and configures fuse.conf</li>
                 </ul>
             </div>
 
@@ -1500,12 +1516,39 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </ul>
                 <p>Status is checked automatically when settings are saved. The power button toggles enable/disable per server.</p>
 
+                <h4>macOS GPU Server</h4>
+                <p>Apple Silicon Macs can serve as remote GPU servers using VideoToolbox hardware encoding. The Mac runs <code>recode-remote server</code> only &mdash; no web UI or Plex integration needed.</p>
+                <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># Install macFUSE</div>
+                    brew install macfuse<br><br>
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># Copy binaries from the macos/ folder in the release</div>
+                    mkdir -p ~/recode &amp;&amp; cp macos/* ~/recode/ &amp;&amp; chmod +x ~/recode/*<br><br>
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># Start the server</div>
+                    ~/recode/recode-remote server --port 9878 --secret xxx --ffmpeg ~/recode/ffmpeg
+                </div>
+                <ul>
+                    <li>Requires <strong>macOS 11+</strong> on Apple Silicon (M1/M2/M3/M4)</li>
+                    <li>Requires <strong>macFUSE</strong> &mdash; approve kernel extension in System Settings &rarr; Privacy &amp; Security</li>
+                    <li>Encoder type (<strong>videotoolbox</strong>) auto-detected via ping</li>
+                    <li>HDR10 passthrough supported</li>
+                </ul>
+
+                <h4>Auto-Detect Encoder</h4>
+                <p>Remote server capabilities are detected automatically via ping. No manual configuration needed:</p>
+                <ul>
+                    <li><strong>NVENC</strong> &mdash; NVIDIA GPU (Linux)</li>
+                    <li><strong>VideoToolbox</strong> &mdash; Apple Silicon (macOS)</li>
+                    <li><strong>QSV</strong> &mdash; Intel Quick Sync Video</li>
+                    <li><strong>AMF</strong> &mdash; AMD AMF</li>
+                    <li><strong>CPU</strong> &mdash; libx265 software encoding</li>
+                </ul>
+
                 <h4>RRP Binary</h4>
                 <p>All remote functionality is in a single binary: <code>recode-remote</code></p>
                 <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">
-                    recode-remote server --port 9878 --secret xxx &nbsp;&nbsp;<span style="color:var(--text-muted);"># GPU server mode</span><br>
-                    recode-remote client [ffmpeg args] &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># Send encode job</span><br>
-                    recode-remote ping &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># Test auth</span>
+                    recode-remote server --port 9878 --secret xxx --ffmpeg /path/to/ffmpeg<br>
+                    recode-remote client [ffmpeg args]<br>
+                    recode-remote ping &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--text-muted);"># Returns: OK encoders os/arch fuse=true</span>
                 </div>
             </div>
 
@@ -1782,7 +1825,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.14.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.16.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2627,7 +2670,8 @@ async function updateRemoteTargetStatus() {
             const opt = document.getElementById('gpuTarget_remote_' + srv.index);
             if (!opt) continue;
             if (srv.online) {
-                opt.textContent = '\u00A0\u00A0\u00A0\u00A0\uD83D\uDFE2 ' + srv.name;
+                const enc = srv.encoder_type ? ' (' + srv.encoder_type + ')' : '';
+                opt.textContent = '\u00A0\u00A0\u00A0\u00A0\uD83D\uDFE2 ' + srv.name + enc;
                 opt.disabled = false;
                 opt.style.color = '';
             } else {
@@ -4940,7 +4984,8 @@ async function populateGpuTargets(sel, localGpuCount) {
                 const opt = document.getElementById('gpuTarget_remote_' + srv.index);
                 if (opt) {
                     if (srv.online) {
-                        opt.textContent = '\u00A0\u00A0\u00A0\u00A0\uD83D\uDFE2 ' + srv.name;
+                        const enc = srv.encoder_type ? ' (' + srv.encoder_type + ')' : '';
+                        opt.textContent = '\u00A0\u00A0\u00A0\u00A0\uD83D\uDFE2 ' + srv.name + enc;
                         opt.style.color = '';
                     } else {
                         opt.textContent = '\u00A0\u00A0\u00A0\u00A0\uD83D\uDD34 ' + srv.name;
@@ -5025,7 +5070,7 @@ async function checkAllRemoteServers() {
                 el.title = 'Disabled — click to enable';
             } else if (srv.online) {
                 el.style.background = 'var(--success)';
-                el.title = 'Online — click to disable';
+                el.title = 'Online' + (srv.encoder_type ? ' (' + srv.encoder_type + ')' : '') + ' — click to disable';
             } else {
                 el.style.background = 'var(--warning)';
                 el.title = (srv.error || 'Offline') + ' — click to disable';
