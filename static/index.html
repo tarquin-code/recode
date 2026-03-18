@@ -109,6 +109,7 @@ header { background: var(--bg-secondary); border-bottom: 1px solid var(--border)
 
 input[type="text"], input[type="number"], select { width: 100%; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 13px; font-family: var(--font-mono); transition: border-color var(--transition); }
 input[type="text"]:focus, input[type="number"]:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 input[type="range"] { width: 100%; height: 6px; -webkit-appearance: none; appearance: none; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; outline: none; cursor: pointer; }
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-card); cursor: pointer; }
 input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-card); cursor: pointer; }
@@ -137,6 +138,7 @@ select option { background: var(--bg-secondary); }
 .btn-success:hover { background: var(--success); }
 .btn-danger { background: var(--error-dim); border-color: var(--error-dim); color: #fff; }
 .btn-danger:hover { background: var(--error); }
+.btn-power:hover { filter: brightness(1.3); }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
 input:disabled, select:disabled { opacity: 0.4; cursor: not-allowed; background: var(--bg-primary) !important; }
@@ -2604,12 +2606,19 @@ function connectWs() {
     ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
 }
 
+let _lastRemoteCheck = 0;
 function handleMessage(msg) {
     if (msg.type === 'state_update') {
         state.queue = msg.data.queued || [];
         state.active = msg.data.active || [];
         state.current = msg.data.current;  // backward compat
         state.history = msg.data.history || [];
+        // Check remote servers every 60s via state updates
+        const now = Date.now();
+        if (now - _lastRemoteCheck > 60000) {
+            _lastRemoteCheck = now;
+            updateRemoteTargetStatus();
+        }
         state.queueEnabled = msg.data.queue_enabled !== false;
         renderQueue(); renderEncoding(); renderHistory(); updateBadges();
     } else if (msg.type === 'progress_update') {
@@ -4815,6 +4824,8 @@ async function openSettings() {
         // Remote GPU servers
         window._remoteGpuServers = s.remote_gpu_servers || [];
         renderRemoteGpuServers();
+        // Auto-check remote server status after rendering
+        setTimeout(() => checkAllRemoteServers(), 500);
         // GPU Server mode
         document.getElementById('setFfmpegServerEnabled').checked = !!s.ffmpeg_server_enabled;
         document.getElementById('setFfmpegServerPort').value = s.ffmpeg_server_port || 5050;
@@ -5022,18 +5033,20 @@ function renderRemoteGpuServers() {
         // const tm = srv.transfer_mode || 'mount'; // Transfer mode UI disabled — defaulting to mount
         const tm = 'mount';
         const lbl = i === 0 ? (f) => `<label style="display:block;font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:4px;">${f}</label>` : () => '';
-        html += `<div style="display:grid;grid-template-columns:1fr 1.5fr 1fr auto;gap:6px 8px;align-items:end;margin-bottom:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
+        const mj = srv.max_jobs || 1;
+        html += `<div style="display:grid;grid-template-columns:1fr 1.5fr 1fr 60px auto;gap:6px 8px;align-items:end;margin-bottom:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
             <div>${lbl('Name')}<input type="text" value="${escHtml(srv.name || '')}" placeholder="Server name" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].name=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'"></div>
             <div>${lbl('Address')}<input type="text" value="${escHtml(srv.address || '')}" placeholder="192.168.1.100:9878" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].address=this.value" oninput="const v=this.value.trim();const ok=/^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$/.test(v)||/^\\[[\\da-fA-F:]+\\]:\\d{1,5}$/.test(v)||/^[\\w.-]+:\\d{1,5}$/.test(v);this.style.borderColor=(!v||ok)?'':'var(--error)'"></div>
             <div>${lbl('Secret')}<input type="text" value="${escHtml(srv.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].secret=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'"></div>
+            <div>${lbl('Jobs')}<input type="number" value="${mj}" min="1" max="4" style="width:100%;text-align:center;-moz-appearance:textfield;" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].max_jobs=Math.min(4,Math.max(1,parseInt(this.value)||1));this.value=window._remoteGpuServers[${i}].max_jobs"></div>
             <!-- Transfer mode UI hidden — defaulting to mount. Uncomment to restore per-server mode selection:
             <div>` + lbl('Mode') + `<select style="width:100%;" ` + (disabled ? 'disabled' : '') + ` onchange="window._remoteGpuServers[` + i + `].transfer_mode=this.value">
                 <option value="upload" ` + (tm === 'upload' ? 'selected' : '') + `>Upload</option>
                 <option value="mount" ` + (tm === 'mount' ? 'selected' : '') + `>Mount</option>
             </select></div> -->
-            <div style="display:flex;gap:6px;align-items:center;align-self:${i === 0 ? 'end' : 'center'};padding-bottom:2px;">
-                <button id="${statusId}" class="btn btn-sm" title="${disabled ? 'Enable server' : 'Disable server'}" style="padding:7px 10px;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;" onclick="window._remoteGpuServers[${i}].enabled=${disabled};renderRemoteGpuServers();">${svgIcon('power', 14)}</button>
-                <button class="btn btn-danger btn-sm" style="padding:7px 10px;" onclick="window._remoteGpuServers.splice(${i},1);renderRemoteGpuServers();">Remove</button>
+            <div style="display:flex;gap:6px;align-items:center;align-self:end;">
+                <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Enable server' : 'Disable server'}" style="height:34px;padding:0 12px;display:inline-flex;align-items:center;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;cursor:pointer;transition:filter 0.15s;" onclick="window._remoteGpuServers[${i}].enabled=${disabled};renderRemoteGpuServers();setTimeout(()=>checkAllRemoteServers(),300);">${svgIcon('power', 14)}</button>
+                <button class="btn btn-danger btn-sm" style="height:33px;padding:0 12px;display:inline-flex;align-items:center;" onclick="window._remoteGpuServers.splice(${i},1);renderRemoteGpuServers();">Remove</button>
             </div>
         </div>`;
     });

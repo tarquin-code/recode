@@ -1997,7 +1997,7 @@ async def _encode_worker_safe(worker_id: int):
         except Exception:
             log.exception(f"[worker-{worker_id}] Crashed — restarting in 5s")
             # Clean up claiming lock if this worker held it
-            encode_queue._claiming = False
+            encode_queue._claim_lock.release()
             await asyncio.sleep(5)
 
 
@@ -2015,20 +2015,48 @@ async def encode_worker(worker_id: int):
             await asyncio.sleep(10)
             continue
 
-        # Acquire claiming lock first — all concurrency checks must be inside the lock
-        # to prevent race conditions where multiple workers see the same count
-        if encode_queue._claiming:
-            await asyncio.sleep(0.1)
-            continue
-        encode_queue._claiming = True
+        # Acquire claiming lock
+        if not hasattr(encode_queue, '_claim_lock'):
+            encode_queue._claim_lock = asyncio.Lock()
+        await encode_queue._claim_lock.acquire()
 
         # Check if we're at the concurrency limit (count ALL active jobs, not just those with procs)
         max_concurrent = app_settings.get("max_concurrent_encodes", 1)
-        actually_encoding = sum(1 for j in encode_queue.active_jobs.values() if not j.paused)
-        if actually_encoding >= max_concurrent:
-            encode_queue._claiming = False
+        # Check capacity across all targets (local GPUs + remote servers)
+        local_loads = {}
+        remote_loads = {}
+        for j in encode_queue.active_jobs.values():
+            if j.paused:
+                continue
+            ri = j.settings.get("_remote_server_idx", -1)
+            if ri >= 0:
+                remote_loads[ri] = remote_loads.get(ri, 0) + 1
+            else:
+                gi = encode_queue.job_gpus.get(j.id, -1)
+                if gi >= 0:
+                    local_loads[gi] = local_loads.get(gi, 0) + 1
+        # Check if any target has capacity
+        has_local_capacity = False
+        if GPU_COUNT > 0:
+            local_total = sum(local_loads.values())
+            if local_total < max_concurrent:
+                for gi in range(GPU_COUNT):
+                    if local_loads.get(gi, 0) < encode_queue.gpu_max_encodes(gi):
+                        has_local_capacity = True
+                        break
+        servers = app_settings.get("remote_gpu_servers", [])
+        enabled_remotes = [i for i, s in enumerate(servers)
+                          if s.get("enabled", True) is not False and s.get("_online", False)]
+        has_remote_capacity = any(
+            remote_loads.get(ri, 0) < servers[ri].get("max_jobs", 1)
+            for ri in enabled_remotes if ri < len(servers)
+        )
+        if not has_local_capacity and not has_remote_capacity:
+            encode_queue._claim_lock.release()
             await asyncio.sleep(1)
             continue
+        # If local is full but remote has capacity, force remote-only selection
+        force_remote = not has_local_capacity and has_remote_capacity
         next_job = None
         for jid in list(encode_queue.queue_order):
             if jid in encode_queue.jobs and encode_queue.jobs[jid].status == JobStatus.QUEUED:
@@ -2037,7 +2065,7 @@ async def encode_worker(worker_id: int):
 
         if not next_job:
             encode_queue.running = len(encode_queue.active_jobs) > 0
-            encode_queue._claiming = False
+            encode_queue._claim_lock.release()
             await asyncio.sleep(1)
             continue
         else:
@@ -2066,22 +2094,30 @@ async def encode_worker(worker_id: int):
             elif gpu_target == "remote":
                 # Auto-balance across all enabled remote servers
                 servers = app_settings.get("remote_gpu_servers", [])
-                enabled_idxs = [i for i, s in enumerate(servers) if s.get("enabled", True) is not False]
+                enabled_idxs = [i for i, s in enumerate(servers)
+                                if s.get("enabled", True) is not False and s.get("_online", False)]
                 if enabled_idxs:
                     remote_loads = {}
                     for jid, j in encode_queue.active_jobs.items():
                         ri = j.settings.get("_remote_server_idx", -1)
                         if ri >= 0:
                             remote_loads[ri] = remote_loads.get(ri, 0) + 1
-                    remote_server_idx = min(enabled_idxs, key=lambda i: remote_loads.get(i, 0))
-                    next_job.settings["encoder"] = "remote"
+                    available_remotes = [i for i in enabled_idxs
+                                        if remote_loads.get(i, 0) < servers[i].get("max_jobs", 1)]
+                    if available_remotes:
+                        remote_server_idx = min(available_remotes, key=lambda i: remote_loads.get(i, 0))
+                        next_job.settings["encoder"] = "remote"
+                    else:
+                        encode_queue._claim_lock.release()
+                        await asyncio.sleep(2)
+                        continue
                 else:
                     # No remote servers configured — fall back to local GPU or CPU
                     log.warning(f"[{next_job.id}] No remote GPU servers configured, falling back to local")
                     if GPU_COUNT > 0:
                         gpu_id = encode_queue.get_least_loaded_gpu()
                         if gpu_id is None:
-                            encode_queue._claiming = False
+                            encode_queue._claim_lock.release()
                             await asyncio.sleep(2)
                             continue
                     # else stays cpu (gpu_id = -1)
@@ -2097,11 +2133,11 @@ async def encode_worker(worker_id: int):
                 except (ValueError, IndexError):
                     gpu_id = None
                 if gpu_id is None:
-                    encode_queue._claiming = False
+                    encode_queue._claim_lock.release()
                     await asyncio.sleep(2)
                     continue
-            elif gpu_target == "local" or encoder == "gpu":
-                # Auto-balance across local GPUs only
+            elif gpu_target == "local" or (encoder == "gpu" and gpu_target != "auto"):
+                # Balance across local GPUs only
                 if GPU_COUNT > 0:
                     # Handle legacy gpu_id values ("auto", "0", "1")
                     legacy_gpu = next_job.settings.get("gpu_id", "auto")
@@ -2117,7 +2153,7 @@ async def encode_worker(worker_id: int):
                     if gpu_id is None:
                         gpu_id = encode_queue.get_least_loaded_gpu()
                     if gpu_id is None:
-                        encode_queue._claiming = False
+                        encode_queue._claim_lock.release()
                         await asyncio.sleep(2)
                         continue
                 # else stays cpu (gpu_id = -1)
@@ -2135,23 +2171,37 @@ async def encode_worker(worker_id: int):
                         if gi >= 0:
                             local_loads[gi] = local_loads.get(gi, 0) + 1
 
-                # Build list of all available targets: (type, id, load)
-                candidates = []
-                if GPU_COUNT > 0:
-                    max_per_gpu = encode_queue.max_per_gpu
-                    for gi in range(GPU_COUNT):
-                        load = local_loads.get(gi, 0)
-                        if load < max_per_gpu:
-                            candidates.append(("local", gi, load))
+                # Build local and remote candidate lists separately
+                local_candidates = []
+                remote_candidates = []
+                if GPU_COUNT > 0 and not force_remote:
+                    local_total = sum(local_loads.values())
+                    if local_total < max_concurrent:
+                        for gi in range(GPU_COUNT):
+                            load = local_loads.get(gi, 0)
+                            if load < encode_queue.gpu_max_encodes(gi):
+                                local_candidates.append(("local", gi, load))
                 servers = app_settings.get("remote_gpu_servers", [])
-                enabled_idxs = [i for i, s in enumerate(servers) if s.get("enabled", True) is not False]
+                enabled_idxs = [i for i, s in enumerate(servers)
+                                if s.get("enabled", True) is not False and s.get("_online", False)]
                 for ri in enabled_idxs:
                     load = remote_loads.get(ri, 0)
-                    candidates.append(("remote", ri, load))
+                    max_rjobs = servers[ri].get("max_jobs", 1) if ri < len(servers) else 1
+                    if load < max_rjobs:
+                        remote_candidates.append(("remote", ri, load))
+
+                # Prefer local GPUs first, use remote as additional capacity
+                candidates = local_candidates if local_candidates else remote_candidates
+                # If both have capacity, pick local for this slot but also allow
+                # a separate worker to pick up a remote job simultaneously
+                if local_candidates and remote_candidates:
+                    candidates = local_candidates
 
                 if candidates:
-                    # Pick the least loaded target
-                    best = min(candidates, key=lambda c: c[2])
+                    import random
+                    min_load = min(c[2] for c in candidates)
+                    tied = [c for c in candidates if c[2] == min_load]
+                    best = random.choice(tied)
                     if best[0] == "local":
                         gpu_id = best[1]
                     else:
@@ -2160,7 +2210,7 @@ async def encode_worker(worker_id: int):
                         gpu_id = -1
                 else:
                     # Nothing available — wait
-                    encode_queue._claiming = False
+                    encode_queue._claim_lock.release()
                     await asyncio.sleep(2)
                     continue
 
@@ -2175,7 +2225,7 @@ async def encode_worker(worker_id: int):
             next_job.started_at = time.time()
             encode_queue.active_jobs[next_job.id] = next_job
             encode_queue.job_gpus[next_job.id] = gpu_id
-            encode_queue._claiming = False
+            encode_queue._claim_lock.release()
 
         job = next_job
         info = job.file_info
@@ -4125,8 +4175,13 @@ async def startup():
     asyncio.create_task(job_watchdog())
     global watch_task
     watch_task = asyncio.create_task(folder_watcher())
+    # Clear cached online status for remote servers (will be refreshed by status check)
+    for srv in app_settings.get("remote_gpu_servers", []):
+        srv.pop("_online", None)
     # Start GPU server if enabled
     await start_ffmpeg_server()
+    # Run initial remote server status check
+    asyncio.create_task(remote_gpu_status())
 
 
 @app.get("/")
@@ -5637,15 +5692,18 @@ async def remote_gpu_status():
                         encoder_type = "amf"
                     else:
                         encoder_type = "cpu"
-                    # Cache encoder type and FUSE support on the server config
+                    # Cache encoder type, FUSE support, and online status
                     if i < len(servers):
                         servers[i]["_encoder_type"] = encoder_type
                         servers[i]["_has_fuse"] = has_fuse
+                        servers[i]["_online"] = True
                     results.append({"index": i, "name": name, "online": True, "address": addr,
                                     "encoders": encoders, "encoder_type": encoder_type,
                                     "server_os": server_os, "has_fuse": has_fuse})
                 else:
                     err = stderr.decode(errors="replace").strip().split("\n")[-1][:100] if stderr else "Connection failed"
+                    if i < len(servers):
+                        servers[i]["_online"] = False
                     results.append({"index": i, "name": name, "online": False, "error": err})
             else:
                 results.append({"index": i, "name": name, "online": False, "error": "Client binary not found"})
@@ -5686,10 +5744,11 @@ async def update_settings(new_settings: dict):
     WEBHOOK_DEFAULTS.update(build_default_profile())
     save_settings(app_settings)
 
-    # If max_concurrent_encodes was lowered, requeue excess active encodes
+    # If max_concurrent_encodes was lowered, requeue excess LOCAL active encodes
     if "max_concurrent_encodes" in new_settings:
         max_enc = app_settings.get("max_concurrent_encodes", 1)
-        active = [(jid, j) for jid, j in encode_queue.active_jobs.items() if not j.paused]
+        active = [(jid, j) for jid, j in encode_queue.active_jobs.items()
+                  if not j.paused and j.settings.get("_remote_server_idx", -1) < 0]
         if len(active) > max_enc:
             # Requeue the most recently started jobs (keep the oldest running)
             active.sort(key=lambda x: x[1].started_at or 0)
