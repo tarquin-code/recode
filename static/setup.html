@@ -565,20 +565,30 @@ async function init() {
 function renderSystemCheck() {
     const s = sysInfo;
     let html = '<div class="check-grid">';
+    // System info header
+    html += `<div style="grid-column:1/-1;padding:10px 14px;background:var(--bg3);border-radius:6px;margin-bottom:4px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:12px;">
+        ${s.os_name ? `<div><span style="color:var(--muted);">OS:</span> <strong>${s.os_name}</strong></div>` : ''}
+        ${s.kernel ? `<div><span style="color:var(--muted);">Kernel:</span> <strong>${s.kernel}</strong></div>` : ''}
+        ${s.cpu_name ? `<div><span style="color:var(--muted);">CPU:</span> <strong>${s.cpu_name}</strong></div>` : ''}
+        <div><span style="color:var(--muted);">RAM:</span> <strong>${s.ram_gb} GB</strong> · <span style="color:var(--muted);">Cores:</span> <strong>${s.cpu_cores}</strong></div>
+    </div>`;
+
     if (s.has_gpu) {
-        html += checkItem('NVIDIA GPU', true, `${s.gpu_count} GPU(s) — drivers working`);
+        const driverVer = s.nvidia_driver_version ? ` — Driver ${s.nvidia_driver_version}` : '';
+        html += checkItem('NVIDIA GPU', true, `${s.gpu_count} GPU(s)${driverVer}`, null, s.lspci_gpu || (s.gpu_info && s.gpu_info[0] ? s.gpu_info[0].name : ''));
     } else if (s.has_nvidia_hw) {
-        html += checkItem('NVIDIA GPU', false, `Hardware found but no drivers: ${s.lspci_gpu}`);
+        html += checkItem('NVIDIA GPU', false, `Hardware found but no drivers`, null, s.lspci_gpu);
     } else {
         html += checkItem('NVIDIA GPU', false, 'No NVIDIA GPU detected — CPU encoding only');
     }
-    html += checkItem('RAM', true, `${s.ram_gb} GB`);
-    html += checkItem('ffmpeg', !!s.ffmpeg_path && s.ffmpeg_path !== 'ffmpeg', s.ffmpeg_path || 'Not found');
+    // RAM shown in system info header above
+    html += checkItem('ffmpeg', !!s.ffmpeg_path && s.ffmpeg_path !== 'ffmpeg', s.ffmpeg_version || s.ffmpeg_path || 'Not found');
     html += checkItem('NVENC', s.has_nvenc, s.has_nvenc ? 'GPU encoding ready' : 'Requires ffmpeg rebuild');
-    html += checkItem('libplacebo', s.has_libplacebo, s.has_libplacebo ? 'DV P5 color conversion' : 'Requires ffmpeg rebuild');
-    html += checkItem('dovi_tool', s.has_dovi_tool, s.has_dovi_tool ? 'DV conversion ready' : 'Not installed', !s.has_dovi_tool ? 'dovi_tool' : null);
-    html += checkItem('mkvmerge', s.has_mkvmerge, s.has_mkvmerge ? 'MKV muxing ready' : 'Not installed', !s.has_mkvmerge ? 'mkvmerge' : null);
-    html += checkItem('mediainfo', true, 'Optional', null);
+    html += checkItem('libplacebo', s.has_libplacebo, s.has_libplacebo ? 'DV P5 color conversion ready' : 'Requires ffmpeg rebuild');
+    html += checkItem('dovi_tool', s.has_dovi_tool, s.dovi_version || 'DV conversion ready', !s.has_dovi_tool ? 'dovi_tool' : null);
+    html += checkItem('mkvmerge', s.has_mkvmerge, s.mkvmerge_version || 'MKV muxing ready', !s.has_mkvmerge ? 'mkvmerge' : null);
+    html += checkItem('mediainfo', !!s.mediainfo_version, s.mediainfo_version || 'Not installed');
+    html += checkItem('Python', true, s.python_version || 'OK');
     html += '</div>';
     if (s.has_nvidia_hw && !s.has_gpu) {
         html += `<div class="warn-box" style="margin-top:12px;">
@@ -620,38 +630,31 @@ function renderSystemCheck() {
     const gpuDriversWorking = s.has_gpu;  // nvidia-smi works
     const gpuHwNoDrivers = s.has_nvidia_hw && !s.has_gpu;  // lspci sees GPU but no drivers
 
+    const allFfmpegFeatures = hasFFmpeg && s.has_nvenc && s.has_libplacebo;
+
     if (!hasFFmpeg) {
-        // No ffmpeg at all
-        if (gpuDriversWorking) {
-            html += `<div class="info-box" style="margin-top:12px;">
-                <strong>ffmpeg is not installed.</strong> It is required for encoding.<br>
-                <span style="font-size:11px;color:var(--muted);">GPU drivers detected — build ffmpeg with NVENC + Vulkan + libplacebo for GPU encoding.</span><br><br>
-                <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg with GPU support</button>
-                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span><br>
-                <button class="btn-sm" style="margin-top:6px;" onclick="this.disabled=true; this.textContent='Installing...'; this.className='btn-sm installing'; installTool('ffmpeg-static', this)">Install static ffmpeg (CPU only, instant)</button>
-            </div>`;
-        } else {
-            html += `<div class="info-box" style="margin-top:12px;">
-                <strong>ffmpeg is not installed.</strong> It is required for encoding.<br>
-                <span style="font-size:11px;color:var(--muted);">${gpuHwNoDrivers ? 'GPU hardware detected but drivers not installed. ' : ''}Install the bundled static ffmpeg for CPU encoding. ${gpuHwNoDrivers ? 'After installing GPU drivers, rebuild ffmpeg to add GPU support.' : ''}</span><br><br>
-                <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Installing...'; this.className='btn-sm installing'; installTool('ffmpeg-static', this)">Install ffmpeg (CPU encoding)</button>
-                <span style="font-size:11px;color:var(--muted);margin-left:8px;">Instant — no build needed</span>
-            </div>`;
-        }
+        // No ffmpeg at all — shouldn't happen with bundled binary, but handle gracefully
+        html += `<div class="info-box" style="margin-top:12px;">
+            <strong>ffmpeg is not installed.</strong> It is required for encoding.<br>
+            <span style="font-size:11px;color:var(--muted);">Try re-running the installer to restore the bundled ffmpeg binary.</span><br><br>
+            <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg from source</button>
+            <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
+        </div>`;
     } else if (gpuDriversWorking && (!s.has_nvenc || !s.has_libplacebo)) {
-        // ffmpeg exists, GPU drivers work, but ffmpeg missing GPU features — rebuild
+        // ffmpeg exists but missing GPU features — GPU drivers may have been installed after ffmpeg
+        // Bundled Jellyfin ffmpeg has all features, so this likely means a library issue
         let missing = [];
         if (!s.has_nvenc) missing.push('NVENC (GPU encoding)');
         if (!s.has_libplacebo) missing.push('libplacebo (DV P5 conversion)');
         html += `<div class="info-box" style="margin-top:12px;">
             <strong>ffmpeg is missing GPU features:</strong> ${missing.join(', ')}<br>
-            <span style="font-size:11px;color:var(--muted);">CPU encoding works. Build ffmpeg with GPU support for hardware-accelerated encoding.</span><br><br>
-            <button class="btn-sm" id="rebuildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg with GPU support</button>
+            <span style="font-size:11px;color:var(--muted);">The bundled ffmpeg supports these features but they may need GPU drivers installed first. Try a <strong>reboot</strong> if drivers were just installed, or rebuild ffmpeg from source.</span><br><br>
+            <button class="btn-sm" id="rebuildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Rebuild ffmpeg from source</button>
             <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
         </div>`;
     } else if (hasFFmpeg && gpuHwNoDrivers && !s.has_nvenc) {
         html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
-            ffmpeg ready for CPU encoding. Install GPU drivers above, then rebuild ffmpeg to add GPU support.
+            ffmpeg ready for CPU encoding. Install GPU drivers above to enable GPU acceleration — no ffmpeg rebuild needed.
         </div>`;
     } else if (hasFFmpeg && !s.has_gpu && !s.has_nvidia_hw) {
         html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
@@ -664,13 +667,14 @@ function renderSystemCheck() {
     if (isInstalling || rebootPending) setAllInstallButtons(true);
 }
 
-function checkItem(name, ok, detail, installTool) {
+function checkItem(name, ok, detail, installTool, extra) {
     const dot = ok ? 'dot-ok' : 'dot-err';
     let installBtn = '';
     if (installTool) {
         installBtn = ` <button class="btn-sm" id="install-${installTool}" onclick="installTool('${installTool}', this)">Install</button>`;
     }
-    return `<div class="check-item"><span class="dot ${dot}"></span><span><strong>${name}</strong>${installBtn}<br><span style="font-size:11px;color:var(--muted);">${detail}</span></span></div>`;
+    const extraHtml = extra ? `<br><span style="font-size:10px;color:var(--cyan);font-family:var(--mono);">${extra}</span>` : '';
+    return `<div class="check-item"><span class="dot ${dot}"></span><span><strong>${name}</strong>${installBtn}<br><span style="font-size:11px;color:var(--muted);">${detail}</span>${extraHtml}</span></div>`;
 }
 
 async function cancelInstall() {
@@ -1031,17 +1035,25 @@ async function saveSetup() {
         });
         const data = await res.json();
         if (data.ok) {
-            btn.textContent = 'Applying settings...';
+            btn.textContent = 'Restarting server...';
             btn.style.background = 'var(--green)';
-            // Server restarts — wait for it to come back then redirect
+            // Server restarts — wait for it to go down, then come back up
             setTimeout(() => {
+                let serverWentDown = false;
                 const check = setInterval(async () => {
                     try {
-                        const r = await fetch('/api/system/check');
-                        if (r.ok) { clearInterval(check); setTimeout(() => { window.location.href = '/'; }, 1000); }
-                    } catch(e) {}
+                        const r = await fetch('/api/system/check', {signal: AbortSignal.timeout(3000)});
+                        if (r.ok && serverWentDown) {
+                            // Server is back up after going down — redirect
+                            clearInterval(check);
+                            window.location.href = '/';
+                        }
+                    } catch(e) {
+                        // Server is down — this is expected during restart
+                        serverWentDown = true;
+                    }
                 }, 2000);
-            }, 3000);
+            }, 2000);
         } else {
             btn.textContent = 'Error — try again';
             btn.disabled = false;

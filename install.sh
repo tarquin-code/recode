@@ -261,6 +261,10 @@ mkdir -p "${APP_DIR}/static" "${APP_DIR}/bin"
 # Symlink system tools to app bin dir
 # ─────────────────────────────────────────────────────────────────
 for tool in ffmpeg ffprobe mkvmerge mkvextract mediainfo nvidia-smi; do
+    # Skip if bundled binary already exists (not a symlink)
+    if [[ -x "${APP_DIR}/bin/$tool" && ! -L "${APP_DIR}/bin/$tool" ]]; then
+        continue
+    fi
     SYS_BIN=$(command -v "$tool" 2>/dev/null || echo "")
     # Also check /usr/local/bin
     if [[ -z "$SYS_BIN" ]] && [[ -x "/usr/local/bin/$tool" ]]; then
@@ -301,21 +305,10 @@ if [[ -f "${SCRIPT_DIR}/recode_server.py" ]]; then
         cp -a "${SCRIPT_DIR}/lib" "${APP_DIR}/"
         log "Bundled libraries copied to ${APP_DIR}/lib/"
     fi
-    # Copy static ffmpeg directory
-    if [[ -d "${SCRIPT_DIR}/bin/static" ]]; then
-        mkdir -p "${APP_DIR}/bin/static"
-        cp "${SCRIPT_DIR}/bin/static/"* "${APP_DIR}/bin/static/" 2>/dev/null || true
-        chmod +x "${APP_DIR}/bin/static/"* 2>/dev/null || true
-        log "Static ffmpeg bundled to ${APP_DIR}/bin/static/"
-    fi
-    # Install bundled static ffmpeg as default if no system ffmpeg found
-    if [[ ! -x "${APP_DIR}/bin/ffmpeg" || -L "${APP_DIR}/bin/ffmpeg" && ! -e "${APP_DIR}/bin/ffmpeg" ]]; then
-        if [[ -x "${APP_DIR}/bin/static/ffmpeg" ]]; then
-            ln -sf "${APP_DIR}/bin/static/ffmpeg" "${APP_DIR}/bin/ffmpeg"
-            ln -sf "${APP_DIR}/bin/static/ffprobe" "${APP_DIR}/bin/ffprobe"
-            log "ffmpeg: ${GREEN}using bundled static build${NC} (CPU encoding ready)"
-            log "  GPU encoding requires building ffmpeg — use the Setup Wizard"
-        fi
+    # Bundled ffmpeg (Jellyfin build with NVENC, libplacebo, Vulkan, libx265)
+    if [[ -x "${APP_DIR}/bin/ffmpeg" && ! -L "${APP_DIR}/bin/ffmpeg" ]]; then
+        FFVER=$("${APP_DIR}/bin/ffmpeg" -version 2>/dev/null | head -1 || echo "")
+        log "ffmpeg: ${GREEN}bundled${NC} — ${FFVER}"
     fi
     log "Application files copied"
 else
