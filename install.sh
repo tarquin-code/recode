@@ -30,10 +30,12 @@ PORT=9877
 MIN_PYTHON="3.9"
 # Read version from recode_server.py if available
 SCRIPT_DIR_EARLY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR_EARLY}/recode_server.py" ]]; then
-    APP_VERSION=$(grep -oP 'VERSION = "\K[^"]+' "${SCRIPT_DIR_EARLY}/recode_server.py" 2>/dev/null || echo "2.1.0")
+if [[ -f "${SCRIPT_DIR_EARLY}/VERSION" ]]; then
+    APP_VERSION=$(cat "${SCRIPT_DIR_EARLY}/VERSION")
+elif [[ -f "${SCRIPT_DIR_EARLY}/recode_server.py" ]]; then
+    APP_VERSION=$(grep -oP 'VERSION = "\K[^"]+' "${SCRIPT_DIR_EARLY}/recode_server.py" 2>/dev/null || echo "2.15.0")
 else
-    APP_VERSION="2.1.0"
+    APP_VERSION="2.15.0"
 fi
 
 # Colors

@@ -55,6 +55,9 @@ pyinstaller --onefile \
 rm -rf /tmp/recode-pybuild
 echo "  recode binary: $(du -h "${DIST_DIR}/plex-recode/bin/recode" | awk '{print $1}')"
 
+# Write version file
+echo "$VERSION" > "${DIST_DIR}/plex-recode/VERSION"
+
 # Core app files
 cp /opt/Recode/static/index.html "${DIST_DIR}/plex-recode/static/"
 cp /opt/Recode/static/setup.html "${DIST_DIR}/plex-recode/static/"
