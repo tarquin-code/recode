@@ -60,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.14.4"
+VERSION = "2.14.5"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -4261,8 +4261,11 @@ async def update_apply():
                 if os.path.isdir(os.path.join(tmp_dir, d)) and d != "__MACOSX":
                     extracted = os.path.join(tmp_dir, d)
                     break
-            if not extracted or not os.path.isfile(os.path.join(extracted, "recode_server.py")):
-                raise RuntimeError("Invalid update package — recode_server.py not found")
+            if not extracted or not (
+                os.path.isfile(os.path.join(extracted, "recode_server.py")) or
+                os.path.isfile(os.path.join(extracted, "bin", "recode"))
+            ):
+                raise RuntimeError("Invalid update package — no recode binary or recode_server.py found")
 
             # Backup current
             backup_dir = os.path.join(BASE_DIR, "backups", f"pre-update-{VERSION}")
@@ -4271,6 +4274,12 @@ async def update_apply():
                 src = os.path.join(BASE_DIR, f)
                 if os.path.exists(src):
                     shutil.copy2(src, backup_dir)
+            # Backup compiled binary if it exists
+            recode_bin = os.path.join(BASE_DIR, "bin", "recode")
+            if os.path.isfile(recode_bin):
+                bin_bak = os.path.join(backup_dir, "bin")
+                os.makedirs(bin_bak, exist_ok=True)
+                shutil.copy2(recode_bin, bin_bak)
             static_bak = os.path.join(backup_dir, "static")
             os.makedirs(static_bak, exist_ok=True)
             for f in os.listdir(os.path.join(BASE_DIR, "static")):
@@ -4295,6 +4304,15 @@ if [ -d "{extracted}/bin" ]; then
 fi
 # Lib files
 [ -d "{extracted}/lib" ] && cp -af {extracted}/lib/* {BASE_DIR}/lib/ 2>/dev/null || true
+# If compiled binary exists, update systemd service to use it
+if [ -x "{BASE_DIR}/bin/recode" ]; then
+    SERVICE_FILE="/etc/systemd/system/recode.service"
+    if [ -f "$SERVICE_FILE" ] && grep -q "recode_server.py" "$SERVICE_FILE"; then
+        sed -i "s|ExecStart=.*|ExecStart={BASE_DIR}/bin/recode|" "$SERVICE_FILE"
+        systemctl daemon-reload
+        echo "Updated systemd service to use compiled binary"
+    fi
+fi
 # Fix ownership
 chown -R {os.getuid()}:{os.getgid()} {BASE_DIR}/ 2>/dev/null || true
 echo "Files copied successfully"
