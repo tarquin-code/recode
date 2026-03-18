@@ -60,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.13.1"
+VERSION = "2.13.2"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -3626,20 +3626,19 @@ async def install_tool(tool: str):
                 await proc.wait()
                 if proc.returncode != 0:
                     raise RuntimeError("ffmpeg build failed")
-                # Update symlinks in app bin dir
+                # Copy built binaries to app bin dir
                 for binary in ["ffmpeg", "ffprobe"]:
                     sys_bin = f"/usr/local/bin/{binary}"
                     if os.path.isfile(sys_bin):
                         dst = os.path.join(BIN_DIR, binary)
                         try:
-                            if os.path.exists(dst) or os.path.islink(dst):
-                                os.remove(dst)
-                            os.symlink(sys_bin, dst)
-                        except PermissionError:
-                            # Symlink owned by root — use sudo
-                            p = await _run_sudo("ln", "-sf", sys_bin, dst)
+                            p = await _run_sudo("cp", "-f", sys_bin, dst)
                             await p.communicate()
-                        _install_tasks[tool]["log"] += f"Linked {binary} → {dst}\n"
+                            p = await _run_sudo("chmod", "755", dst)
+                            await p.communicate()
+                        except Exception as e:
+                            _install_tasks[tool]["log"] += f"Warning: failed to copy {binary}: {e}\n"
+                        _install_tasks[tool]["log"] += f"Installed {binary} → {dst}\n"
                 FFMPEG = _find_bin("ffmpeg")
                 FFPROBE = _find_bin("ffprobe")
                 _install_tasks[tool]["log"] += f"ffmpeg path: {FFMPEG}\n"

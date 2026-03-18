@@ -258,15 +258,14 @@ fi
 mkdir -p "${APP_DIR}/static" "${APP_DIR}/bin"
 
 # ─────────────────────────────────────────────────────────────────
-# Symlink system tools to app bin dir
+# Link system tools to app bin dir (only for tools not bundled)
 # ─────────────────────────────────────────────────────────────────
-for tool in ffmpeg ffprobe mkvmerge mkvextract mediainfo nvidia-smi; do
-    # Skip if bundled binary already exists (not a symlink)
-    if [[ -x "${APP_DIR}/bin/$tool" && ! -L "${APP_DIR}/bin/$tool" ]]; then
+for tool in mediainfo nvidia-smi; do
+    # Skip if already exists in bin
+    if [[ -x "${APP_DIR}/bin/$tool" ]]; then
         continue
     fi
     SYS_BIN=$(command -v "$tool" 2>/dev/null || echo "")
-    # Also check /usr/local/bin
     if [[ -z "$SYS_BIN" ]] && [[ -x "/usr/local/bin/$tool" ]]; then
         SYS_BIN="/usr/local/bin/$tool"
     fi

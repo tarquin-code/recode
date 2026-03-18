@@ -1632,7 +1632,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.13.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.13.2</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1641,6 +1641,11 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
                 <h4>About</h4>
                 <p>Plex Re-Encoder is a web-based tool for batch re-encoding media libraries to HEVC (H.265) using GPU-accelerated encoding (NVENC) or CPU encoding (libx265). It integrates with Plex Media Server for library scanning, automatic webhook-triggered encoding, and post-encode library rescans.</p>
+
+                <h4>System Information</h4>
+                <div id="aboutSystemInfo" style="margin-bottom:16px;">
+                    <div style="color:var(--text-muted);font-size:12px;">Loading...</div>
+                </div>
 
                 <div id="aboutUpdateSection" style="margin-bottom:16px;">
                     <div id="aboutUpdateStatus" style="display:none;"></div>
@@ -1660,6 +1665,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.13.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li>Self-contained app &mdash; all binaries in /opt/Recode/bin/, no symlinks to /usr/local</li>
+                                <li>ffmpeg build from source copies to app bin instead of symlinking</li>
+                                <li>Setup Complete: full-page restart message with auto-redirect (no more stuck page)</li>
+                                <li>About tab: system info + tool versions (OS, kernel, CPU, RAM, GPU, ffmpeg, etc.)</li>
+                                <li>installer: only symlinks system tools not bundled (mediainfo, nvidia-smi)</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.13.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -4421,8 +4436,56 @@ function switchHelpTab(name, el) {
     if (el) el.classList.add('active');
     const tab = document.getElementById('helpTab-' + name);
     if (tab) tab.classList.add('active');
-    // Auto-check for updates when About tab is opened
-    if (name === 'about') checkForUpdates(null, false);
+    // Auto-check for updates and load system info when About tab is opened
+    if (name === 'about') {
+        checkForUpdates(null, false);
+        loadAboutSystemInfo();
+    }
+}
+
+async function loadAboutSystemInfo() {
+    const container = document.getElementById('aboutSystemInfo');
+    if (!container) return;
+    try {
+        const r = await fetch('/api/setup/status');
+        const s = await r.json();
+        const dot = (ok) => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ok ? 'var(--success)' : 'var(--error)'};margin-right:6px;"></span>`;
+        let html = '';
+        // System info header
+        html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:12px;padding:10px 14px;background:var(--bg-tertiary);border-radius:6px;margin-bottom:8px;">`;
+        if (s.os_name) html += `<div><span style="color:var(--text-muted);">OS:</span> <strong>${s.os_name}</strong></div>`;
+        if (s.kernel) html += `<div><span style="color:var(--text-muted);">Kernel:</span> <strong>${s.kernel}</strong></div>`;
+        if (s.cpu_name) html += `<div><span style="color:var(--text-muted);">CPU:</span> <strong>${s.cpu_name}</strong></div>`;
+        html += `<div><span style="color:var(--text-muted);">RAM:</span> <strong>${s.ram_gb} GB</strong> · <span style="color:var(--text-muted);">Cores:</span> <strong>${s.cpu_cores}</strong></div>`;
+        html += `</div>`;
+        // Tool versions grid
+        html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">`;
+        // GPU
+        if (s.has_gpu) {
+            const gpuName = (s.gpu_info && s.gpu_info[0]) ? s.gpu_info[0].name : s.lspci_gpu || '';
+            html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(true)}<span><strong>NVIDIA GPU</strong><br><span style="font-size:11px;color:var(--text-muted);">${gpuName}${s.nvidia_driver_version ? ' · Driver ' + s.nvidia_driver_version : ''}</span></span></div>`;
+        } else {
+            html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(false)}<span><strong>GPU</strong><br><span style="font-size:11px;color:var(--text-muted);">No NVIDIA GPU — CPU only</span></span></div>`;
+        }
+        // ffmpeg
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(!!s.ffmpeg_version)}<span><strong>ffmpeg</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.ffmpeg_version || 'Not found'}</span></span></div>`;
+        // NVENC
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(s.has_nvenc)}<span><strong>NVENC</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.has_nvenc ? 'GPU encoding ready' : 'Not available'}</span></span></div>`;
+        // libplacebo
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(s.has_libplacebo)}<span><strong>libplacebo</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.has_libplacebo ? 'DV P5 conversion ready' : 'Not available'}</span></span></div>`;
+        // dovi_tool
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(s.has_dovi_tool)}<span><strong>dovi_tool</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.dovi_version || (s.has_dovi_tool ? 'Installed' : 'Not installed')}</span></span></div>`;
+        // mkvmerge
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(s.has_mkvmerge)}<span><strong>mkvmerge</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.mkvmerge_version || (s.has_mkvmerge ? 'Installed' : 'Not installed')}</span></span></div>`;
+        // mediainfo
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(!!s.mediainfo_version)}<span><strong>mediainfo</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.mediainfo_version || 'Not installed'}</span></span></div>`;
+        // Python
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(true)}<span><strong>Python</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.python_version || 'OK'}</span></span></div>`;
+        html += `</div>`;
+        container.innerHTML = html;
+    } catch(e) {
+        container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Failed to load system info.</div>';
+    }
 }
 
 function onSettingsPresetChange() {
