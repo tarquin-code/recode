@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.14.7"
+VERSION = "2.16.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -3286,7 +3286,7 @@ async def setup_status():
         "cpu_name": _get_cpu_name(),
         "cpu_cores": psutil.cpu_count(logical=True) or 1,
         "ram_gb": round(psutil.virtual_memory().total / (1024**3), 1),
-        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "rrp_version": _get_version("recode-remote", ["--version"], lambda o: o.replace("recode-remote ", "").split("\n")[0].strip() if o else ""),
         "os_name": _get_os_name(),
         "kernel": subprocess.run(["uname", "-r"], capture_output=True, text=True, timeout=5).stdout.strip() if shutil.which("uname") else "",
         "ffmpeg_version": ffmpeg_version,
