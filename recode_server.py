@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -1355,8 +1355,9 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
     cmd += ["-max_muxing_queue_size", "9999"]
 
     # Progress output — remote jobs use -stats on stderr since pipe:1 doesn't tunnel
+    # Progress output — remote jobs use -stats on stderr since pipe:1 doesn't tunnel
     if is_remote:
-        cmd += ["-stats", "-loglevel", "info"]
+        cmd += ["-stats", "-loglevel", "error"]
     else:
         cmd += ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
 
@@ -1430,22 +1431,27 @@ class EncodeQueue:
         return gpu_loads
 
     @staticmethod
-    def gpu_max_encodes(gpu_idx: int) -> int:
-        """Max concurrent encodes for a GPU based on its VRAM."""
+    def gpu_max_encodes(gpu_idx: int, is_4k: bool = False) -> int:
+        """Max concurrent encodes for a GPU based on its VRAM.
+        4K HEVC decode+encode needs ~1.7GB but CUDA allocates extra buffers;
+        GPUs with <=2GB consistently OOM on 4K content."""
         info = per_gpu_info.get(gpu_idx, {})
         mem_total_mb = info.get("mem_total", 0)
         if mem_total_mb <= 0:
             return 1
+        if is_4k and mem_total_mb <= 2048:
+            return 0  # 2GB GPUs OOM on 4K HEVC decode+encode
         # ~1.5 GB per encode — allow 1 per 2GB, minimum 1
         return max(1, mem_total_mb // 2048)
 
-    def get_least_loaded_gpu(self):
-        """Return the GPU index with the fewest active encodes, or None if all at max."""
+    def get_least_loaded_gpu(self, is_4k: bool = False):
+        """Return the GPU index with the fewest active encodes, or None if all at max.
+        Skips GPUs that cannot handle the job's resolution."""
         gpu_loads = self.get_gpu_loads()
         available = {}
         for g, load in gpu_loads.items():
-            max_enc = self.gpu_max_encodes(g)
-            if load < max_enc:
+            max_enc = self.gpu_max_encodes(g, is_4k=is_4k)
+            if max_enc > 0 and load < max_enc:
                 available[g] = load
         if not available:
             return None
@@ -1997,7 +2003,7 @@ async def _encode_worker_safe(worker_id: int):
         except Exception:
             log.exception(f"[worker-{worker_id}] Crashed — restarting in 5s")
             # Clean up claiming lock if this worker held it
-            encode_queue._claim_lock.release()
+            encode_queue._claiming = False
             await asyncio.sleep(5)
 
 
@@ -2015,48 +2021,11 @@ async def encode_worker(worker_id: int):
             await asyncio.sleep(10)
             continue
 
-        # Acquire claiming lock
-        if not hasattr(encode_queue, '_claim_lock'):
-            encode_queue._claim_lock = asyncio.Lock()
-        await encode_queue._claim_lock.acquire()
-
-        # Check if we're at the concurrency limit (count ALL active jobs, not just those with procs)
-        max_concurrent = app_settings.get("max_concurrent_encodes", 1)
-        # Check capacity across all targets (local GPUs + remote servers)
-        local_loads = {}
-        remote_loads = {}
-        for j in encode_queue.active_jobs.values():
-            if j.paused:
-                continue
-            ri = j.settings.get("_remote_server_idx", -1)
-            if ri >= 0:
-                remote_loads[ri] = remote_loads.get(ri, 0) + 1
-            else:
-                gi = encode_queue.job_gpus.get(j.id, -1)
-                if gi >= 0:
-                    local_loads[gi] = local_loads.get(gi, 0) + 1
-        # Check if any target has capacity
-        has_local_capacity = False
-        if GPU_COUNT > 0:
-            local_total = sum(local_loads.values())
-            if local_total < max_concurrent:
-                for gi in range(GPU_COUNT):
-                    if local_loads.get(gi, 0) < encode_queue.gpu_max_encodes(gi):
-                        has_local_capacity = True
-                        break
-        servers = app_settings.get("remote_gpu_servers", [])
-        enabled_remotes = [i for i, s in enumerate(servers)
-                          if s.get("enabled", True) is not False and s.get("_online", False)]
-        has_remote_capacity = any(
-            remote_loads.get(ri, 0) < servers[ri].get("max_jobs", 1)
-            for ri in enabled_remotes if ri < len(servers)
-        )
-        if not has_local_capacity and not has_remote_capacity:
-            encode_queue._claim_lock.release()
-            await asyncio.sleep(1)
+        # Claiming — use a simple flag but stagger workers to avoid race
+        if encode_queue._claiming:
+            await asyncio.sleep(0.1 + worker_id * 0.05)
             continue
-        # If local is full but remote has capacity, force remote-only selection
-        force_remote = not has_local_capacity and has_remote_capacity
+        encode_queue._claiming = True
         next_job = None
         for jid in list(encode_queue.queue_order):
             if jid in encode_queue.jobs and encode_queue.jobs[jid].status == JobStatus.QUEUED:
@@ -2065,7 +2034,7 @@ async def encode_worker(worker_id: int):
 
         if not next_job:
             encode_queue.running = len(encode_queue.active_jobs) > 0
-            encode_queue._claim_lock.release()
+            encode_queue._claiming = False
             await asyncio.sleep(1)
             continue
         else:
@@ -2079,6 +2048,8 @@ async def encode_worker(worker_id: int):
                 if not gpu_target.startswith("remote"):
                     gpu_target = "remote"
             is_cpu_job = encoder == "cpu" or next_job.settings.get("use_cpu", False)
+            _job_is_4k = next_job.file_info.get("width", 0) >= 3800
+
             gpu_id = -1  # -1 = no GPU (CPU encode)
             remote_server_idx = -1  # -1 = not remote
 
@@ -2108,16 +2079,16 @@ async def encode_worker(worker_id: int):
                         remote_server_idx = min(available_remotes, key=lambda i: remote_loads.get(i, 0))
                         next_job.settings["encoder"] = "remote"
                     else:
-                        encode_queue._claim_lock.release()
+                        encode_queue._claiming = False
                         await asyncio.sleep(2)
                         continue
                 else:
                     # No remote servers configured — fall back to local GPU or CPU
                     log.warning(f"[{next_job.id}] No remote GPU servers configured, falling back to local")
                     if GPU_COUNT > 0:
-                        gpu_id = encode_queue.get_least_loaded_gpu()
+                        gpu_id = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
                         if gpu_id is None:
-                            encode_queue._claim_lock.release()
+                            encode_queue._claiming = False
                             await asyncio.sleep(2)
                             continue
                     # else stays cpu (gpu_id = -1)
@@ -2126,14 +2097,14 @@ async def encode_worker(worker_id: int):
                 try:
                     wanted = int(gpu_target.split(":")[1])
                     gpu_loads = encode_queue.get_gpu_loads()
-                    if gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted):
+                    if encode_queue.gpu_max_encodes(wanted, is_4k=_job_is_4k) > 0 and gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted, is_4k=_job_is_4k):
                         gpu_id = wanted
                     else:
                         gpu_id = None
                 except (ValueError, IndexError):
                     gpu_id = None
                 if gpu_id is None:
-                    encode_queue._claim_lock.release()
+                    encode_queue._claiming = False
                     await asyncio.sleep(2)
                     continue
             elif gpu_target == "local" or (encoder == "gpu" and gpu_target != "auto"):
@@ -2146,73 +2117,54 @@ async def encode_worker(worker_id: int):
                         try:
                             wanted = int(legacy_gpu)
                             gpu_loads = encode_queue.get_gpu_loads()
-                            if gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted):
+                            if encode_queue.gpu_max_encodes(wanted, is_4k=_job_is_4k) > 0 and gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted, is_4k=_job_is_4k):
                                 gpu_id = wanted
                         except (ValueError, TypeError):
                             pass
                     if gpu_id is None:
-                        gpu_id = encode_queue.get_least_loaded_gpu()
+                        gpu_id = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
                     if gpu_id is None:
-                        encode_queue._claim_lock.release()
+                        encode_queue._claiming = False
                         await asyncio.sleep(2)
                         continue
                 # else stays cpu (gpu_id = -1)
             else:
-                # "auto" — load-balance across ALL local GPUs and remote servers
-                # Count loads on each target
-                local_loads = {}  # gpu_id -> count
-                remote_loads = {}  # server_idx -> count
-                for jid, j in encode_queue.active_jobs.items():
+                # "auto" — fill local GPUs up to max_concurrent, plus remote servers independently
+                max_concurrent = app_settings.get("max_concurrent_encodes", 1)
+                local_count = sum(1 for j in encode_queue.active_jobs.values()
+                                  if not j.paused and j.settings.get("_remote_server_idx", -1) < 0)
+                remote_loads = {}
+                for j in encode_queue.active_jobs.values():
                     ri = j.settings.get("_remote_server_idx", -1)
-                    if ri >= 0:
+                    if ri >= 0 and not j.paused:
                         remote_loads[ri] = remote_loads.get(ri, 0) + 1
+
+                # Try local GPU first (if under concurrent limit or GPU has spare capacity)
+                if GPU_COUNT > 0:
+                    candidate_gpu = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
+                    if candidate_gpu is not None and (local_count < max_concurrent or encode_queue.get_gpu_loads().get(candidate_gpu, 0) == 0):
+                        gpu_id = candidate_gpu
                     else:
-                        gi = encode_queue.job_gpus.get(jid, -1)
-                        if gi >= 0:
-                            local_loads[gi] = local_loads.get(gi, 0) + 1
+                        gpu_id = -1  # will try remote below
 
-                # Build local and remote candidate lists separately
-                local_candidates = []
-                remote_candidates = []
-                if GPU_COUNT > 0 and not force_remote:
-                    local_total = sum(local_loads.values())
-                    if local_total < max_concurrent:
-                        for gi in range(GPU_COUNT):
-                            load = local_loads.get(gi, 0)
-                            if load < encode_queue.gpu_max_encodes(gi):
-                                local_candidates.append(("local", gi, load))
-                servers = app_settings.get("remote_gpu_servers", [])
-                enabled_idxs = [i for i, s in enumerate(servers)
-                                if s.get("enabled", True) is not False and s.get("_online", False)]
-                for ri in enabled_idxs:
-                    load = remote_loads.get(ri, 0)
-                    max_rjobs = servers[ri].get("max_jobs", 1) if ri < len(servers) else 1
-                    if load < max_rjobs:
-                        remote_candidates.append(("remote", ri, load))
-
-                # Prefer local GPUs first, use remote as additional capacity
-                candidates = local_candidates if local_candidates else remote_candidates
-                # If both have capacity, pick local for this slot but also allow
-                # a separate worker to pick up a remote job simultaneously
-                if local_candidates and remote_candidates:
-                    candidates = local_candidates
-
-                if candidates:
-                    import random
-                    min_load = min(c[2] for c in candidates)
-                    tied = [c for c in candidates if c[2] == min_load]
-                    best = random.choice(tied)
-                    if best[0] == "local":
-                        gpu_id = best[1]
-                    else:
-                        remote_server_idx = best[1]
+                # If no local slot, try remote
+                if gpu_id == -1 and not is_cpu_job:
+                    servers = app_settings.get("remote_gpu_servers", [])
+                    enabled_idxs = [i for i, s in enumerate(servers)
+                                    if s.get("enabled", True) is not False and s.get("_online", False)]
+                    available = [i for i in enabled_idxs
+                                 if remote_loads.get(i, 0) < servers[i].get("max_jobs", 1)]
+                    if available:
+                        import random
+                        min_load = min(remote_loads.get(i, 0) for i in available)
+                        tied = [i for i in available if remote_loads.get(i, 0) == min_load]
+                        remote_server_idx = random.choice(tied)
                         next_job.settings["encoder"] = "remote"
-                        gpu_id = -1
-                else:
-                    # Nothing available — wait
-                    encode_queue._claim_lock.release()
-                    await asyncio.sleep(2)
-                    continue
+                    else:
+                        # Nothing available — wait
+                        encode_queue._claiming = False
+                        await asyncio.sleep(2)
+                        continue
 
             next_job.settings["_remote_server_idx"] = remote_server_idx
             # Store the detected encoder type for this remote server
@@ -2225,7 +2177,7 @@ async def encode_worker(worker_id: int):
             next_job.started_at = time.time()
             encode_queue.active_jobs[next_job.id] = next_job
             encode_queue.job_gpus[next_job.id] = gpu_id
-            encode_queue._claim_lock.release()
+            encode_queue._claiming = False
 
         job = next_job
         info = job.file_info
@@ -2410,57 +2362,67 @@ async def encode_worker(worker_id: int):
             encode_queue.ffmpeg_logs[job.id] = []
             duration = info.get("duration_secs", 0) or 0
 
-            # Read stderr in background
+            # Read stderr in background for local jobs (captures errors/warnings)
             async def _read_stderr(proc, job_id):
                 async for line in proc.stderr:
                     text = line.decode(errors='replace').rstrip()
                     if text:
                         logs = encode_queue.ffmpeg_logs.get(job_id, [])
                         logs.append(text)
-                        # Keep last 500 lines
                         if len(logs) > 500:
                             encode_queue.ffmpeg_logs[job_id] = logs[-500:]
-            # For remote jobs, stderr is read in the main progress loop; for local, use background task
             stderr_task = None
-            if not (settings.get("_remote_server_idx", -1) >= 0):
+            is_stats_mode = settings.get("_remote_server_idx", -1) >= 0
+            if not is_stats_mode:
                 stderr_task = asyncio.create_task(_read_stderr(proc, job.id))
+
+            # Broadcast initial "preparing" progress so UI shows feedback immediately
+            job.progress = {
+                "pct": 0, "elapsed_secs": 0, "eta_secs": 0,
+                "speed": "0x", "bitrate": "0kbits/s", "frame": 0,
+                "current_time": 0, "total_time": duration,
+                "output_size": 0, "phase": "preparing",
+            }
+            await manager.broadcast({
+                "type": "progress_update",
+                "data": {"id": job.id, "progress": job.progress}
+            })
 
             # Parse progress — remote uses stderr (-stats), local uses stdout (-progress pipe:1)
             current_time = 0
             speed = "0x"
             bitrate = "0kbits/s"
             frame = 0
-            is_stats_mode = settings.get("_remote_server_idx", -1) >= 0
-
-            # Remote: read stderr in chunks (stats uses \r not \n), Local: read stdout lines
+            _fps = 0.0
+            _total_size = 0
+            # Remote: read stderr in chunks (stats uses \r not \n)
+            # Local: read stdout lines (-progress pipe:1 outputs key=value pairs)
             if is_stats_mode:
+                import re as _re
                 _stats_buf = ""
                 while True:
                     chunk = await proc.stderr.read(1024)
                     if not chunk:
                         break
                     _stats_buf += chunk.decode(errors="replace")
-                    # Split on \r or \n to get individual stats lines
                     parts = _stats_buf.replace("\r", "\n").split("\n")
-                    _stats_buf = parts[-1]  # keep incomplete line
+                    _stats_buf = parts[-1]
                     for line_text in parts[:-1]:
                         line_text = line_text.strip()
                         if not line_text:
                             continue
-                        if line_text.startswith("frame="):
-                            import re as _re
+                        if "frame=" in line_text and "time=" in line_text:
                             m = _re.search(r'frame=\s*(\d+)', line_text)
                             if m: frame = int(m.group(1))
-                            m = _re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line_text)
+                            m = _re.search(r'time=(\d+):(\d+):(\d+\.?\d*)', line_text)
                             if m: current_time = int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3))
                             m = _re.search(r'speed=\s*([\d.]+)x', line_text)
                             if m: speed = m.group(1) + "x"
                             m = _re.search(r'bitrate=\s*([\d.]+\s*\w+/s)', line_text)
                             if m: bitrate = m.group(1)
-                            # Parse size from stats line (e.g. size=  12345kB)
-                            m = _re.search(r'size=\s*(\d+)\s*kB', line_text)
+                            m = _re.search(r'[Ll]?size=\s*(\d+)\s*[kK]i?B', line_text)
                             stats_size = int(m.group(1)) * 1024 if m else 0
-                            pct = min(100, int(current_time / duration * 100)) if duration > 0 else 0
+                            pct = min(100, round(current_time / duration * 100, 1)) if duration > 0 else 0
                             elapsed = time.time() - job.started_at if job.started_at else 0
                             remaining = max(duration - current_time, 0)
                             try:
@@ -2468,24 +2430,15 @@ async def encode_worker(worker_id: int):
                                 eta = remaining / speed_num if speed_num > 0 else 0
                             except (ValueError, ZeroDivisionError):
                                 eta = 0
-                            # Get output file size — use stats line size for remote, local file for local
-                            if stats_size > 0:
-                                output_size = stats_size
-                            else:
-                                try:
-                                    output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
-                                except OSError:
-                                    output_size = 0
+                            try:
+                                output_size = stats_size if stats_size > 0 else (os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0)
+                            except OSError:
+                                output_size = 0
                             job.progress = {
-                                "pct": pct,
-                                "elapsed_secs": elapsed,
-                                "eta_secs": eta,
-                                "speed": speed,
-                                "bitrate": bitrate,
-                                "frame": frame,
-                                "current_time": current_time,
-                                "total_time": duration,
-                                "output_size": output_size,
+                                "pct": pct, "elapsed_secs": elapsed, "eta_secs": eta,
+                                "speed": speed, "bitrate": bitrate, "frame": frame,
+                                "current_time": current_time, "total_time": duration,
+                                "output_size": output_size, "phase": "encoding",
                             }
                             if time.time() - getattr(job, '_last_broadcast', 0) > 1:
                                 job._last_broadcast = time.time()
@@ -2502,61 +2455,55 @@ async def encode_worker(worker_id: int):
                     line = line.decode().strip()
                     if not line or "=" not in line:
                         continue
-
                     key, _, value = line.partition("=")
                     key = key.strip()
                     value = value.strip()
-
                     if key == "out_time_us":
-                        try:
-                            current_time = int(value) / 1_000_000
-                        except ValueError:
-                            pass
+                        try: current_time = int(value) / 1_000_000
+                        except ValueError: pass
+                    elif key == "fps":
+                        try: _fps = float(value)
+                        except ValueError: pass
                     elif key == "speed":
                         speed = value
                     elif key == "bitrate":
                         bitrate = value
+                    elif key == "total_size":
+                        try: _total_size = int(value)
+                        except ValueError: pass
                     elif key == "frame":
-                        try:
-                            frame = int(value)
-                        except ValueError:
-                            pass
+                        try: frame = int(value)
+                        except ValueError: pass
                     elif key == "progress":
+                        # Fallback: estimate current_time from frame count when out_time_us is N/A
+                        est_time = current_time
+                        if est_time <= 0 and frame > 0 and _fps > 0:
+                            est_time = frame / _fps
                         pct = 0
                         eta = 0
-                        if duration > 0:
-                            pct = min(int(current_time * 100 / duration), 100)
-                            remaining = max(duration - current_time, 0)
+                        if duration > 0 and est_time > 0:
+                            pct = min(round(est_time * 100 / duration, 1), 100)
+                            remaining = max(duration - est_time, 0)
                             try:
                                 speed_num = float(speed.rstrip("x "))
-                                if speed_num > 0:
-                                    eta = remaining / speed_num
+                                if speed_num > 0: eta = remaining / speed_num
                             except (ValueError, ZeroDivisionError):
-                                eta = 0
-
+                                # speed is N/A — estimate from elapsed time
+                                elapsed_so_far = time.time() - job.started_at
+                                if elapsed_so_far > 0 and est_time > 0:
+                                    speed_num = est_time / elapsed_so_far
+                                    speed = f"{speed_num:.2f}x"
+                                    eta = remaining / speed_num if speed_num > 0 else 0
                         elapsed = time.time() - job.started_at
-                        # Get current output file size
                         try:
-                            output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
+                            output_size = _total_size if _total_size > 0 else (os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0)
                         except OSError:
                             output_size = 0
-                        # Get latest CPU/GPU stats
-                        latest_cpu = stats_history["cpu"][-1]["v"] if stats_history["cpu"] else 0
-                        latest_gpu = stats_history["gpu"][-1]["v"] if stats_history["gpu"] else 0
-                        latest_gpu_temp = stats_history["gpu_temp"][-1]["v"] if stats_history["gpu_temp"] else 0
                         job.progress = {
-                            "pct": pct,
-                            "elapsed_secs": elapsed,
-                            "eta_secs": eta,
-                            "speed": speed,
-                            "bitrate": bitrate,
-                            "frame": frame,
-                            "current_time": current_time,
-                            "total_time": duration,
-                            "output_size": output_size,
-                            "cpu": latest_cpu,
-                            "gpu": latest_gpu,
-                            "gpu_temp": latest_gpu_temp,
+                            "pct": pct, "elapsed_secs": elapsed, "eta_secs": eta,
+                            "speed": speed, "bitrate": bitrate, "frame": frame,
+                            "current_time": est_time, "total_time": duration,
+                            "output_size": output_size, "phase": "encoding",
                         }
                         await manager.broadcast({
                             "type": "progress_update",
@@ -2666,6 +2613,8 @@ async def encode_worker(worker_id: int):
                     speed = "0x"
                     bitrate = "0kbits/s"
                     frame = 0
+                    _fps2 = 0.0
+                    _total_size2 = 0
                     async for line in proc.stdout:
                         if job.status == JobStatus.CANCELLED:
                             break
@@ -2678,28 +2627,42 @@ async def encode_worker(worker_id: int):
                         if key == "out_time_us":
                             try: current_time = int(value) / 1_000_000
                             except ValueError: pass
+                        elif key == "fps":
+                            try: _fps2 = float(value)
+                            except ValueError: pass
                         elif key == "speed": speed = value
                         elif key == "bitrate": bitrate = value
+                        elif key == "total_size":
+                            try: _total_size2 = int(value)
+                            except ValueError: pass
                         elif key == "frame":
                             try: frame = int(value)
                             except ValueError: pass
                         elif key == "progress":
+                            est_time = current_time
+                            if est_time <= 0 and frame > 0 and _fps2 > 0:
+                                est_time = frame / _fps2
                             pct = 0
                             eta = 0
-                            if duration > 0:
-                                pct = min(int(current_time * 100 / duration), 100)
-                                remaining = max(duration - current_time, 0)
+                            if duration > 0 and est_time > 0:
+                                pct = min(round(est_time * 100 / duration, 1), 100)
+                                remaining = max(duration - est_time, 0)
                                 try:
                                     speed_num = float(speed.rstrip("x "))
                                     if speed_num > 0: eta = remaining / speed_num
-                                except (ValueError, ZeroDivisionError): eta = 0
+                                except (ValueError, ZeroDivisionError):
+                                    elapsed_so_far = time.time() - job.started_at
+                                    if elapsed_so_far > 0 and est_time > 0:
+                                        speed_num = est_time / elapsed_so_far
+                                        speed = f"{speed_num:.2f}x"
+                                        eta = remaining / speed_num if speed_num > 0 else 0
                             elapsed_t = time.time() - job.started_at
-                            try: output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
+                            try: output_size = _total_size2 if _total_size2 > 0 else (os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0)
                             except OSError: output_size = 0
                             latest_cpu = stats_history["cpu"][-1]["v"] if stats_history["cpu"] else 0
                             latest_gpu = stats_history["gpu"][-1]["v"] if stats_history["gpu"] else 0
                             latest_gpu_temp = stats_history["gpu_temp"][-1]["v"] if stats_history["gpu_temp"] else 0
-                            job.progress = {"pct": pct, "elapsed_secs": elapsed_t, "eta_secs": eta, "speed": speed, "bitrate": bitrate, "frame": frame, "current_time": current_time, "total_time": duration, "output_size": output_size, "cpu": latest_cpu, "gpu": latest_gpu, "gpu_temp": latest_gpu_temp}
+                            job.progress = {"pct": pct, "elapsed_secs": elapsed_t, "eta_secs": eta, "speed": speed, "bitrate": bitrate, "frame": frame, "current_time": est_time, "total_time": duration, "output_size": output_size, "cpu": latest_cpu, "gpu": latest_gpu, "gpu_temp": latest_gpu_temp, "phase": "encoding"}
                             await manager.broadcast({"type": "progress_update", "data": {"id": job.id, "progress": job.progress}})
 
                     await proc.wait()
@@ -2743,6 +2706,8 @@ async def encode_worker(worker_id: int):
                                 encode_queue.ffmpeg_logs.setdefault(jid, []).append(line.decode(errors='replace').rstrip())
                         stderr_task_sub = asyncio.create_task(_read_stderr_sub(proc, job.id))
 
+                        _fps3 = 0.0
+                        _total_size3 = 0
                         async for line in proc.stdout:
                             if job.status == JobStatus.CANCELLED:
                                 break
@@ -2754,25 +2719,41 @@ async def encode_worker(worker_id: int):
                             if key == "out_time_us":
                                 try: current_time = int(value) / 1_000_000
                                 except ValueError: pass
+                            elif key == "fps":
+                                try: _fps3 = float(value)
+                                except ValueError: pass
                             elif key == "speed": speed = value
                             elif key == "bitrate": bitrate = value
+                            elif key == "total_size":
+                                try: _total_size3 = int(value)
+                                except ValueError: pass
                             elif key == "frame":
                                 try: frame = int(value)
                                 except ValueError: pass
                             elif key == "progress":
-                                pct = min(int(current_time * 100 / duration), 100) if duration > 0 else 0
-                                remaining = max(duration - current_time, 0)
+                                est_time = current_time
+                                if est_time <= 0 and frame > 0 and _fps3 > 0:
+                                    est_time = frame / _fps3
+                                pct = min(round(est_time * 100 / duration, 1), 100) if duration > 0 and est_time > 0 else 0
+                                remaining = max(duration - est_time, 0)
                                 try:
                                     speed_num = float(speed.rstrip("x "))
                                     eta = remaining / speed_num if speed_num > 0 else 0
-                                except (ValueError, ZeroDivisionError): eta = 0
+                                except (ValueError, ZeroDivisionError):
+                                    elapsed_so_far = time.time() - job.started_at
+                                    if elapsed_so_far > 0 and est_time > 0:
+                                        speed_num = est_time / elapsed_so_far
+                                        speed = f"{speed_num:.2f}x"
+                                        eta = remaining / speed_num if speed_num > 0 else 0
+                                    else:
+                                        eta = 0
                                 elapsed_s = time.time() - job.started_at
-                                try: output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
+                                try: output_size = _total_size3 if _total_size3 > 0 else (os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0)
                                 except OSError: output_size = 0
                                 latest_cpu = stats_history["cpu"][-1]["v"] if stats_history["cpu"] else 0
                                 latest_gpu = stats_history["gpu"][-1]["v"] if stats_history["gpu"] else 0
                                 latest_gpu_temp = stats_history["gpu_temp"][-1]["v"] if stats_history["gpu_temp"] else 0
-                                job.progress = {"pct": pct, "elapsed_secs": elapsed_s, "eta_secs": eta, "speed": speed, "bitrate": bitrate, "frame": frame, "current_time": current_time, "total_time": duration, "output_size": output_size, "cpu": latest_cpu, "gpu": latest_gpu, "gpu_temp": latest_gpu_temp}
+                                job.progress = {"pct": pct, "elapsed_secs": elapsed_s, "eta_secs": eta, "speed": speed, "bitrate": bitrate, "frame": frame, "current_time": est_time, "total_time": duration, "output_size": output_size, "cpu": latest_cpu, "gpu": latest_gpu, "gpu_temp": latest_gpu_temp, "phase": "encoding"}
                                 await manager.broadcast({"type": "progress_update", "data": {"id": job.id, "progress": job.progress}})
 
                         await proc.wait()
@@ -5087,13 +5068,15 @@ async def get_system_stats():
     result["per_gpu"] = {}
     for gi, data in per_gpu_stats.items():
         info = per_gpu_info.get(gi, {})
+        mem_total = info.get("mem_total", 0)
         result["per_gpu"][str(gi)] = {
             "util": list(data["util"]),
             "temp": list(data["temp"]),
             "mem_pct": list(data.get("mem_pct", [])),
             "name": info.get("name", ""),
             "mem_used": info.get("mem_used", 0),
-            "mem_total": info.get("mem_total", 0),
+            "mem_total": mem_total,
+            "can_4k": mem_total > 2048,
         }
     return result
 

@@ -219,8 +219,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .progress-bar-container { position: relative; height: 28px; background: var(--bg-primary); border-radius: 14px; overflow: hidden; margin-bottom: 16px; border: 1px solid var(--border); }
 .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent), var(--purple)); background-size: 200% 100%; border-radius: 14px; transition: width 0.5s ease; min-width: 0; }
 .progress-bar-fill.encoding { animation: shimmer 2s linear infinite; }
+.progress-bar-fill.preparing { animation: preparing-pulse 1.5s ease-in-out infinite; background: linear-gradient(90deg, var(--bg-tertiary), var(--accent-dim), var(--bg-tertiary)); background-size: 200% 100%; opacity: 0.6; }
 .progress-bar-fill.paused { animation: none; background: #666; }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes preparing-pulse { 0% { background-position: 200% 0; opacity: 0.4; } 50% { opacity: 0.7; } 100% { background-position: -200% 0; opacity: 0.4; } }
 .progress-bar-text { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: var(--text-primary); text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
 .stat-item { background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; text-align: center; }
@@ -1789,6 +1791,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li>Source info: codec, resolution, HDR type, original bitrate</li>
                     <li>Target info: codec, resolution, target HDR, preset bitrate, output filename</li>
                     <li>Live stats: progress, speed, bitrate, frame count, movie time, output size</li>
+                    <li>"Preparing..." phase with pulsing progress bar while ffmpeg starts up</li>
+                    <li>Smooth interpolated progress &mdash; the bar updates every second between server updates using speed estimation</li>
+                    <li>Decimal percentages (e.g. 0.3%) for early progress on long files</li>
+                    <li>Frame-based progress fallback when ffmpeg timestamps are unavailable</li>
                     <li>View Log with Refresh button for live ffmpeg output</li>
                 </ul>
 
@@ -1827,7 +1833,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.16.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.17.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1860,6 +1866,22 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.17.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li>Smooth progress display &mdash; interpolated progress bar updates every second between server broadcasts</li>
+                                <li>Decimal percentages &mdash; shows 0.1% instead of rounding to 0% for long files</li>
+                                <li>Frame-based progress fallback &mdash; estimates progress from frame count and FPS when ffmpeg reports N/A timestamps</li>
+                                <li>Speed estimation from elapsed time when ffmpeg speed is N/A</li>
+                                <li>"Preparing..." phase &mdash; immediate visual feedback when ffmpeg starts, before first progress data arrives</li>
+                                <li>VRAM-aware GPU assignment &mdash; GPUs with &le;2GB VRAM excluded from 4K jobs to prevent CUDA OOM</li>
+                                <li>Idle GPU utilization &mdash; jobs can use idle GPUs even when max concurrent limit is reached</li>
+                                <li>Per-GPU VRAM and capability info in About tab</li>
+                                <li>"(no 4K)" label on GPU graphs for GPUs with insufficient VRAM</li>
+                                <li>Update checker fix &mdash; no longer shows stale update banners after upgrading</li>
+                                <li>Output size from ffmpeg total_size &mdash; more accurate than polling the filesystem</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.16.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -2622,10 +2644,12 @@ function handleMessage(msg) {
         state.queueEnabled = msg.data.queue_enabled !== false;
         renderQueue(); renderEncoding(); renderHistory(); updateBadges();
     } else if (msg.type === 'progress_update') {
-        // Update matching active job
+        // Update matching active job, stamp receive time for interpolation
+        const prog = msg.data.progress;
+        prog._received_at = Date.now();
         const aj = (state.active || []).find(j => j.id === msg.data.id);
-        if (aj) { aj.progress = msg.data.progress; }
-        if (state.current && state.current.id === msg.data.id) { state.current.progress = msg.data.progress; }
+        if (aj) { aj.progress = prog; }
+        if (state.current && state.current.id === msg.data.id) { state.current.progress = prog; }
         renderProgress();
     } else if (msg.type === 'scan_progress') {
         renderScanProgress(msg.data);
@@ -3481,8 +3505,8 @@ function renderEncoding() {
                         <span class="badge badge-sm badge-codec">${getHwLabel(job.settings)}</span>
                         <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(f.path)}">${escHtml(f.filename)}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySize-${job.id}">${f.size_human} → ${curSize}</span>
-                        <span style="font-size:11px;color:var(--text-secondary);" id="encSummaryPct-${job.id}">${p.pct||0}%</span>
-                        <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySpeed-${job.id}">${p.speed||'—'}</span>
+                        <span style="font-size:11px;color:var(--text-secondary);" id="encSummaryPct-${job.id}">${p.phase === 'preparing' ? 'Preparing...' : _fmtPct(p.pct||0)}</span>
+                        <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySpeed-${job.id}">${p.phase === 'preparing' ? '' : (p.speed||'—')}</span>
                         ${job.paused ? '<span class="badge badge-sm badge-skip">Paused</span>' : ''}
                         <button class="btn btn-sm" style="font-size:11px;padding:4px 10px;margin-left:4px;" onclick="event.stopPropagation(); togglePause('${job.id}', ${job.paused})" id="pauseBtn-${job.id}">${job.paused ? svgIcon('play', 12) + ' Resume' : svgIcon('pause', 12) + ' Pause'}</button>
                         <button class="btn btn-danger btn-sm" style="font-size:11px;padding:4px 8px;" onclick="event.stopPropagation(); cancelEncode('${job.id}')">${svgIcon('x-circle', 12)}</button>
@@ -3505,8 +3529,8 @@ function renderEncoding() {
                 </div>
                 <div style="margin-top:6px;">
                     <div class="progress-bar-container" style="height:18px;border-radius:9px;margin-bottom:0;">
-                        <div class="progress-bar-fill encoding${job.paused ? ' paused' : ''}" id="encodeBarFill-${job.id}" style="width: ${p.pct||0}%"></div>
-                        <div class="progress-bar-text" id="encodeBarText-${job.id}" style="font-size:11px;line-height:18px;">${p.pct||0}%${job.paused ? ' (Paused)' : ''}</div>
+                        <div class="progress-bar-fill encoding${job.paused ? ' paused' : ''}${p.phase === 'preparing' ? ' preparing' : ''}" id="encodeBarFill-${job.id}" style="width: ${p.phase === 'preparing' ? '100' : (p.pct||0)}%"></div>
+                        <div class="progress-bar-text" id="encodeBarText-${job.id}" style="font-size:11px;line-height:18px;">${p.phase === 'preparing' ? 'Preparing...' : _fmtPct(p.pct||0)}${job.paused ? ' (Paused)' : ''}</div>
                     </div>
                 </div>
                 <div id="jobdet-${job.id}" style="${isOpen ? '' : 'display:none;'}margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
@@ -3669,6 +3693,25 @@ function renderExternalTranscodes() {
     return html;
 }
 
+function _estimatePct(p) {
+    // Use server pct, but interpolate between updates using speed
+    let pct = p.pct || 0;
+    if (p._received_at && p.current_time > 0 && p.total_time > 0) {
+        const elapsed = (Date.now() - p._received_at) / 1000;
+        let speedNum = 0;
+        try { speedNum = parseFloat((p.speed || '').replace('x', '')); } catch(e) {}
+        if (speedNum > 0 && elapsed > 0) {
+            const estTime = p.current_time + elapsed * speedNum;
+            pct = Math.min(estTime / p.total_time * 100, 100);
+        }
+    }
+    return Math.round(pct * 10) / 10;  // 1 decimal
+}
+
+function _fmtPct(pct) {
+    return pct < 10 ? pct.toFixed(1) + '%' : Math.round(pct) + '%';
+}
+
 function renderProgress() {
     const activeJobs = (state.active || []).filter(j => j.status === 'encoding');
     for (const job of activeJobs) {
@@ -3676,14 +3719,20 @@ function renderProgress() {
         const fill = document.getElementById('encodeBarFill-' + job.id);
         const text = document.getElementById('encodeBarText-' + job.id);
         const grid = document.getElementById('statsGrid-' + job.id);
-        if (fill) fill.style.width = (p.pct || 0) + '%';
+        const isPreparing = p.phase === 'preparing';
+        const estPct = isPreparing ? 0 : _estimatePct(p);
+        if (fill) {
+            fill.style.width = isPreparing ? '100%' : estPct + '%';
+            if (isPreparing) fill.classList.add('preparing');
+            else fill.classList.remove('preparing');
+        }
         const barText = document.getElementById('encodeBarText-' + job.id);
-        if (barText) barText.textContent = (p.pct || 0) + '%';
+        if (barText) barText.textContent = isPreparing ? 'Preparing...' : _fmtPct(estPct);
         if (grid) grid.innerHTML = renderStatsGrid(p, parseFloat(grid.dataset.started) || 0);
         const sumPct = document.getElementById('encSummaryPct-' + job.id);
         const sumSpd = document.getElementById('encSummarySpeed-' + job.id);
-        if (sumPct) sumPct.textContent = (p.pct || 0) + '%';
-        if (sumSpd) sumSpd.textContent = p.speed || '—';
+        if (sumPct) sumPct.textContent = isPreparing ? 'Preparing...' : _fmtPct(estPct);
+        if (sumSpd) sumSpd.textContent = isPreparing ? '' : (p.speed || '—');
         const sumSize = document.getElementById('encSummarySize-' + job.id);
         const detSize = document.getElementById('encDetSize-' + job.id);
         const curSizeFmt = p.output_size ? formatSize(p.output_size) : '—';
@@ -3783,10 +3832,11 @@ function drawGraphs(data) {
                     const gpuName = gd.name || `GPU ${i}`;
                     const tempStr = lastTemp > 0 ? ` &nbsp; Temp: ${lastTemp}&deg;C` : '';
                     const memStr = gd.mem_total ? ` &nbsp; VRAM: ${(gd.mem_used/1024).toFixed(1)}/${(gd.mem_total/1024).toFixed(1)} GB` : '';
+                    const no4k = gd.can_4k === false ? ' <span style="color:var(--text-muted);font-size:9px;opacity:0.7;">(no 4K)</span>' : '';
                     if (isCompact) {
-                        lbl.innerHTML = `GPU${i} ${lastUtil}%`;
+                        lbl.innerHTML = `GPU${i} ${lastUtil}%${no4k}`;
                     } else {
-                        lbl.innerHTML = `GPU${i} ${lastUtil}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gd.mem_total ? (gd.mem_used/1024).toFixed(1) + '/' + (gd.mem_total/1024).toFixed(1) + 'G' : ''}`;
+                        lbl.innerHTML = `GPU${i} ${lastUtil}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gd.mem_total ? (gd.mem_used/1024).toFixed(1) + '/' + (gd.mem_total/1024).toFixed(1) + 'G' : ''}${no4k}`;
                     }
                 }
             }
@@ -3900,8 +3950,20 @@ function drawGraph(canvasId, points, color, label, points2, color2, label2, poin
 
 function renderStatsGrid(p, startedAt) {
     const elapsed = startedAt ? (Date.now()/1000 - startedAt) : (p.elapsed_secs||0);
+    if (p.phase === 'preparing') {
+        return `
+        <div class="stat-item"><div class="stat-label">Status</div><div class="stat-value" style="color:var(--accent);">Preparing...</div></div>
+        <div class="stat-item"><div class="stat-label">Elapsed</div><div class="stat-value">${formatTime(elapsed)}</div></div>
+        <div class="stat-item"><div class="stat-label">ETA</div><div class="stat-value eta">—</div></div>
+        <div class="stat-item"><div class="stat-label">Speed</div><div class="stat-value speed">—</div></div>
+        <div class="stat-item"><div class="stat-label">Bitrate</div><div class="stat-value bitrate">—</div></div>
+        <div class="stat-item"><div class="stat-label">Current Size</div><div class="stat-value">—</div></div>
+        <div class="stat-item"><div class="stat-label">Frame</div><div class="stat-value">—</div></div>
+        <div class="stat-item"><div class="stat-label">Movie Time</div><div class="stat-value">— / ${formatTime(p.total_time||0)}</div></div>`;
+    }
+    const estPct = _estimatePct(p);
     return `
-        <div class="stat-item"><div class="stat-label">Progress</div><div class="stat-value">${p.pct||0}%</div></div>
+        <div class="stat-item"><div class="stat-label">Progress</div><div class="stat-value">${_fmtPct(estPct)}</div></div>
         <div class="stat-item"><div class="stat-label">Elapsed</div><div class="stat-value">${formatTime(elapsed)}</div></div>
         <div class="stat-item"><div class="stat-label">ETA</div><div class="stat-value eta">${formatTime(p.eta_secs||0)}</div></div>
         <div class="stat-item"><div class="stat-label">Speed</div><div class="stat-value speed">${p.speed||'—'}</div></div>
@@ -4940,8 +5002,11 @@ async function loadAboutSystemInfo() {
         html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">`;
         // GPU
         if (s.has_gpu) {
-            const gpuName = (s.gpu_info && s.gpu_info[0]) ? s.gpu_info[0].name : s.lspci_gpu || '';
-            html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(true)}<span><strong>NVIDIA GPU</strong><br><span style="font-size:11px;color:var(--text-muted);">${gpuName}${s.nvidia_driver_version ? ' · Driver ' + s.nvidia_driver_version : ''}</span></span></div>`;
+            const gpuList = s.gpu_info || [];
+            const gpuDesc = gpuList.length > 1
+                ? gpuList.map(g => `GPU${g.index}: ${g.name} (${g.vram_mb > 2048 ? (g.vram_mb/1024).toFixed(0) + 'GB' : g.vram_mb + 'MB — no 4K'})`).join(', ')
+                : (gpuList[0] ? gpuList[0].name : s.lspci_gpu || '');
+            html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(true)}<span><strong>NVIDIA GPU</strong> (${gpuList.length})<br><span style="font-size:11px;color:var(--text-muted);">${gpuDesc}${s.nvidia_driver_version ? ' · Driver ' + s.nvidia_driver_version : ''}</span></span></div>`;
         } else {
             html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(false)}<span><strong>GPU</strong><br><span style="font-size:11px;color:var(--text-muted);">No NVIDIA GPU — CPU only</span></span></div>`;
         }
@@ -5103,6 +5168,16 @@ function onSettingsPresetChange() {
     document.getElementById('setSpeed').disabled = !isCustom;
 }
 
+function _verIsNewer(latestStr) {
+    const cur = (state.system?.version || '').split('.').map(Number);
+    const lat = latestStr.split('.').map(Number);
+    for (let i = 0; i < Math.max(cur.length, lat.length); i++) {
+        if ((lat[i] || 0) > (cur[i] || 0)) return true;
+        if ((lat[i] || 0) < (cur[i] || 0)) return false;
+    }
+    return false;
+}
+
 async function checkForUpdates(btn, silent) {
     const banner = document.getElementById('updateBanner');
     const statusEl = document.getElementById('aboutUpdateStatus');
@@ -5170,8 +5245,18 @@ function autoCheckForUpdates() {
     if (cached) {
         try {
             const u = JSON.parse(cached);
-            showUpdateInfo(u.current, u.version, u.notes, u.published, u.name);
-        } catch(e) {}
+            // If system version is loaded, verify the cached update is still newer
+            if (state.system?.version) {
+                if (u.version && _verIsNewer(u.version)) {
+                    showUpdateInfo(u.current, u.version, u.notes, u.published, u.name);
+                } else {
+                    localStorage.removeItem('updateAvailable');
+                }
+            } else {
+                // System version not loaded yet — defer to the daily check
+                // Don't show stale banner; the check below will refresh if needed
+            }
+        } catch(e) { localStorage.removeItem('updateAvailable'); }
     }
     if (Date.now() - last > DAY) {
         checkForUpdates(null, true);
@@ -6029,6 +6114,12 @@ setInterval(() => {
     const interval = hasActive ? 2000 : 10000;
     if (Date.now() - lastGraphFetch >= interval) fetchAndDrawGraphs();
 }, 2000);
+// Interpolate progress between websocket updates for smooth progress display
+setInterval(() => {
+    if (document.hidden) return;
+    const hasActive = (state.active || []).some(j => j.status === 'encoding');
+    if (hasActive) renderProgress();
+}, 1000);
 loadAndApplySettings();
 loadPlexLibraries();
 autoCheckForUpdates();

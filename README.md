@@ -2,7 +2,7 @@
 
 **GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.16.0-blue)
+![Version](https://img.shields.io/badge/version-2.17.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -35,6 +35,8 @@
 - **Auto Detection** — Automatically detects all NVIDIA GPUs
 - **Auto Load-Balance** — Distributes across all local GPUs and remote servers equally
 - **VRAM-Based Concurrency** — 1 encode per 2 GB VRAM, configurable
+- **VRAM-Aware Assignment** — GPUs with ≤2GB VRAM excluded from 4K jobs (prevents CUDA OOM)
+- **Idle GPU Utilization** — Jobs can use idle GPUs even when max concurrent limit is reached
 - **GPU Selection** — Auto, All Local, All Remote, specific GPU, or specific server
 - **OOM Recovery** — Automatic re-queue on GPU out-of-memory (up to 3 retries)
 
@@ -82,9 +84,10 @@
 - **Library Profiles** — Per-library settings for codec, quality, resolution, audio
 
 ### Web Interface
-- **Real-Time Progress** — Live encoding stats via WebSocket
+- **Real-Time Progress** — Live encoding stats via WebSocket with interpolated progress between updates
+- **Smooth Progress** — Preparing phase, decimal percentages, frame-based fallback, 1-second interpolation
 - **System Monitoring** — CPU, RAM, GPU utilization, temperature, VRAM in header
-- **GPU Graphs** — Per-GPU utilization, VRAM, and temperature charts
+- **GPU Graphs** — Per-GPU utilization, VRAM, and temperature charts with VRAM capability labels
 - **Dark / Light Theme** — Toggle with header icon or in Settings
 - **Mobile Responsive** — Adapts to desktop, tablet, and mobile screens
 - **Settings Modal** — All settings in one place, save without closing, unsaved indicator
