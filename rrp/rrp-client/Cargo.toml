@@ -1,0 +1,19 @@
+[package]
+name = "rrp-client"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "recode-remote-client"
+path = "src/main.rs"
+
+[dependencies]
+rrp-proto = { path = "../rrp-proto" }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+bincode = { workspace = true }

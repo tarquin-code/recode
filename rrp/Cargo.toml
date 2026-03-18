@@ -1,0 +1,14 @@
+[workspace]
+members = ["rrp-proto", "rrp-client", "rrp-server", "rrp-app"]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+bincode = "1"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+hmac = "0.12"
+sha2 = "0.10"
+anyhow = "1"

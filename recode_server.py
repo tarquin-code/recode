@@ -60,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.14.1"
+VERSION = "2.14.4"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -274,12 +274,12 @@ APP_DEFAULTS = {
     "test_mode": False,
     # Suffix appended to encoded filenames (e.g. "recode" → Movie_h265_HDR10_recode.mkv)
     "encode_suffix": "recode",
-    # Remote GPU servers (ffmpeg-over-ip)
+    # Remote GPU servers (RRP)
     # Each: {"name": "Server A", "address": "192.168.1.100:5050", "secret": "shared-secret"}
-    "remote_gpu_servers": [],
-    # ffmpeg-over-ip server mode — allow other Recode instances to use this machine's GPU
+    "remote_gpu_servers": [],  # [{name, address, secret, enabled, transfer_mode}]
+    # GPU server mode — allow other Recode instances to use this machine's GPU
     "ffmpeg_server_enabled": False,
-    "ffmpeg_server_port": 5050,
+    "ffmpeg_server_port": 9878,
     "ffmpeg_server_secret": "",
 }
 
@@ -331,42 +331,21 @@ def save_settings(settings: dict):
     ]
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=2)
-    # Generate ffmpeg-over-ip client config if remote GPU is configured
-    _write_ffmpeg_over_ip_config(settings)
-
-def _write_ffmpeg_over_ip_config(settings: dict):
-    """Write ffmpeg-over-ip client config files for each remote server."""
-    servers = settings.get("remote_gpu_servers", [])
-    # Migrate old single-server format
-    if not servers and settings.get("remote_gpu_address"):
-        servers = [{"name": "Remote GPU", "address": settings["remote_gpu_address"], "secret": settings.get("remote_gpu_secret", "")}]
-    config_dir = os.path.join(BASE_DIR, "remote-gpu")
-    os.makedirs(config_dir, exist_ok=True)
-    # Clean old configs
-    for f in os.listdir(config_dir):
-        if f.endswith(".jsonc"):
-            os.remove(os.path.join(config_dir, f))
-    # Write per-server configs
-    for i, srv in enumerate(servers):
-        addr = (srv.get("address") or "").strip()
-        secret = (srv.get("secret") or "").strip()
-        if addr:
-            config = json.dumps({"address": addr, "authSecret": secret}, indent=2)
-            try:
-                with open(os.path.join(config_dir, f"server-{i}.jsonc"), "w") as f:
-                    f.write(config)
-            except Exception:
-                pass
-
 def _get_remote_ffmpeg_bin(server_index: int) -> str:
-    """Get the ffmpeg-over-ip client binary path with config for a specific remote server."""
-    return _find_bin("ffmpeg-over-ip-client")
+    """Get the RRP remote binary."""
+    return _find_bin("recode-remote")
 
 def _get_remote_ffmpeg_env(server_index: int) -> dict:
-    """Get environment variables to point ffmpeg-over-ip client at a specific server config."""
-    config_path = os.path.join(BASE_DIR, "remote-gpu", f"server-{server_index}.jsonc")
-    if os.path.isfile(config_path):
-        return {"FFMPEG_OVER_IP_CLIENT_CONFIG": config_path}
+    """Get environment variables for the RRP remote client."""
+    servers = app_settings.get("remote_gpu_servers", [])
+    if server_index < len(servers):
+        srv = servers[server_index]
+        addr = (srv.get("address") or "").strip()
+        secret = (srv.get("secret") or "").strip()
+        # Append default port if not specified
+        if addr and ":" not in addr.rsplit(".", 1)[-1]:
+            addr = f"{addr}:9878"
+        return {"RRP_SERVER_ADDRESS": addr, "RRP_SERVER_SECRET": secret}
     return {}
 
 app_settings = load_settings()
@@ -2115,23 +2094,44 @@ async def encode_worker(worker_id: int):
                         continue
                 # else stays cpu (gpu_id = -1)
             else:
-                # "auto" — use any available (local GPUs first, then remote)
+                # "auto" — load-balance across ALL local GPUs and remote servers
+                # Count loads on each target
+                local_loads = {}  # gpu_id -> count
+                remote_loads = {}  # server_idx -> count
+                for jid, j in encode_queue.active_jobs.items():
+                    ri = j.settings.get("_remote_server_idx", -1)
+                    if ri >= 0:
+                        remote_loads[ri] = remote_loads.get(ri, 0) + 1
+                    else:
+                        gi = encode_queue.job_gpus.get(jid, -1)
+                        if gi >= 0:
+                            local_loads[gi] = local_loads.get(gi, 0) + 1
+
+                # Build list of all available targets: (type, id, load)
+                candidates = []
                 if GPU_COUNT > 0:
-                    gpu_id = encode_queue.get_least_loaded_gpu()
-                if gpu_id is None and app_settings.get("remote_gpu_servers"):
-                    # Local GPUs full, try enabled remote servers
-                    servers = app_settings.get("remote_gpu_servers", [])
-                    enabled_idxs = [i for i, s in enumerate(servers) if s.get("enabled", True) is not False]
-                    if enabled_idxs:
-                        remote_loads = {}
-                        for jid, j in encode_queue.active_jobs.items():
-                            ri = j.settings.get("_remote_server_idx", -1)
-                            if ri >= 0:
-                                remote_loads[ri] = remote_loads.get(ri, 0) + 1
-                        remote_server_idx = min(enabled_idxs, key=lambda i: remote_loads.get(i, 0))
+                    max_per_gpu = encode_queue.max_per_gpu
+                    for gi in range(GPU_COUNT):
+                        load = local_loads.get(gi, 0)
+                        if load < max_per_gpu:
+                            candidates.append(("local", gi, load))
+                servers = app_settings.get("remote_gpu_servers", [])
+                enabled_idxs = [i for i, s in enumerate(servers) if s.get("enabled", True) is not False]
+                for ri in enabled_idxs:
+                    load = remote_loads.get(ri, 0)
+                    candidates.append(("remote", ri, load))
+
+                if candidates:
+                    # Pick the least loaded target
+                    best = min(candidates, key=lambda c: c[2])
+                    if best[0] == "local":
+                        gpu_id = best[1]
+                    else:
+                        remote_server_idx = best[1]
                         next_job.settings["encoder"] = "remote"
                         gpu_id = -1
-                elif gpu_id is None:
+                else:
+                    # Nothing available — wait
                     encode_queue._claiming = False
                     await asyncio.sleep(2)
                     continue
@@ -2268,20 +2268,23 @@ async def encode_worker(worker_id: int):
                 settings["use_cpu"] = True
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
-        # Select ffmpeg binary — use ffmpeg-over-ip client for remote GPU targets
+        # Select ffmpeg binary — use RRP client for remote GPU targets
         ffmpeg_env = None
         remote_idx = settings.get("_remote_server_idx", -1)
         if remote_idx >= 0:
             ffmpeg_bin = _get_remote_ffmpeg_bin(remote_idx)
             ffmpeg_env = _get_remote_ffmpeg_env(remote_idx)
+            servers = app_settings.get("remote_gpu_servers", [])
+            # Default to mount mode (FUSE); upload mode is commented out in the UI but still supported
+            remote_transfer_mode = servers[remote_idx].get("transfer_mode", "mount") if remote_idx < len(servers) else "mount"
             if not os.path.isfile(ffmpeg_bin):
                 ffmpeg_bin = FFMPEG
                 ffmpeg_env = None
-                log.warning(f"[{job.id}] ffmpeg-over-ip-client not found, falling back to local ffmpeg")
+                log.warning(f"[{job.id}] recode-remote not found, falling back to local ffmpeg")
             else:
                 servers = app_settings.get("remote_gpu_servers", [])
                 srv_name = servers[remote_idx]["name"] if remote_idx < len(servers) else f"Server {remote_idx}"
-                log.info(f"[{job.id}] Using remote GPU: {srv_name}")
+                log.info(f"[{job.id}] Using remote GPU: {srv_name} (transfer: {remote_transfer_mode})")
         else:
             ffmpeg_bin = FFMPEG
 
@@ -2295,6 +2298,12 @@ async def encode_worker(worker_id: int):
             _finish_job(JobStatus.FAILED, "Failed to build encode command")
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
             continue
+
+        # Insert subcommand and flags for unified recode-remote binary
+        if ffmpeg_env:
+            cmd.insert(1, "client")
+            if remote_transfer_mode == "mount":
+                cmd.insert(2, "--mount")
 
         # Run ffmpeg
         log.info(f"[{job.id}] CMD: {' '.join(cmd[:20])}...")
@@ -2361,6 +2370,9 @@ async def encode_worker(worker_id: int):
                             if m: speed = m.group(1) + "x"
                             m = _re.search(r'bitrate=\s*([\d.]+\s*\w+/s)', line_text)
                             if m: bitrate = m.group(1)
+                            # Parse size from stats line (e.g. size=  12345kB)
+                            m = _re.search(r'size=\s*(\d+)\s*kB', line_text)
+                            stats_size = int(m.group(1)) * 1024 if m else 0
                             pct = min(100, int(current_time / duration * 100)) if duration > 0 else 0
                             elapsed = time.time() - job.started_at if job.started_at else 0
                             remaining = max(duration - current_time, 0)
@@ -2369,11 +2381,14 @@ async def encode_worker(worker_id: int):
                                 eta = remaining / speed_num if speed_num > 0 else 0
                             except (ValueError, ZeroDivisionError):
                                 eta = 0
-                            # Get output file size
-                            try:
-                                output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
-                            except OSError:
-                                output_size = 0
+                            # Get output file size — use stats line size for remote, local file for local
+                            if stats_size > 0:
+                                output_size = stats_size
+                            else:
+                                try:
+                                    output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
+                                except OSError:
+                                    output_size = 0
                             job.progress = {
                                 "pct": pct,
                                 "elapsed_secs": elapsed,
@@ -3997,41 +4012,35 @@ def cleanup_tmp_dir():
         log.info(f"Cleaned up {removed} orphan temp file(s) from {tmp_dir}")
 
 
-# ffmpeg-over-ip server process management
+# GPU server process management
 _ffmpeg_server_proc: asyncio.subprocess.Process = None
 
 async def start_ffmpeg_server():
-    """Start the ffmpeg-over-ip server if enabled in settings."""
+    """Start the RRP GPU server if enabled in settings."""
     global _ffmpeg_server_proc
     await stop_ffmpeg_server()
     if not app_settings.get("ffmpeg_server_enabled"):
         return
-    server_bin = os.path.join(BIN_DIR, "ffmpeg-over-ip-server")
-    if not os.path.isfile(server_bin):
-        log.warning("ffmpeg-over-ip-server binary not found — cannot start server mode")
-        return
-    port = app_settings.get("ffmpeg_server_port", 5050)
+    port = app_settings.get("ffmpeg_server_port", 9878)
     secret = app_settings.get("ffmpeg_server_secret", "")
-    # Write server config
-    config_dir = os.path.join(BASE_DIR, "remote-gpu")
-    os.makedirs(config_dir, exist_ok=True)
-    config_path = os.path.join(config_dir, "local-server.jsonc")
-    config = json.dumps({
-        "address": f"0.0.0.0:{port}",
-        "authSecret": secret,
-    }, indent=2)
-    with open(config_path, "w") as f:
-        f.write(config)
-    # Start server process
-    _ffmpeg_server_proc = await asyncio.create_subprocess_exec(
-        server_bin, "--config", config_path,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    log.info(f"ffmpeg-over-ip server started on port {port} (PID {_ffmpeg_server_proc.pid})")
+    rrp_bin = os.path.join(BIN_DIR, "recode-remote")
+    if os.path.isfile(rrp_bin):
+        rrp_log = open(os.path.join(BASE_DIR, "rrp-server.log"), "a")
+        rrp_tmp = os.path.join(app_settings["tmp_dir"], "rrp")
+        os.makedirs(rrp_tmp, exist_ok=True)
+        _ffmpeg_server_proc = await asyncio.create_subprocess_exec(
+            rrp_bin, "server", "--port", str(port), "--secret", secret,
+            "--ffmpeg", os.path.join(BIN_DIR, "ffmpeg"),
+            "--tmp-dir", rrp_tmp,
+            stdout=rrp_log,
+            stderr=rrp_log,
+        )
+        log.info(f"RRP server started on port {port} (PID {_ffmpeg_server_proc.pid})")
+    else:
+        log.warning("recode-remote binary not found")
 
 async def stop_ffmpeg_server():
-    """Stop the ffmpeg-over-ip server if running."""
+    """Stop the GPU server if running."""
     global _ffmpeg_server_proc
     if _ffmpeg_server_proc and _ffmpeg_server_proc.returncode is None:
         try:
@@ -4042,7 +4051,7 @@ async def stop_ffmpeg_server():
                 _ffmpeg_server_proc.kill()
             except Exception:
                 pass
-        log.info("ffmpeg-over-ip server stopped")
+        log.info("GPU server stopped")
     _ffmpeg_server_proc = None
 
 @app.on_event("startup")
@@ -4058,10 +4067,10 @@ async def startup():
             log.warning("Could not remove sudoers file — remove manually: sudo rm /etc/sudoers.d/recode")
         save_settings(app_settings)
 
-    # Kill any orphan ffmpeg/ffmpeg-over-ip-client processes from previous server instance
+    # Kill any orphan ffmpeg processes from previous server instance
     try:
         tmp_dir = app_settings.get("tmp_dir", "/tmp/recode")
-        for pattern in [f"ffmpeg.*{tmp_dir}", "ffmpeg-over-ip-client"]:
+        for pattern in [f"ffmpeg.*{tmp_dir}"]:
             result = await asyncio.create_subprocess_exec(
                 "pgrep", "-f", pattern,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
@@ -4090,7 +4099,7 @@ async def startup():
     asyncio.create_task(job_watchdog())
     global watch_task
     watch_task = asyncio.create_task(folder_watcher())
-    # Start ffmpeg-over-ip server if enabled
+    # Start GPU server if enabled
     await start_ffmpeg_server()
 
 
@@ -5048,6 +5057,44 @@ async def get_system_transcodes():
             info["cpu"] = float(cpu)
             info["mem"] = float(mem)
             info["source"] = "plex" if is_plex_transcoder else "ffmpeg"
+
+            # Check if this is an RRP remote job
+            # Try /proc/environ first, fall back to detecting /tmp/rrp/ in cmdline
+            rrp_detected = False
+            try:
+                with open(f"/proc/{pid}/environ", "rb") as ef:
+                    env_data = ef.read().decode("utf-8", errors="replace")
+                    env_vars = dict(kv.split("=", 1) for kv in env_data.split("\0") if "=" in kv)
+                    if "RRP_JOB_ID" in env_vars:
+                        info["source"] = "remote"
+                        info["rrp_job_id"] = env_vars.get("RRP_JOB_ID", "")
+                        info["rrp_client"] = env_vars.get("RRP_CLIENT", "")
+                        info["rrp_input"] = env_vars.get("RRP_INPUT", "")
+                        rrp_detected = True
+            except (FileNotFoundError, PermissionError):
+                pass
+            # Fallback: detect RRP jobs by /tmp/rrp/ path in args (works cross-user)
+            if not rrp_detected and cmdline_args:
+                for arg in cmdline_args:
+                    if "/tmp/rrp/" in arg:
+                        import re as _re
+                        m = _re.search(r"/tmp/rrp/([^/]+)/", arg)
+                        info["source"] = "remote"
+                        info["rrp_job_id"] = m.group(1) if m else ""
+                        # Try to read client/input from job marker file
+                        if m:
+                            marker = os.path.join("/tmp/rrp", m.group(1), ".rrp_info")
+                            try:
+                                with open(marker) as mf:
+                                    import json as _json
+                                    mdata = _json.load(mf)
+                                    info["rrp_client"] = mdata.get("client", "")
+                                    info["rrp_input"] = mdata.get("input", "")
+                            except Exception:
+                                info["rrp_client"] = ""
+                                info["rrp_input"] = ""
+                        break
+
             processes.append(info)
 
     except Exception as e:
@@ -5505,10 +5552,9 @@ async def cleanup_duplicate(path: str, keep: str = "encoded"):
 
 @app.get("/api/remote-gpu/status")
 async def remote_gpu_status():
-    """Check online status of all configured remote GPU servers by running a test encode."""
+    """Check online status of all configured remote GPU servers."""
     servers = app_settings.get("remote_gpu_servers", [])
     results = []
-    client_bin = _find_bin("ffmpeg-over-ip-client")
     for i, srv in enumerate(servers):
         addr = (srv.get("address") or "").strip()
         secret = (srv.get("secret") or "").strip()
@@ -5516,26 +5562,26 @@ async def remote_gpu_status():
         if not addr:
             results.append({"index": i, "name": name, "online": False, "error": "No address"})
             continue
-        if not os.path.isfile(client_bin):
-            results.append({"index": i, "name": name, "online": False, "error": "Client binary not found"})
-            continue
-        # Write temp config and run a null encode to verify auth + connectivity
-        config_path = os.path.join(BASE_DIR, "remote-gpu", f"server-{i}.jsonc")
+        # Test connectivity + auth using RRP client --ping
         try:
-            env = {**os.environ, "FFMPEG_OVER_IP_CLIENT_CONFIG": config_path}
-            proc = await asyncio.wait_for(
-                asyncio.create_subprocess_exec(
-                    client_bin, "-f", "lavfi", "-i", "nullsrc=s=16x16:d=0.01",
-                    "-frames:v", "1", "-f", "null", "-",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    env=env),
-                timeout=10)
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-            if proc.returncode == 0:
-                results.append({"index": i, "name": name, "online": True, "address": addr})
+            client_bin = _get_remote_ffmpeg_bin(i)
+            env = _get_remote_ffmpeg_env(i)
+            env = {**os.environ, **env}
+            if os.path.isfile(client_bin):
+                proc = await asyncio.wait_for(
+                    asyncio.create_subprocess_exec(
+                        client_bin, "ping",
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                        env=env),
+                    timeout=10)
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+                if proc.returncode == 0:
+                    results.append({"index": i, "name": name, "online": True, "address": addr})
+                else:
+                    err = stderr.decode(errors="replace").strip().split("\n")[-1][:100] if stderr else "Connection failed"
+                    results.append({"index": i, "name": name, "online": False, "error": err})
             else:
-                err = stderr.decode(errors="replace").strip().split("\n")[-1][:100] if stderr else "Unknown error"
-                results.append({"index": i, "name": name, "online": False, "error": err})
+                results.append({"index": i, "name": name, "online": False, "error": "Client binary not found"})
         except asyncio.TimeoutError:
             results.append({"index": i, "name": name, "online": False, "error": "Timeout"})
         except Exception as e:
@@ -5544,12 +5590,12 @@ async def remote_gpu_status():
 
 @app.get("/api/ffmpeg-server/status")
 async def ffmpeg_server_status():
-    """Check if the local ffmpeg-over-ip server is running."""
+    """Check if the local GPU server is running."""
     running = _ffmpeg_server_proc is not None and _ffmpeg_server_proc.returncode is None
     return {
         "enabled": app_settings.get("ffmpeg_server_enabled", False),
         "running": running,
-        "port": app_settings.get("ffmpeg_server_port", 5050),
+        "port": app_settings.get("ffmpeg_server_port", 9878),
     }
 
 @app.get("/api/settings")
@@ -5627,7 +5673,7 @@ async def update_settings(new_settings: dict):
             encode_queue._save_state(force=True)
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
-    # Restart ffmpeg-over-ip server if settings changed
+    # Restart GPU server if settings changed
     if any(k in new_settings for k in ("ffmpeg_server_enabled", "ffmpeg_server_port", "ffmpeg_server_secret")):
         await start_ffmpeg_server()
 
