@@ -260,7 +260,7 @@ mkdir -p "${APP_DIR}/static" "${APP_DIR}/bin"
 # ─────────────────────────────────────────────────────────────────
 # Link system tools to app bin dir (only for tools not bundled)
 # ─────────────────────────────────────────────────────────────────
-for tool in mediainfo nvidia-smi; do
+for tool in nvidia-smi; do
     # Skip if already exists in bin
     if [[ -x "${APP_DIR}/bin/$tool" ]]; then
         continue

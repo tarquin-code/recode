@@ -18,10 +18,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Plex Re-Encoder — Setup</title>
 <style>
-:root { --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d; --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --yellow: #d29922; --cyan: #56d4dd; --purple: #bc8cff; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; }
+:root { --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --bg-input: #0d1117; --bg-card: #161b22; --border: #30363d; --text: #c9d1d9; --text-primary: #c9d1d9; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --yellow: #d29922; --cyan: #56d4dd; --purple: #bc8cff; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-.setup-container { max-width: 900px; width: 100%; }
+.setup-container { max-width: 1300px; width: 95vw; }
 #step1 { min-height: 350px; }
 .logo { text-align: center; margin-bottom: 32px; }
 .logo h1 { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -41,8 +41,13 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
 .gpu-card .gpu-detail { font-size: 11px; color: var(--cyan); font-family: var(--mono); }
 .form-group { margin-bottom: 14px; }
 .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-.form-group select, .form-group input[type="text"] { width: 100%; padding: 8px 12px; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--font); }
-.form-group select:focus, .form-group input:focus { outline: none; border-color: var(--accent); }
+input[type="text"], input[type="number"], select { width: 100%; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 13px; font-family: var(--mono); transition: border-color 0.2s; }
+input[type="text"]:focus, input[type="number"]:focus, select:focus { outline: none; border-color: var(--accent); }
+input[type="range"] { width: 100%; height: 6px; -webkit-appearance: none; appearance: none; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; outline: none; cursor: pointer; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-card); cursor: pointer; }
+input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-card); cursor: pointer; }
+input[type="range"]:disabled { opacity: 0.4; cursor: not-allowed; }
+select:disabled, input:disabled { opacity: 0.4; cursor: not-allowed; }
 .form-group .desc { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .btn { padding: 10px 24px; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
@@ -106,156 +111,121 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
     <div id="setupPage2" style="display:none;">
 
 
-    <!-- Step 4: Encoding Defaults -->
+    <!-- Step 4: Default Profile -->
     <div class="card" id="step4">
         <h2><span class="num">4</span> Default Profile</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">These defaults apply to manual encodes and as fallback for Plex webhooks/folder watch. All settings can be changed later.</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-            <div class="form-group">
-                <label>Preset</label>
-                <select id="sPreset">
-                    <option value="auto" selected>Auto (adapts to resolution)</option>
-                    <optgroup label="High Quality">
-                        <option value="4k_hq">HQ Ultra (CQ=18, 60M, p6)</option>
-                        <option value="1080_hq">HQ High (CQ=18, 25M, p6)</option>
-                        <option value="720_hq">HQ Standard (CQ=20, 15M, p6)</option>
-                    </optgroup>
-                    <optgroup label="Balanced">
-                        <option value="4k_balanced">Balanced Ultra (CQ=24, 35M, p5)</option>
-                        <option value="4k_compact">Balanced High (CQ=28, 20M, p5)</option>
-                        <option value="1080_balanced">Balanced Medium (CQ=22, 15M, p5)</option>
-                        <option value="1080_compact">Balanced Compact (CQ=26, 8M, p5)</option>
-                        <option value="720_balanced">Balanced Low (CQ=24, 8M, p5)</option>
-                        <option value="sd_balanced">Balanced Minimal (CQ=26, 4M, p4)</option>
-                    </optgroup>
-                    <optgroup label="Max Savings">
-                        <option value="4k_maxsave">Max Save Ultra (CQ=30, 15M, p7)</option>
-                        <option value="1080_maxsave">Max Save High (CQ=28, 6M, p7)</option>
-                        <option value="720_maxsave">Max Save Medium (CQ=28, 4M, p7)</option>
-                        <option value="sd_maxsave">Max Save Low (CQ=30, 2M, p7)</option>
-                    </optgroup>
-                    <optgroup label="General purpose">
-                        <option value="4kstream">Stream Ultra (CQ=20, 50M, p5)</option>
-                        <option value="stream">Stream High (CQ=20, 25M, p6)</option>
-                        <option value="archive">Archive (CQ=18, 40M, p7)</option>
-                        <option value="slow">Slow (CQ=20, 30M, p7)</option>
-                        <option value="small">Small (CQ=28, 10M, p4)</option>
-                        <option value="fast">Fast (CQ=30, 8M, p2)</option>
-                    </optgroup>
-                    <option value="custom">Custom</option>
-                </select>
-                <div class="desc">Auto is recommended — adapts per resolution</div>
+        <div style="padding:16px;background:var(--bg3);border:2px solid var(--accent);border-radius:8px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                <span style="color:var(--accent);"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+                <span style="font-weight:700;font-size:15px;">Default Profile</span>
+                <span style="font-size:11px;color:var(--muted);margin-left:auto;">Used for manual encodes &amp; as fallback for webhooks/folder watch</span>
             </div>
-            <div class="form-group">
-                <label>Video Codec</label>
-                <select id="sVideoCodec">
-                    <option value="hevc">HEVC (H.265)</option>
-                    <option value="h264">H.264 (AVC)</option>
-                </select>
+            <!-- Row 1: Preset, Video Codec, Hardware, GPU Target -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
+                <div class="form-group" style="margin:0;"><label>Preset</label>
+                    <select id="sPreset" onchange="onSetupPresetChange()">
+                        <option value="auto" selected>Auto (4K/1080p/SD)</option>
+                        <optgroup label="High Quality"><option value="4k_hq">HQ Ultra (CQ=18, 60M, p6)</option><option value="1080_hq">HQ High (CQ=18, 25M, p6)</option><option value="720_hq">HQ Standard (CQ=20, 15M, p6)</option></optgroup>
+                        <optgroup label="Balanced"><option value="4k_balanced">Balanced Ultra (CQ=24, 35M, p5)</option><option value="4k_compact">Balanced High (CQ=28, 20M, p5)</option><option value="1080_balanced">Balanced Medium (CQ=22, 15M, p5)</option><option value="1080_compact">Balanced Compact (CQ=26, 8M, p5)</option><option value="720_balanced">Balanced Low (CQ=24, 8M, p5)</option><option value="sd_balanced">Balanced Minimal (CQ=26, 4M, p4)</option></optgroup>
+                        <optgroup label="Max Savings"><option value="4k_maxsave">Max Save Ultra (CQ=30, 15M, p7)</option><option value="1080_maxsave">Max Save High (CQ=28, 6M, p7)</option><option value="720_maxsave">Max Save Medium (CQ=28, 4M, p7)</option><option value="sd_maxsave">Max Save Low (CQ=30, 2M, p7)</option></optgroup>
+                        <optgroup label="General purpose"><option value="4kstream">Stream Ultra (CQ=20, 50M, p5)</option><option value="stream">Stream High (CQ=20, 25M, p6)</option><option value="archive">Archive (CQ=18, 40M, p7)</option><option value="slow">Slow (CQ=20, 30M, p7)</option><option value="small">Small (CQ=28, 10M, p4)</option><option value="fast">Fast (CQ=30, 8M, p2)</option></optgroup>
+                        <option value="custom">Custom</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Video Codec</label>
+                    <select id="sVideoCodec"><option value="hevc">HEVC (H.265)</option><option value="h264">H.264 (AVC)</option></select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Hardware</label>
+                    <select id="sEncoder"><option value="gpu">GPU (Hardware)</option><option value="cpu">CPU (Software)</option></select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>GPU Target</label>
+                    <select id="sGpuTarget"><option value="auto">Auto</option></select>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Encoder</label>
-                <select id="sEncoder">
-                    <option value="gpu">GPU (NVENC)</option>
-                    <option value="cpu">CPU (Software)</option>
-                </select>
+            <!-- Row 2: Resolution, Speed, CQ, Bitrate -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
+                <div class="form-group" style="margin:0;"><label>Output Resolution</label>
+                    <select id="sResize"><option value="original">Original</option><option value="2160p">4K (3840x2160)</option><option value="1440p">1440p (2560x1440)</option><option value="1080p">1080p (1920x1080)</option><option value="720p">720p (1280x720)</option><option value="480p">480p (854x480)</option></select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Speed</label>
+                    <select id="sSpeed"><option value="p1">p1 (fastest)</option><option value="p2">p2</option><option value="p3">p3</option><option value="p4">p4</option><option value="p5" selected>p5 (default)</option><option value="p6">p6</option><option value="p7">p7 (best quality)</option></select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>CQ: <span id="sCqVal">24</span></label>
+                    <input type="range" id="sCq" min="1" max="50" value="24" oninput="document.getElementById('sCqVal').textContent=this.value;">
+                </div>
+                <div class="form-group" style="margin:0;"><label>Max Bitrate: <span id="sMaxbitrateVal">20</span>M</label>
+                    <input type="range" id="sMaxbitrate" min="3" max="50" value="20" oninput="document.getElementById('sMaxbitrateVal').textContent=this.value;">
+                </div>
             </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px;">
-            <div class="form-group">
-                <label>Output Resolution</label>
-                <select id="sResize">
-                    <option value="original">Original</option>
-                    <option value="2160p">4K (3840x2160)</option>
-                    <option value="1440p">1440p (2560x1440)</option>
-                    <option value="1080p">1080p (1920x1080)</option>
-                    <option value="720p">720p (1280x720)</option>
-                    <option value="480p">480p (854x480)</option>
-                </select>
+            <!-- Row 3: Audio -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
+                <div class="form-group" style="margin:0;"><label>Audio Filter</label>
+                    <select id="sAudioFilter"><option value="all">All streams</option><option value="truehd">TrueHD / Atmos only</option><option value="eac3">EAC3 (DD+) only</option><option value="ac3">AC3 (DD) only</option><option value="aac">AAC only</option><option value="stereo">Stereo only</option><option value="surround">Surround only (5.1+)</option></select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Audio Codec</label>
+                    <select id="sAudioCodec" onchange="updateSetupBitrateOptions()"><option value="copy">Passthrough (copy)</option><option value="libopus">Opus (most efficient)</option><option value="aac">AAC (widest compat)</option><option value="ac3">AC3 (Dolby Digital)</option><option value="eac3">EAC3 (Dolby Digital+)</option></select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Audio Bitrate</label>
+                    <select id="sAudioBitrate"></select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Dolby Vision</label>
+                    <select id="sDvMode"><option value="skip">Skip</option><option value="hdr10">Convert to HDR10</option><option value="encode_dv">Convert to DV P8.4</option></select>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Audio Codec</label>
-                <select id="sAudioCodec" onchange="updateSetupBitrateOptions()">
-                    <option value="copy">Passthrough (copy)</option>
-                    <option value="libopus">Opus (most efficient)</option>
-                    <option value="aac">AAC (widest compat)</option>
-                    <option value="ac3">AC3 (Dolby Digital)</option>
-                    <option value="eac3">EAC3 (Dolby Digital+)</option>
-                </select>
-                <div class="desc">Passthrough recommended for DV on Fire Stick</div>
+            <!-- Row 4: Checkboxes -->
+            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:12px;">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sSkip4k"> Skip 4K files</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sHdrOnly"> HDR only</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sDiscardLarger"> Discard if larger</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--red);"><input type="checkbox" id="sDeleteOriginal"> Delete original</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sEnglishOnly"> English audio only</label>
             </div>
-            <div class="form-group">
-                <label>Audio Bitrate</label>
-                <select id="sAudioBitrate"></select>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px;">
-            <div class="form-group">
-                <label>Dolby Vision</label>
-                <select id="sDvMode">
-                    <option value="skip">Skip DV files</option>
-                    <option value="hdr10">Convert to HDR10</option>
-                    <option value="encode_dv">Convert to DV P8.4</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Audio Filter</label>
-                <select id="sAudioFilter">
-                    <option value="all">All streams</option>
-                    <option value="truehd">TrueHD / Atmos only</option>
-                    <option value="eac3">EAC3 (DD+) only</option>
-                    <option value="ac3">AC3 (DD) only</option>
-                    <option value="aac">AAC only</option>
-                    <option value="stereo">Stereo only</option>
-                    <option value="surround">Surround only (5.1+)</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Temp Directory</label>
-                <input type="text" id="sTmpDir" value="/tmp/recode">
-                <div class="desc">Use fast storage (SSD/NVMe)</div>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px;">
-            <div class="form-group">
-                <label>Encode File Suffix</label>
-                <input type="text" id="sSuffix" value="recode" pattern="[A-Za-z0-9_-]+">
-                <div class="desc">Output: Movie_h265_HDR10_<strong>suffix</strong>.mkv</div>
-            </div>
-            <div class="form-group">
-                <label>Allowed Media Paths</label>
-                <input type="text" id="sAllowedPaths" value="/mnt">
-                <div class="desc">Comma-separated (e.g. /mnt,/media)</div>
-            </div>
-            <div class="form-group"></div>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:12px;">
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sSkip4k"> Skip 4K files</label>
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sHdrOnly"> HDR only</label>
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sDiscardLarger"> Discard if larger</label>
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--red);"><input type="checkbox" id="sDeleteOriginal"> Delete original</label>
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sEnglishOnly"> English audio only</label>
         </div>
     </div>
 
-    <!-- Step 5: Concurrent -->
+    <!-- Step 5: General Settings -->
     <div class="card" id="step5">
-        <h2><span class="num">5</span> Concurrency</h2>
-        <div class="form-row">
-            <div class="form-group">
-                <label>Max Concurrent Encodes</label>
+        <h2><span class="num">5</span> General</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
+            <div class="form-group" style="margin:0;"><label>Concurrent Encodes</label>
                 <select id="sConcurrent"></select>
-                <div class="desc" id="sConcurrentDesc">Based on GPU VRAM capacity</div>
+                <div class="desc" id="sConcurrentDesc">Based on GPU VRAM</div>
             </div>
-            <div class="form-group">
-                <label>Auto-start Queue on Restart</label>
-                <select id="sAutoStart">
-                    <option value="false" selected>No (manual start)</option>
-                    <option value="true">Yes (auto-start)</option>
-                </select>
-                <div class="desc">Whether the queue begins processing automatically after a server restart</div>
+            <div class="form-group" style="margin:0;"><label>Temp Directory</label>
+                <input type="text" id="sTmpDir" value="/tmp/recode">
+            </div>
+            <div class="form-group" style="margin:0;"><label>Encode File Suffix</label>
+                <input type="text" id="sSuffix" value="recode" pattern="[A-Za-z0-9_-]+">
+                <div class="desc">Movie_h265_HDR10_<strong>suffix</strong>.mkv</div>
+            </div>
+            <div class="form-group" style="margin:0;"><label>Allowed Media Paths</label>
+                <input type="text" id="sAllowedPaths" value="/mnt">
+                <div class="desc">Comma-separated</div>
             </div>
         </div>
+        <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="sAutoStart"> Auto-start queue on restart</label>
+        </div>
+    </div>
+
+    <!-- Step 6: GPU Server Mode -->
+    <div class="card" id="step6">
+        <h2><span class="num">6</span> GPU Server Mode</h2>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Share this machine's GPU with other Recode instances over the network via <a href="https://github.com/steelbrain/ffmpeg-over-ip" target="_blank" style="color:var(--accent);">ffmpeg-over-ip</a>. Local encoding is not affected.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div class="form-group" style="margin:0;">
+                <label>Port</label>
+                <input type="text" id="sFfmpegServerPort" value="5050" placeholder="5050">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Shared Secret</label>
+                <input type="text" id="sFfmpegServerSecret" placeholder="Auth secret for clients">
+            </div>
+        </div>
+        <div style="margin-top:8px;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;"><input type="checkbox" id="sFfmpegServerEnabled"> Enable GPU Server</label>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;">Other Recode instances can add this server as a remote GPU target using the IP address and the shared secret above.</div>
     </div>
 
     <div class="actions" style="justify-content:space-between;">
@@ -610,7 +580,7 @@ function renderSystemCheck() {
             </div>
             <div id="driverStep3" style="display:none;margin-top:10px;padding:10px;background:rgba(248,81,73,0.15);border:2px solid var(--red);border-radius:6px;">
                 <strong style="color:var(--red);">FINAL CONFIRMATION</strong><br><br>
-                <span style="font-size:12px;">By clicking Install below you acknowledge:</span>
+                <span>By clicking Install below you acknowledge:</span>
                 <ul style="margin:6px 0;padding-left:18px;font-size:11px;line-height:1.8;">
                     <li>You have <strong>backed up your server</strong></li>
                     <li>You accept the <strong>risk of driver incompatibility</strong></li>
@@ -917,13 +887,24 @@ function showPage2() {
         for (const opt of encSel.options) {
             if (opt.value === 'gpu') {
                 opt.disabled = true;
-                opt.textContent = 'GPU (NVENC) — no GPU detected';
+                opt.textContent = 'GPU (Hardware) — no GPU detected';
             }
         }
         encSel.value = 'cpu';
     }
-    // Initialize audio bitrate options
+    // Populate GPU Target dropdown
+    const gpuTargetSel = document.getElementById('sGpuTarget');
+    if (gpuTargetSel) {
+        gpuTargetSel.innerHTML = '<option value="auto">Auto (least loaded)</option>';
+        const gpus = sysInfo.gpu_info || [];
+        if (gpus.length > 1) gpuTargetSel.add(new Option('All Local GPUs', 'local'));
+        for (let i = 0; i < gpus.length; i++) {
+            gpuTargetSel.add(new Option('Local GPU ' + i + (gpus[i].name ? ' — ' + gpus[i].name : ''), 'gpu:' + i));
+        }
+    }
+    // Initialize audio bitrate options and preset state
     updateSetupBitrateOptions();
+    onSetupPresetChange();
 }
 
 const BITRATE_LIMITS = {
@@ -932,6 +913,13 @@ const BITRATE_LIMITS = {
     ac3: ['192k','384k','448k','640k'],
     eac3: ['192k','384k','448k','640k','768k','1024k','1536k'],
 };
+function onSetupPresetChange() {
+    const isCustom = document.getElementById('sPreset').value === 'custom';
+    document.getElementById('sCq').disabled = !isCustom;
+    document.getElementById('sMaxbitrate').disabled = !isCustom;
+    document.getElementById('sSpeed').disabled = !isCustom;
+}
+
 function updateSetupBitrateOptions() {
     const codec = document.getElementById('sAudioCodec').value;
     const sel = document.getElementById('sAudioBitrate');
@@ -1010,7 +998,11 @@ async function saveSetup() {
         preset: document.getElementById('sPreset').value,
         video_codec: document.getElementById('sVideoCodec').value,
         encoder: document.getElementById('sEncoder').value,
+        gpu_target: document.getElementById('sGpuTarget').value,
         resize: document.getElementById('sResize').value,
+        speed: document.getElementById('sSpeed').value,
+        cq: parseInt(document.getElementById('sCq').value) || 24,
+        maxbitrate: document.getElementById('sMaxbitrate').value + 'M',
         audio_codec: document.getElementById('sAudioCodec').value,
         audio_bitrate: document.getElementById('sAudioBitrate').value || '448k',
         audio_filter: document.getElementById('sAudioFilter').value,
@@ -1019,12 +1011,15 @@ async function saveSetup() {
         encode_suffix: document.getElementById('sSuffix').value.replace(/[^A-Za-z0-9_-]/g, '') || 'recode',
         allowed_paths: document.getElementById('sAllowedPaths').value.split(',').map(s => s.trim()).filter(Boolean),
         max_concurrent_encodes: parseInt(document.getElementById('sConcurrent').value) || 1,
-        auto_start_queue: document.getElementById('sAutoStart').value === 'true',
+        auto_start_queue: document.getElementById('sAutoStart').checked,
         skip_4k: document.getElementById('sSkip4k').checked,
         hdr_only: document.getElementById('sHdrOnly').checked,
         discard_larger: document.getElementById('sDiscardLarger').checked,
         delete_original: document.getElementById('sDeleteOriginal').checked,
         english_only: document.getElementById('sEnglishOnly').checked,
+        ffmpeg_server_enabled: document.getElementById('sFfmpegServerEnabled').checked,
+        ffmpeg_server_port: parseInt(document.getElementById('sFfmpegServerPort').value) || 5050,
+        ffmpeg_server_secret: document.getElementById('sFfmpegServerSecret').value,
     };
 
     try {

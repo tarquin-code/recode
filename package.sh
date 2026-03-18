@@ -30,69 +30,77 @@ cp /opt/Recode/requirements.txt "${DIST_DIR}/plex-recode/"
 cp /opt/Recode/LICENSE "${DIST_DIR}/plex-recode/"
 cp /opt/Recode/README.md "${DIST_DIR}/plex-recode/"
 
-# Download dovi_tool static binary for x86_64
-echo "Downloading dovi_tool..."
-DOVI_URL=$(curl -sL https://api.github.com/repos/quietvoid/dovi_tool/releases/latest \
-    | grep "browser_download_url.*x86_64-unknown-linux-musl" | grep -v ".sha256" | head -1 | cut -d'"' -f4)
-if [[ -n "$DOVI_URL" ]]; then
-    mkdir -p /tmp/dovi_dl
-    curl -sL "$DOVI_URL" -o /tmp/dovi_dl/dovi_tool.tar.gz
-    tar -xzf /tmp/dovi_dl/dovi_tool.tar.gz -C /tmp/dovi_dl 2>/dev/null
-    DOVI_BIN=$(find /tmp/dovi_dl -name "dovi_tool" -type f | head -1)
-    if [[ -n "$DOVI_BIN" ]]; then
-        mkdir -p "${DIST_DIR}/plex-recode/bin"
-        cp "$DOVI_BIN" "${DIST_DIR}/plex-recode/bin/dovi_tool"
-        chmod +x "${DIST_DIR}/plex-recode/bin/dovi_tool"
-        echo "  dovi_tool bundled"
+# Update dovi_tool if not present in bin/
+if [[ ! -f "/opt/Recode/bin/dovi_tool" || -L "/opt/Recode/bin/dovi_tool" ]]; then
+    echo "Downloading dovi_tool..."
+    DOVI_URL=$(curl -sL https://api.github.com/repos/quietvoid/dovi_tool/releases/latest \
+        | grep "browser_download_url.*x86_64-unknown-linux-musl" | grep -v ".sha256" | head -1 | cut -d'"' -f4)
+    if [[ -n "$DOVI_URL" ]]; then
+        mkdir -p /tmp/dovi_dl
+        curl -sL "$DOVI_URL" -o /tmp/dovi_dl/dovi_tool.tar.gz
+        tar -xzf /tmp/dovi_dl/dovi_tool.tar.gz -C /tmp/dovi_dl 2>/dev/null
+        DOVI_BIN=$(find /tmp/dovi_dl -name "dovi_tool" -type f | head -1)
+        if [[ -n "$DOVI_BIN" ]]; then
+            rm -f "/opt/Recode/bin/dovi_tool"
+            cp "$DOVI_BIN" "/opt/Recode/bin/dovi_tool"
+            chmod +x "/opt/Recode/bin/dovi_tool"
+            echo "  dovi_tool downloaded"
+        fi
+        rm -rf /tmp/dovi_dl
     fi
-    rm -rf /tmp/dovi_dl
+else
+    echo "dovi_tool: already in bin/"
 fi
 
-# Download mkvtoolnix binaries from AppImage
-echo "Downloading mkvtoolnix..."
-MKVTOOLNIX_URL="https://mkvtoolnix.download/appimage/MKVToolNix_GUI-97.0-x86_64.AppImage"
-MKV_TMP="/tmp/mkvtoolnix_dl"
-mkdir -p "$MKV_TMP"
-if curl -sL "$MKVTOOLNIX_URL" -o "${MKV_TMP}/mkvtoolnix.AppImage"; then
-    chmod +x "${MKV_TMP}/mkvtoolnix.AppImage"
-    cd "$MKV_TMP"
-    ./mkvtoolnix.AppImage --appimage-extract >/dev/null 2>&1
-    if [[ -f "squashfs-root/usr/bin/mkvmerge" ]]; then
-        # Create wrapper scripts that set LD_LIBRARY_PATH
-        MKVLIB_DIR="${DIST_DIR}/plex-recode/lib/mkvtoolnix"
-        mkdir -p "$MKVLIB_DIR"
-        cp squashfs-root/usr/bin/mkvmerge squashfs-root/usr/bin/mkvextract squashfs-root/usr/bin/mkvpropedit "$MKVLIB_DIR/"
-        cp -a squashfs-root/usr/lib/*.so* "$MKVLIB_DIR/" 2>/dev/null || true
-        # Create wrapper scripts
-        for tool in mkvmerge mkvextract mkvpropedit; do
-            cat > "${DIST_DIR}/plex-recode/bin/${tool}" << WRAPPER
+# Download mkvtoolnix from AppImage only if not already in bin/
+if [[ ! -f "/opt/Recode/bin/mkvmerge" || -L "/opt/Recode/bin/mkvmerge" ]]; then
+    echo "Downloading mkvtoolnix..."
+    MKVTOOLNIX_URL="https://mkvtoolnix.download/appimage/MKVToolNix_GUI-97.0-x86_64.AppImage"
+    MKV_TMP="/tmp/mkvtoolnix_dl"
+    mkdir -p "$MKV_TMP"
+    if curl -sL "$MKVTOOLNIX_URL" -o "${MKV_TMP}/mkvtoolnix.AppImage"; then
+        chmod +x "${MKV_TMP}/mkvtoolnix.AppImage"
+        cd "$MKV_TMP"
+        ./mkvtoolnix.AppImage --appimage-extract >/dev/null 2>&1
+        if [[ -f "squashfs-root/usr/bin/mkvmerge" ]]; then
+            # Create wrapper scripts that set LD_LIBRARY_PATH
+            MKVLIB_DIR="${DIST_DIR}/plex-recode/lib/mkvtoolnix"
+            mkdir -p "$MKVLIB_DIR"
+            cp squashfs-root/usr/bin/mkvmerge squashfs-root/usr/bin/mkvextract squashfs-root/usr/bin/mkvpropedit "$MKVLIB_DIR/"
+            cp -a squashfs-root/usr/lib/*.so* "$MKVLIB_DIR/" 2>/dev/null || true
+            for tool in mkvmerge mkvextract mkvpropedit; do
+                cat > "${DIST_DIR}/plex-recode/bin/${tool}" << WRAPPER
 #!/bin/bash
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="\${SCRIPT_DIR}/../lib/mkvtoolnix"
 LD_LIBRARY_PATH="\${LIB_DIR}:\${LD_LIBRARY_PATH}" exec "\${LIB_DIR}/${tool}" "\$@"
 WRAPPER
-            chmod +x "${DIST_DIR}/plex-recode/bin/${tool}"
-        done
-        echo "  mkvtoolnix bundled"
+                chmod +x "${DIST_DIR}/plex-recode/bin/${tool}"
+            done
+            echo "  mkvtoolnix downloaded from AppImage"
+        fi
     fi
     cd /tmp
     rm -rf "$MKV_TMP"
+else
+    echo "mkvtoolnix: already in bin/"
 fi
 
-# Bundle Jellyfin ffmpeg (pre-built with NVENC, libplacebo, Vulkan, libx265, etc.)
-echo "Bundling ffmpeg..."
+# Bundle all binaries from /opt/Recode/bin/ (except nvidia-smi which is driver-specific)
+echo "Bundling binaries..."
 mkdir -p "${DIST_DIR}/plex-recode/bin"
-for binary in ffmpeg ffprobe; do
+for binary in ffmpeg ffprobe ffmpeg-over-ip-client ffmpeg-over-ip-server dovi_tool mediainfo mkvmerge mkvextract mkvpropedit; do
     if [[ -f "/opt/Recode/bin/${binary}" && ! -L "/opt/Recode/bin/${binary}" ]]; then
         cp "/opt/Recode/bin/${binary}" "${DIST_DIR}/plex-recode/bin/${binary}"
         chmod +x "${DIST_DIR}/plex-recode/bin/${binary}"
+        echo "  ${binary}: bundled"
+    elif [[ -f "/opt/Recode/bin/${binary}" ]]; then
+        echo "  ${binary}: skipped (symlink)"
     fi
 done
 if [[ -f "${DIST_DIR}/plex-recode/bin/ffmpeg" ]]; then
     FFMPEG_VER=$("${DIST_DIR}/plex-recode/bin/ffmpeg" -version 2>/dev/null | head -1 || echo "unknown")
-    echo "  ffmpeg bundled: ${FFMPEG_VER}"
-else
-    echo "  WARNING: ffmpeg binary not found in /opt/Recode/bin/"
+    echo "  ffmpeg version: ${FFMPEG_VER}"
 fi
 
 # Create tarball

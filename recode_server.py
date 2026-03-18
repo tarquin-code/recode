@@ -60,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.13.2"
+VERSION = "2.14.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -274,6 +274,13 @@ APP_DEFAULTS = {
     "test_mode": False,
     # Suffix appended to encoded filenames (e.g. "recode" → Movie_h265_HDR10_recode.mkv)
     "encode_suffix": "recode",
+    # Remote GPU servers (ffmpeg-over-ip)
+    # Each: {"name": "Server A", "address": "192.168.1.100:5050", "secret": "shared-secret"}
+    "remote_gpu_servers": [],
+    # ffmpeg-over-ip server mode — allow other Recode instances to use this machine's GPU
+    "ffmpeg_server_enabled": False,
+    "ffmpeg_server_port": 5050,
+    "ffmpeg_server_secret": "",
 }
 
 def load_settings() -> dict:
@@ -308,12 +315,59 @@ def load_settings() -> dict:
         for k, v in profile_defaults.items():
             if k not in lprofile:
                 lprofile[k] = v
+    # Clean empty remote GPU servers
+    settings["remote_gpu_servers"] = [
+        s for s in settings.get("remote_gpu_servers", [])
+        if s.get("name", "").strip() and s.get("address", "").strip() and s.get("secret", "").strip()
+    ]
     return settings
 
 def save_settings(settings: dict):
     """Save settings to JSON file."""
+    # Clean empty remote GPU servers before saving
+    settings["remote_gpu_servers"] = [
+        s for s in settings.get("remote_gpu_servers", [])
+        if s.get("name", "").strip() and s.get("address", "").strip() and s.get("secret", "").strip()
+    ]
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=2)
+    # Generate ffmpeg-over-ip client config if remote GPU is configured
+    _write_ffmpeg_over_ip_config(settings)
+
+def _write_ffmpeg_over_ip_config(settings: dict):
+    """Write ffmpeg-over-ip client config files for each remote server."""
+    servers = settings.get("remote_gpu_servers", [])
+    # Migrate old single-server format
+    if not servers and settings.get("remote_gpu_address"):
+        servers = [{"name": "Remote GPU", "address": settings["remote_gpu_address"], "secret": settings.get("remote_gpu_secret", "")}]
+    config_dir = os.path.join(BASE_DIR, "remote-gpu")
+    os.makedirs(config_dir, exist_ok=True)
+    # Clean old configs
+    for f in os.listdir(config_dir):
+        if f.endswith(".jsonc"):
+            os.remove(os.path.join(config_dir, f))
+    # Write per-server configs
+    for i, srv in enumerate(servers):
+        addr = (srv.get("address") or "").strip()
+        secret = (srv.get("secret") or "").strip()
+        if addr:
+            config = json.dumps({"address": addr, "authSecret": secret}, indent=2)
+            try:
+                with open(os.path.join(config_dir, f"server-{i}.jsonc"), "w") as f:
+                    f.write(config)
+            except Exception:
+                pass
+
+def _get_remote_ffmpeg_bin(server_index: int) -> str:
+    """Get the ffmpeg-over-ip client binary path with config for a specific remote server."""
+    return _find_bin("ffmpeg-over-ip-client")
+
+def _get_remote_ffmpeg_env(server_index: int) -> dict:
+    """Get environment variables to point ffmpeg-over-ip client at a specific server config."""
+    config_path = os.path.join(BASE_DIR, "remote-gpu", f"server-{server_index}.jsonc")
+    if os.path.isfile(config_path):
+        return {"FFMPEG_OVER_IP_CLIENT_CONFIG": config_path}
+    return {}
 
 app_settings = load_settings()
 
@@ -330,6 +384,7 @@ def build_default_profile() -> dict:
         "cq": app_settings.get("cq", 24),
         "maxbitrate": app_settings.get("maxbitrate", "20M"),
         "speed": app_settings.get("speed", "p5"),
+        "encoder": app_settings.get("encoder", "gpu"),
         "use_cpu": app_settings.get("encoder", "gpu") == "cpu",
         "video_codec": app_settings.get("video_codec", "hevc"),
         "dv_mode": app_settings.get("dv_mode", "skip"),
@@ -385,8 +440,10 @@ class QueueAddRequest(BaseModel):
     cq: int = 24
     maxbitrate: str = "20M"
     speed: str = "p5"
+    encoder: str = "gpu"
     use_cpu: bool = False
     gpu_id: str = "auto"
+    gpu_target: str = "auto"
     video_codec: str = "hevc"
     dv_mode: str = "skip"
     resize: str = "original"
@@ -986,8 +1043,10 @@ def resolve_preset(preset_name: str, width: int, height: int) -> dict:
         return {"cq": 24, "maxbitrate": "20M", "speed": "p5", "resolved": "custom"}
 
 
-def build_ffmpeg_cmd(info: dict, settings: dict) -> tuple[list[str], str]:
+def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tuple[list[str], str]:
     """Build the full ffmpeg command. Returns (cmd_list, output_path)."""
+    if ffmpeg_bin is None:
+        ffmpeg_bin = FFMPEG
     path = info["path"]
     p = Path(path)
     nameonly = p.stem
@@ -1016,7 +1075,7 @@ def build_ffmpeg_cmd(info: dict, settings: dict) -> tuple[list[str], str]:
         speed = settings.get("speed", "p5")
 
     # Build command
-    cmd = [FFMPEG, "-y", "-nostdin"]
+    cmd = [ffmpeg_bin, "-y", "-nostdin"]
 
     # Hardware acceleration for GPU only
     dovi_p5 = info.get("dovi_profile") == 5
@@ -1028,20 +1087,23 @@ def build_ffmpeg_cmd(info: dict, settings: dict) -> tuple[list[str], str]:
     except Exception:
         pass
 
+    is_remote = settings.get("_remote_server_idx", -1) >= 0
     if not use_cpu:
         pix_fmt = info.get("pix_fmt", "unknown")
-        # Pixel formats safe for full CUDA pipeline (decode on GPU → encode on GPU)
         cuda_safe_fmts = ("yuv420p", "nv12", "p010le", "yuv420p10le")
         gpu_id = str(settings.get("gpu_id", 0))
-        if dovi_p5 and dv_mode != "skip" and _has_libplacebo:
+        if is_remote:
+            # Remote GPU — add hwaccel without specifying device (remote server picks its own GPU)
+            if pix_fmt in cuda_safe_fmts:
+                cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16"]
+            # Skip Vulkan/libplacebo for remote — the server handles DV conversion locally
+        elif dovi_p5 and dv_mode != "skip" and _has_libplacebo:
             # DV Profile 5 — use libplacebo (Vulkan) for IPTPQc2 → BT.2020+PQ color conversion
             log.info(f"DV Profile 5 — using libplacebo (Vulkan) color conversion + GPU encode (GPU {gpu_id})")
             cmd += ["-init_hw_device", f"vulkan=vk:{gpu_id}", "-filter_hw_device", "vk"]
         elif pix_fmt in cuda_safe_fmts:
             cmd += ["-hwaccel", "cuda", "-hwaccel_device", gpu_id, "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16"]
         else:
-            # Unusual pixel format — use software decode to avoid pink/green tint
-            # GPU encode is still used
             log.info(f"Pixel format '{pix_fmt}' — using software decode + GPU encode to avoid color issues")
 
     # Test mode: limit to 5 minutes for quick iteration
@@ -1185,7 +1247,7 @@ def build_ffmpeg_cmd(info: dict, settings: dict) -> tuple[list[str], str]:
                 "-preset", speed, "-profile:v", "high",
                 "-b:v", "0", "-bufsize", maxbitrate, "-maxrate", maxbitrate,
                 "-multipass", "qres", "-spatial-aq", "1", "-temporal-aq", "1",
-                "-aq-strength", "8", "-gpu", gpu_id,
+                "-aq-strength", "8",
             ]
         else:
             cmd += [
@@ -1193,8 +1255,11 @@ def build_ffmpeg_cmd(info: dict, settings: dict) -> tuple[list[str], str]:
                 "-preset", speed, "-profile:v", "main10",
                 "-b:v", "0", "-bufsize", maxbitrate, "-maxrate", maxbitrate,
                 "-multipass", "qres", "-spatial-aq", "1", "-temporal-aq", "1",
-                "-aq-strength", "8", "-gpu", gpu_id,
+                "-aq-strength", "8",
             ]
+        # Only add -gpu flag for local GPU encoding, not remote
+        if not is_remote:
+            cmd += ["-gpu", gpu_id]
 
     # HDR / DV metadata (HEVC only — H.264 does not support HDR/DV)
     hdr_type = info.get("hdr_type", "SDR")
@@ -1282,8 +1347,11 @@ def build_ffmpeg_cmd(info: dict, settings: dict) -> tuple[list[str], str]:
     cmd += sub_codec_overrides
     cmd += ["-max_muxing_queue_size", "9999"]
 
-    # Progress output
-    cmd += ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
+    # Progress output — remote jobs use -stats on stderr since pipe:1 doesn't tunnel
+    if is_remote:
+        cmd += ["-stats", "-loglevel", "info"]
+    else:
+        cmd += ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
 
     cmd.append(tmp_output)
 
@@ -1430,7 +1498,7 @@ class EncodeQueue:
         state = {
             "queued": queued,
             "interrupted": interrupted,
-            "history": self.history[-200:],
+            "history": self.history,
             "queue_enabled": self.queue_enabled,
         }
         try:
@@ -1558,7 +1626,7 @@ class EncodeQueue:
             "queued": queued,
             "current": active[0] if len(active) == 1 else None,  # backward compat
             "active": active,
-            "history": self.history[-100:],  # last 100
+            "history": self.history,
             "running": self.running,
             "queue_enabled": self.queue_enabled,
             "queue_count": len(queued),
@@ -1966,28 +2034,109 @@ async def encode_worker(worker_id: int):
             await asyncio.sleep(1)
             continue
         else:
-            # Assign GPU — skip for CPU-only jobs
-            is_cpu_job = next_job.settings.get("use_cpu", False) or next_job.settings.get("encoder") == "cpu"
+            # Assign GPU target based on encoder + gpu_target settings
+            # gpu_target values: "auto", "local", "remote", "gpu:N", "remote:N"
+            encoder = next_job.settings.get("encoder", "gpu")
+            gpu_target = next_job.settings.get("gpu_target", "auto")
+            # Backward compat: encoder="remote" → gpu with remote target
+            if encoder == "remote":
+                encoder = "gpu"
+                if not gpu_target.startswith("remote"):
+                    gpu_target = "remote"
+            is_cpu_job = encoder == "cpu" or next_job.settings.get("use_cpu", False)
             gpu_id = -1  # -1 = no GPU (CPU encode)
-            if not is_cpu_job and GPU_COUNT > 0:
-                req_gpu = next_job.settings.get("gpu_id", "auto")
-                gpu_id = None
-                if req_gpu not in (None, "auto", ""):
-                    try:
-                        wanted = int(req_gpu)
-                        gpu_loads = encode_queue.get_gpu_loads()
-                        if gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted):
-                            gpu_id = wanted
-                    except (ValueError, TypeError):
-                        pass
-                # Fall back to least-loaded GPU if explicit choice unavailable
+            remote_server_idx = -1  # -1 = not remote
+
+            if is_cpu_job:
+                pass  # gpu_id stays -1
+            elif gpu_target.startswith("remote:"):
+                # Specific remote server
+                try:
+                    remote_server_idx = int(gpu_target.split(":")[1])
+                except (ValueError, IndexError):
+                    remote_server_idx = 0
+                next_job.settings["encoder"] = "remote"
+            elif gpu_target == "remote":
+                # Auto-balance across all enabled remote servers
+                servers = app_settings.get("remote_gpu_servers", [])
+                enabled_idxs = [i for i, s in enumerate(servers) if s.get("enabled", True) is not False]
+                if enabled_idxs:
+                    remote_loads = {}
+                    for jid, j in encode_queue.active_jobs.items():
+                        ri = j.settings.get("_remote_server_idx", -1)
+                        if ri >= 0:
+                            remote_loads[ri] = remote_loads.get(ri, 0) + 1
+                    remote_server_idx = min(enabled_idxs, key=lambda i: remote_loads.get(i, 0))
+                    next_job.settings["encoder"] = "remote"
+                else:
+                    # No remote servers configured — fall back to local GPU or CPU
+                    log.warning(f"[{next_job.id}] No remote GPU servers configured, falling back to local")
+                    if GPU_COUNT > 0:
+                        gpu_id = encode_queue.get_least_loaded_gpu()
+                        if gpu_id is None:
+                            encode_queue._claiming = False
+                            await asyncio.sleep(2)
+                            continue
+                    # else stays cpu (gpu_id = -1)
+            elif gpu_target.startswith("gpu:"):
+                # Specific local GPU
+                try:
+                    wanted = int(gpu_target.split(":")[1])
+                    gpu_loads = encode_queue.get_gpu_loads()
+                    if gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted):
+                        gpu_id = wanted
+                    else:
+                        gpu_id = None
+                except (ValueError, IndexError):
+                    gpu_id = None
                 if gpu_id is None:
-                    gpu_id = encode_queue.get_least_loaded_gpu()
-                if gpu_id is None:
-                    # All GPUs at capacity — wait
                     encode_queue._claiming = False
                     await asyncio.sleep(2)
                     continue
+            elif gpu_target == "local" or encoder == "gpu":
+                # Auto-balance across local GPUs only
+                if GPU_COUNT > 0:
+                    # Handle legacy gpu_id values ("auto", "0", "1")
+                    legacy_gpu = next_job.settings.get("gpu_id", "auto")
+                    gpu_id = None
+                    if legacy_gpu not in (None, "auto", ""):
+                        try:
+                            wanted = int(legacy_gpu)
+                            gpu_loads = encode_queue.get_gpu_loads()
+                            if gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted):
+                                gpu_id = wanted
+                        except (ValueError, TypeError):
+                            pass
+                    if gpu_id is None:
+                        gpu_id = encode_queue.get_least_loaded_gpu()
+                    if gpu_id is None:
+                        encode_queue._claiming = False
+                        await asyncio.sleep(2)
+                        continue
+                # else stays cpu (gpu_id = -1)
+            else:
+                # "auto" — use any available (local GPUs first, then remote)
+                if GPU_COUNT > 0:
+                    gpu_id = encode_queue.get_least_loaded_gpu()
+                if gpu_id is None and app_settings.get("remote_gpu_servers"):
+                    # Local GPUs full, try enabled remote servers
+                    servers = app_settings.get("remote_gpu_servers", [])
+                    enabled_idxs = [i for i, s in enumerate(servers) if s.get("enabled", True) is not False]
+                    if enabled_idxs:
+                        remote_loads = {}
+                        for jid, j in encode_queue.active_jobs.items():
+                            ri = j.settings.get("_remote_server_idx", -1)
+                            if ri >= 0:
+                                remote_loads[ri] = remote_loads.get(ri, 0) + 1
+                        remote_server_idx = min(enabled_idxs, key=lambda i: remote_loads.get(i, 0))
+                        next_job.settings["encoder"] = "remote"
+                        gpu_id = -1
+                elif gpu_id is None:
+                    encode_queue._claiming = False
+                    await asyncio.sleep(2)
+                    continue
+
+            next_job.settings["_remote_server_idx"] = remote_server_idx
             encode_queue.running = True
             next_job.status = JobStatus.ENCODING
             next_job.started_at = time.time()
@@ -2092,7 +2241,8 @@ async def encode_worker(worker_id: int):
             continue
 
         # GPU fallback: if set to GPU but no GPU/nvenc available, fall back to CPU
-        if not settings.get("use_cpu", False):
+        # Skip this check for remote jobs — the remote server handles GPU
+        if not settings.get("use_cpu", False) and settings.get("_remote_server_idx", -1) < 0:
             gpu_ok = False
             try:
                 gpu_check = await asyncio.create_subprocess_exec(
@@ -2118,9 +2268,26 @@ async def encode_worker(worker_id: int):
                 settings["use_cpu"] = True
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
+        # Select ffmpeg binary — use ffmpeg-over-ip client for remote GPU targets
+        ffmpeg_env = None
+        remote_idx = settings.get("_remote_server_idx", -1)
+        if remote_idx >= 0:
+            ffmpeg_bin = _get_remote_ffmpeg_bin(remote_idx)
+            ffmpeg_env = _get_remote_ffmpeg_env(remote_idx)
+            if not os.path.isfile(ffmpeg_bin):
+                ffmpeg_bin = FFMPEG
+                ffmpeg_env = None
+                log.warning(f"[{job.id}] ffmpeg-over-ip-client not found, falling back to local ffmpeg")
+            else:
+                servers = app_settings.get("remote_gpu_servers", [])
+                srv_name = servers[remote_idx]["name"] if remote_idx < len(servers) else f"Server {remote_idx}"
+                log.info(f"[{job.id}] Using remote GPU: {srv_name}")
+        else:
+            ffmpeg_bin = FFMPEG
+
         # Build ffmpeg command
         try:
-            cmd, tmp_output, output_file, resolved = build_ffmpeg_cmd(info, settings)
+            cmd, tmp_output, output_file, resolved = build_ffmpeg_cmd(info, settings, ffmpeg_bin)
             job.settings.update(resolved)
         except Exception as e:
             log.error(f"[{job.id}] Failed to build command for {info['filename']}: {e}")
@@ -2132,11 +2299,16 @@ async def encode_worker(worker_id: int):
         # Run ffmpeg
         log.info(f"[{job.id}] CMD: {' '.join(cmd[:20])}...")
         encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"$ {' '.join(cmd)}")
+        # Merge remote GPU env vars if needed
+        proc_env = None
+        if ffmpeg_env:
+            proc_env = {**os.environ, **ffmpeg_env}
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=proc_env,
             )
             encode_queue.ffmpeg_procs[job.id] = proc
             encode_queue.ffmpeg_logs[job.id] = []
@@ -2152,82 +2324,146 @@ async def encode_worker(worker_id: int):
                         # Keep last 500 lines
                         if len(logs) > 500:
                             encode_queue.ffmpeg_logs[job_id] = logs[-500:]
-            stderr_task = asyncio.create_task(_read_stderr(proc, job.id))
+            # For remote jobs, stderr is read in the main progress loop; for local, use background task
+            stderr_task = None
+            if not (settings.get("_remote_server_idx", -1) >= 0):
+                stderr_task = asyncio.create_task(_read_stderr(proc, job.id))
 
-            # Parse progress from stdout (pipe:1)
+            # Parse progress — remote uses stderr (-stats), local uses stdout (-progress pipe:1)
             current_time = 0
             speed = "0x"
             bitrate = "0kbits/s"
             frame = 0
+            is_stats_mode = settings.get("_remote_server_idx", -1) >= 0
 
-            async for line in proc.stdout:
-                if job.status == JobStatus.CANCELLED:
-                    break
-                line = line.decode().strip()
-                if "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip()
+            # Remote: read stderr in chunks (stats uses \r not \n), Local: read stdout lines
+            if is_stats_mode:
+                _stats_buf = ""
+                while True:
+                    chunk = await proc.stderr.read(1024)
+                    if not chunk:
+                        break
+                    _stats_buf += chunk.decode(errors="replace")
+                    # Split on \r or \n to get individual stats lines
+                    parts = _stats_buf.replace("\r", "\n").split("\n")
+                    _stats_buf = parts[-1]  # keep incomplete line
+                    for line_text in parts[:-1]:
+                        line_text = line_text.strip()
+                        if not line_text:
+                            continue
+                        if line_text.startswith("frame="):
+                            import re as _re
+                            m = _re.search(r'frame=\s*(\d+)', line_text)
+                            if m: frame = int(m.group(1))
+                            m = _re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line_text)
+                            if m: current_time = int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3))
+                            m = _re.search(r'speed=\s*([\d.]+)x', line_text)
+                            if m: speed = m.group(1) + "x"
+                            m = _re.search(r'bitrate=\s*([\d.]+\s*\w+/s)', line_text)
+                            if m: bitrate = m.group(1)
+                            pct = min(100, int(current_time / duration * 100)) if duration > 0 else 0
+                            elapsed = time.time() - job.started_at if job.started_at else 0
+                            remaining = max(duration - current_time, 0)
+                            try:
+                                speed_num = float(speed.rstrip("x "))
+                                eta = remaining / speed_num if speed_num > 0 else 0
+                            except (ValueError, ZeroDivisionError):
+                                eta = 0
+                            # Get output file size
+                            try:
+                                output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
+                            except OSError:
+                                output_size = 0
+                            job.progress = {
+                                "pct": pct,
+                                "elapsed_secs": elapsed,
+                                "eta_secs": eta,
+                                "speed": speed,
+                                "bitrate": bitrate,
+                                "frame": frame,
+                                "current_time": current_time,
+                                "total_time": duration,
+                                "output_size": output_size,
+                            }
+                            if time.time() - getattr(job, '_last_broadcast', 0) > 1:
+                                job._last_broadcast = time.time()
+                                await manager.broadcast({
+                                    "type": "progress_update",
+                                    "data": {"id": job.id, "progress": job.progress}
+                                })
+                        else:
+                            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(line_text)
+            else:
+                async for line in proc.stdout:
+                    if job.status == JobStatus.CANCELLED:
+                        break
+                    line = line.decode().strip()
+                    if not line or "=" not in line:
+                        continue
 
-                if key == "out_time_us":
-                    try:
-                        current_time = int(value) / 1_000_000
-                    except ValueError:
-                        pass
-                elif key == "speed":
-                    speed = value
-                elif key == "bitrate":
-                    bitrate = value
-                elif key == "frame":
-                    try:
-                        frame = int(value)
-                    except ValueError:
-                        pass
-                elif key == "progress":
-                    pct = 0
-                    eta = 0
-                    if duration > 0:
-                        pct = min(int(current_time * 100 / duration), 100)
-                        remaining = max(duration - current_time, 0)
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip()
+
+                    if key == "out_time_us":
                         try:
-                            speed_num = float(speed.rstrip("x "))
-                            if speed_num > 0:
-                                eta = remaining / speed_num
-                        except (ValueError, ZeroDivisionError):
-                            eta = 0
+                            current_time = int(value) / 1_000_000
+                        except ValueError:
+                            pass
+                    elif key == "speed":
+                        speed = value
+                    elif key == "bitrate":
+                        bitrate = value
+                    elif key == "frame":
+                        try:
+                            frame = int(value)
+                        except ValueError:
+                            pass
+                    elif key == "progress":
+                        pct = 0
+                        eta = 0
+                        if duration > 0:
+                            pct = min(int(current_time * 100 / duration), 100)
+                            remaining = max(duration - current_time, 0)
+                            try:
+                                speed_num = float(speed.rstrip("x "))
+                                if speed_num > 0:
+                                    eta = remaining / speed_num
+                            except (ValueError, ZeroDivisionError):
+                                eta = 0
 
-                    elapsed = time.time() - job.started_at
-                    # Get current output file size
-                    try:
-                        output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
-                    except OSError:
-                        output_size = 0
-                    # Get latest CPU/GPU stats
-                    latest_cpu = stats_history["cpu"][-1]["v"] if stats_history["cpu"] else 0
-                    latest_gpu = stats_history["gpu"][-1]["v"] if stats_history["gpu"] else 0
-                    latest_gpu_temp = stats_history["gpu_temp"][-1]["v"] if stats_history["gpu_temp"] else 0
-                    job.progress = {
-                        "pct": pct,
-                        "elapsed_secs": elapsed,
-                        "eta_secs": eta,
-                        "speed": speed,
-                        "bitrate": bitrate,
-                        "frame": frame,
-                        "current_time": current_time,
-                        "total_time": duration,
-                        "output_size": output_size,
-                        "cpu": latest_cpu,
-                        "gpu": latest_gpu,
-                        "gpu_temp": latest_gpu_temp,
-                    }
-                    await manager.broadcast({
-                        "type": "progress_update",
-                        "data": {"id": job.id, "progress": job.progress}
-                    })
+                        elapsed = time.time() - job.started_at
+                        # Get current output file size
+                        try:
+                            output_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
+                        except OSError:
+                            output_size = 0
+                        # Get latest CPU/GPU stats
+                        latest_cpu = stats_history["cpu"][-1]["v"] if stats_history["cpu"] else 0
+                        latest_gpu = stats_history["gpu"][-1]["v"] if stats_history["gpu"] else 0
+                        latest_gpu_temp = stats_history["gpu_temp"][-1]["v"] if stats_history["gpu_temp"] else 0
+                        job.progress = {
+                            "pct": pct,
+                            "elapsed_secs": elapsed,
+                            "eta_secs": eta,
+                            "speed": speed,
+                            "bitrate": bitrate,
+                            "frame": frame,
+                            "current_time": current_time,
+                            "total_time": duration,
+                            "output_size": output_size,
+                            "cpu": latest_cpu,
+                            "gpu": latest_gpu,
+                            "gpu_temp": latest_gpu_temp,
+                        }
+                        await manager.broadcast({
+                            "type": "progress_update",
+                            "data": {"id": job.id, "progress": job.progress}
+                        })
 
             await proc.wait()
-            await stderr_task
+            if stderr_task:
+                await stderr_task
             exit_code = proc.returncode
 
         except Exception as e:
@@ -3304,31 +3540,36 @@ async def install_tool(tool: str):
             elif tool == "nvidia-drivers":
                 _install_tasks[tool]["log"] += "Installing NVIDIA drivers...\n"
                 _install_tasks[tool]["log"] += "WARNING: A reboot will be required after installation.\n\n"
-                # Detect distro for driver install
+
+                # Read full os-release
                 distro_id = ""
+                distro_id_like = ""
+                distro_version = ""
                 try:
                     with open("/etc/os-release") as f:
                         for line in f:
-                            if line.startswith("ID="):
-                                distro_id = line.strip().split("=", 1)[1].strip('"').lower()
-                                break
+                            k, _, v = line.strip().partition("=")
+                            v = v.strip('"')
+                            if k == "ID": distro_id = v.lower()
+                            elif k == "ID_LIKE": distro_id_like = v.lower()
+                            elif k == "VERSION_ID": distro_version = v
                 except Exception:
                     pass
-                _install_tasks[tool]["log"] += f"Detected distro: {distro_id or 'unknown'}\n"
+                uname_r = subprocess.run(["uname", "-r"], capture_output=True, text=True, timeout=5).stdout.strip()
+                _install_tasks[tool]["log"] += f"Distro: {distro_id} {distro_version}\n"
+                _install_tasks[tool]["log"] += f"Kernel: {uname_r}\n"
 
-                # Check for Secure Boot
+                # Secure Boot warning
                 try:
                     sb = subprocess.run(["mokutil", "--sb-state"], capture_output=True, text=True, timeout=5)
                     if "enabled" in sb.stdout.lower():
-                        _install_tasks[tool]["log"] += "\n⚠ WARNING: Secure Boot is ENABLED.\n"
-                        _install_tasks[tool]["log"] += "The NVIDIA kernel module may fail to load after install.\n"
-                        _install_tasks[tool]["log"] += "If nvidia-smi fails after reboot, disable Secure Boot in BIOS\n"
-                        _install_tasks[tool]["log"] += "or run: mokutil --disable-validation (then reboot).\n\n"
+                        _install_tasks[tool]["log"] += "\n⚠ Secure Boot is ENABLED — driver module may not load.\n"
+                        _install_tasks[tool]["log"] += "Run: mokutil --disable-validation (then reboot)\n\n"
                 except Exception:
                     pass
 
-                # Helper to run a prereq install and stream log
-                async def _driver_prereq(cmd_list, label):
+                # Helper
+                async def _drv_run(cmd_list, label):
                     _install_tasks[tool]["log"] += f"{label}...\n"
                     p = await _run_sudo(*cmd_list)
                     async for line in p.stdout:
@@ -3336,189 +3577,186 @@ async def install_tool(tool: str):
                         if text:
                             _install_tasks[tool]["log"] += text + "\n"
                     await p.wait()
+                    return p.returncode
 
-                uname_r = subprocess.run(["uname", "-r"], capture_output=True, text=True, timeout=5).stdout.strip()
-                _install_tasks[tool]["log"] += f"Kernel: {uname_r}\n"
+                # Determine EL major version for RHEL-based distros
+                el_ver_num = 0
+                try:
+                    r = subprocess.run(["rpm", "-E", "%rhel"], capture_output=True, text=True, timeout=5)
+                    if r.returncode == 0 and r.stdout.strip().isdigit():
+                        el_ver_num = int(r.stdout.strip())
+                except Exception:
+                    pass
 
                 pkg_cmd = None
-                if shutil.which("apt-get"):
-                    if shutil.which("ubuntu-drivers"):
-                        # Ubuntu / Pop!_OS / Linux Mint (ubuntu-based)
-                        _install_tasks[tool]["log"] += "Using ubuntu-drivers for best match...\n"
-                        # Kernel headers + DKMS deps
-                        await _driver_prereq(["apt-get", "install", "-y",
-                            f"linux-headers-{uname_r}", "build-essential", "dkms"],
-                            "Installing kernel headers and build tools")
-                        proc = await _run_sudo("ubuntu-drivers", "list")
-                        stdout, _ = await proc.communicate()
-                        drivers = stdout.decode(errors="replace").strip()
-                        _install_tasks[tool]["log"] += f"Available: {drivers}\n"
-                        pkg_cmd = ["ubuntu-drivers", "autoinstall"]
-                    else:
-                        # Debian / other apt-based — enable non-free repos
-                        _install_tasks[tool]["log"] += "Enabling non-free repos...\n"
-                        enable_script = (
-                            'if [ -f /etc/apt/sources.list.d/debian.sources ]; then '
-                            "  sed -i 's/^Components:.*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; "
-                            '  echo "Updated debian.sources (DEB822 format)"; '
-                            'elif [ -f /etc/apt/sources.list ]; then '
-                            # Rewrite each deb line to have all required components
-                            r"  sed -i '/^deb /{s/ main.*/ main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
-                            r"  sed -i '/^deb-src /{s/ main.*/ main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
-                            '  echo "Updated sources.list (classic format)"; '
-                            'fi && apt-get update -qq'
-                        )
-                        p = await _run_sudo("bash", "-c", enable_script)
-                        async for line in p.stdout:
-                            text = line.decode(errors="replace").rstrip()
-                            if text:
-                                _install_tasks[tool]["log"] += text + "\n"
-                        await p.wait()
-                        # Install kernel headers — if not available, upgrade kernel first
-                        _install_tasks[tool]["log"] += "Installing kernel headers...\n"
-                        p = await _run_sudo("apt-get", "install", "-y", f"linux-headers-{uname_r}")
-                        async for line in p.stdout:
-                            text = line.decode(errors="replace").rstrip()
-                            if text:
-                                _install_tasks[tool]["log"] += text + "\n"
-                        await p.wait()
-                        if p.returncode != 0:
-                            _install_tasks[tool]["log"] += "Headers for current kernel unavailable — installing latest kernel...\n"
-                            await _driver_prereq(["apt-get", "install", "-y",
-                                "linux-image-amd64", "linux-headers-amd64"],
-                                "Installing latest kernel + headers")
-                            _install_tasks[tool]["log"] += "\n⚠ A newer kernel was installed. You may need to REBOOT TWICE:\n"
-                            _install_tasks[tool]["log"] += "  1. First reboot loads the new kernel\n"
-                            _install_tasks[tool]["log"] += "  2. Second reboot after NVIDIA driver installs against new kernel\n\n"
-                        # Build tools
-                        await _driver_prereq(["apt-get", "install", "-y",
-                            "build-essential", "dkms", "gcc", "make"],
-                            "Installing build tools")
-                        _install_tasks[tool]["log"] += "Installing nvidia-driver...\n"
-                        pkg_cmd = ["apt-get", "install", "-y", "nvidia-driver", "firmware-misc-nonfree"]
-                elif shutil.which("dnf"):
-                    # Check if Fedora or RHEL-based
-                    is_fedora = distro_id == "fedora"
-                    if is_fedora:
-                        # Fedora — install RPM Fusion then akmod-nvidia
-                        _install_tasks[tool]["log"] += "Fedora detected — adding RPM Fusion repos...\n"
-                        # Kernel headers + build tools for akmod
-                        await _driver_prereq(["dnf", "install", "-y",
-                            "kernel-devel", "kernel-headers", "gcc", "make", "dkms", "acpid",
-                            "libglvnd-glx", "libglvnd-opengl", "libglvnd-devel", "pkgconfig"],
-                            "Installing kernel headers and build tools")
-                        fedora_ver = ""
-                        try:
-                            r = subprocess.run(["rpm", "-E", "%fedora"], capture_output=True, text=True, timeout=5)
-                            if r.returncode == 0 and r.stdout.strip().isdigit():
-                                fedora_ver = r.stdout.strip()
-                        except Exception:
-                            pass
-                        for repo in [
-                            f"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-{fedora_ver}.noarch.rpm",
-                            f"https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-{fedora_ver}.noarch.rpm",
-                        ]:
-                            p = await _run_sudo("dnf", "install", "-y", repo)
-                            async for line in p.stdout:
-                                text = line.decode(errors="replace").rstrip()
-                                if text:
-                                    _install_tasks[tool]["log"] += text + "\n"
-                            await p.wait()
-                        pkg_cmd = ["dnf", "install", "-y", "akmod-nvidia", "xorg-x11-drv-nvidia-cuda"]
-                    else:
-                        # RHEL/Alma/Rocky
-                        el_ver_num = 9
-                        try:
-                            r = subprocess.run(["rpm", "-E", "%rhel"], capture_output=True, text=True, timeout=5)
-                            if r.returncode == 0 and r.stdout.strip().isdigit():
-                                el_ver_num = int(r.stdout.strip())
-                        except Exception:
-                            pass
-                        # Kernel headers + DKMS deps
-                        await _driver_prereq(["dnf", "install", "-y",
-                            "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
-                            "libglvnd-devel", "elfutils-libelf-devel"],
-                            "Installing kernel headers and build tools")
-                        if el_ver_num >= 10:
-                            # EL10+ — nvidia-driver available directly in distro repos
-                            _install_tasks[tool]["log"] += f"RHEL {el_ver_num} — using distro nvidia-driver package...\n"
-                            pkg_cmd = ["dnf", "install", "-y", "nvidia-driver", "nvidia-driver-cuda"]
-                        else:
-                            # EL8/9 — need NVIDIA CUDA repo
-                            el_ver = f"rhel{el_ver_num}"
-                            _install_tasks[tool]["log"] += f"Adding NVIDIA CUDA repository ({el_ver})...\n"
-                            p = await _run_sudo("dnf", "install", "-y",
-                                f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-repo-{el_ver}-12-4-local-12.4.0_550.54.14-1.x86_64.rpm")
-                            async for line in p.stdout:
-                                text = line.decode(errors="replace").rstrip()
-                                if text:
-                                    _install_tasks[tool]["log"] += text + "\n"
-                            await p.wait()
-                            if p.returncode != 0:
-                                _install_tasks[tool]["log"] += "Trying NVIDIA network repo...\n"
-                                p = await _run_sudo("dnf", "config-manager", "--add-repo",
-                                    f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-{el_ver}.repo")
-                                async for line in p.stdout:
-                                    text = line.decode(errors="replace").rstrip()
-                                    if text:
-                                        _install_tasks[tool]["log"] += text + "\n"
-                                await p.wait()
-                            pkg_cmd = ["dnf", "module", "install", "-y", "nvidia-driver:latest-dkms"]
-                elif shutil.which("zypper"):
-                    # openSUSE / SLES
-                    _install_tasks[tool]["log"] += "openSUSE/SLES detected — adding NVIDIA repo...\n"
-                    # Kernel headers + build tools
-                    await _driver_prereq(["zypper", "install", "-y",
-                        f"kernel-devel", "gcc", "make", "dkms"],
+
+                # ============================================================
+                # UBUNTU / POP!_OS / LINUX MINT (ubuntu-drivers available)
+                # ============================================================
+                if shutil.which("ubuntu-drivers"):
+                    _install_tasks[tool]["log"] += "Ubuntu-based — using ubuntu-drivers...\n"
+                    await _drv_run(["apt-get", "install", "-y",
+                        f"linux-headers-{uname_r}", "build-essential", "dkms"],
+                        "Installing kernel headers")
+                    proc = await _run_sudo("ubuntu-drivers", "list")
+                    stdout, _ = await proc.communicate()
+                    _install_tasks[tool]["log"] += f"Available: {stdout.decode(errors='replace').strip()}\n"
+                    pkg_cmd = ["ubuntu-drivers", "autoinstall"]
+
+                # ============================================================
+                # DEBIAN (apt-get, no ubuntu-drivers)
+                # ============================================================
+                elif distro_id == "debian" and shutil.which("apt-get"):
+                    _install_tasks[tool]["log"] += "Debian — enabling non-free repos...\n"
+                    await _drv_run(["bash", "-c",
+                        'if [ -f /etc/apt/sources.list.d/debian.sources ]; then '
+                        "  sed -i 's/^Components:.*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; "
+                        'elif [ -f /etc/apt/sources.list ]; then '
+                        r"  sed -i '/^deb /{s/ main.*/ main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
+                        r"  sed -i '/^deb-src /{s/ main.*/ main contrib non-free non-free-firmware/}' /etc/apt/sources.list; "
+                        'fi && apt-get update -qq'
+                    ], "Updating sources")
+                    rc = await _drv_run(["apt-get", "install", "-y", f"linux-headers-{uname_r}"],
+                        "Installing kernel headers")
+                    if rc != 0:
+                        _install_tasks[tool]["log"] += "Headers unavailable — installing latest kernel...\n"
+                        await _drv_run(["apt-get", "install", "-y",
+                            "linux-image-amd64", "linux-headers-amd64"],
+                            "Installing latest kernel + headers")
+                        _install_tasks[tool]["log"] += "⚠ Reboot twice: once for new kernel, once after driver build.\n"
+                    await _drv_run(["apt-get", "install", "-y", "build-essential", "dkms", "gcc", "make"],
+                        "Installing build tools")
+                    pkg_cmd = ["apt-get", "install", "-y", "nvidia-driver", "firmware-misc-nonfree"]
+
+                # ============================================================
+                # FEDORA (RPM Fusion + akmod-nvidia)
+                # ============================================================
+                elif distro_id == "fedora":
+                    _install_tasks[tool]["log"] += "Fedora — using RPM Fusion...\n"
+                    await _drv_run(["dnf", "install", "-y",
+                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
+                        "libglvnd-glx", "libglvnd-opengl", "libglvnd-devel"],
                         "Installing kernel headers and build tools")
-                    # Detect openSUSE version for correct repo URL
-                    suse_ver = "leap/15.5"
-                    if distro_id == "opensuse-tumbleweed":
-                        suse_ver = "tumbleweed"
-                    else:
-                        try:
-                            r = subprocess.run(["bash", "-c", ". /etc/os-release && echo $VERSION_ID"],
-                                               capture_output=True, text=True, timeout=5)
-                            ver = r.stdout.strip()
-                            if ver:
-                                suse_ver = f"leap/{ver}"
-                        except Exception:
-                            pass
-                    p = await _run_sudo("zypper", "addrepo", "--refresh",
-                        f"https://download.nvidia.com/opensuse/{suse_ver}", "NVIDIA")
-                    async for line in p.stdout:
-                        text = line.decode(errors="replace").rstrip()
-                        if text:
-                            _install_tasks[tool]["log"] += text + "\n"
-                    await p.wait()
+                    fedora_ver = distro_version or ""
+                    for repo in [
+                        f"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-{fedora_ver}.noarch.rpm",
+                        f"https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-{fedora_ver}.noarch.rpm",
+                    ]:
+                        await _drv_run(["dnf", "install", "-y", repo], "Adding RPM Fusion")
+                    pkg_cmd = ["dnf", "install", "-y", "akmod-nvidia", "xorg-x11-drv-nvidia-cuda"]
+
+                # ============================================================
+                # ALMA LINUX 10+ (nvidia-driver in distro repos)
+                # ============================================================
+                elif distro_id == "almalinux" and el_ver_num >= 10:
+                    _install_tasks[tool]["log"] += f"AlmaLinux {el_ver_num} — using distro nvidia-driver...\n"
+                    await _drv_run(["dnf", "install", "-y",
+                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
+                        "libglvnd-devel", "elfutils-libelf-devel"],
+                        "Installing kernel headers and build tools")
+                    pkg_cmd = ["dnf", "install", "-y", "nvidia-driver", "nvidia-driver-cuda"]
+
+                # ============================================================
+                # ROCKY LINUX 10+ (NVIDIA CUDA repo needed)
+                # ============================================================
+                elif distro_id == "rocky" and el_ver_num >= 10:
+                    _install_tasks[tool]["log"] += f"Rocky Linux {el_ver_num} — adding NVIDIA repo...\n"
+                    await _drv_run(["dnf", "install", "-y",
+                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
+                        "libglvnd-devel", "elfutils-libelf-devel"],
+                        "Installing kernel headers and build tools")
+                    await _drv_run(["dnf", "config-manager", "--add-repo",
+                        f"https://developer.download.nvidia.com/compute/cuda/repos/rhel{el_ver_num}/x86_64/cuda-rhel{el_ver_num}.repo"],
+                        "Adding NVIDIA CUDA repo")
+                    pkg_cmd = ["dnf", "install", "-y", "nvidia-driver", "nvidia-driver-cuda"]
+
+                # ============================================================
+                # RHEL / ALMA / ROCKY 8-9 (NVIDIA CUDA repo + module install)
+                # ============================================================
+                elif el_ver_num in (8, 9) and shutil.which("dnf"):
+                    el_ver = f"rhel{el_ver_num}"
+                    _install_tasks[tool]["log"] += f"RHEL {el_ver_num} — adding NVIDIA CUDA repo...\n"
+                    await _drv_run(["dnf", "install", "-y",
+                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms",
+                        "libglvnd-devel", "elfutils-libelf-devel"],
+                        "Installing kernel headers and build tools")
+                    rc = await _drv_run(["dnf", "install", "-y",
+                        f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-repo-{el_ver}-12-4-local-12.4.0_550.54.14-1.x86_64.rpm"],
+                        "Adding NVIDIA local repo")
+                    if rc != 0:
+                        await _drv_run(["dnf", "config-manager", "--add-repo",
+                            f"https://developer.download.nvidia.com/compute/cuda/repos/{el_ver}/x86_64/cuda-{el_ver}.repo"],
+                            "Trying NVIDIA network repo")
+                    pkg_cmd = ["dnf", "module", "install", "-y", "nvidia-driver:latest-dkms"]
+
+                # ============================================================
+                # OPENSUSE / SLES (zypper + NVIDIA repo)
+                # ============================================================
+                elif shutil.which("zypper"):
+                    suse_ver = "tumbleweed" if distro_id == "opensuse-tumbleweed" else f"leap/{distro_version or '15.5'}"
+                    _install_tasks[tool]["log"] += f"openSUSE/SLES ({suse_ver})...\n"
+                    await _drv_run(["zypper", "install", "-y", "kernel-devel", "gcc", "make", "dkms"],
+                        "Installing kernel headers and build tools")
+                    await _drv_run(["zypper", "addrepo", "--refresh",
+                        f"https://download.nvidia.com/opensuse/{suse_ver}", "NVIDIA"],
+                        "Adding NVIDIA repo")
                     pkg_cmd = ["zypper", "install", "-y", "--auto-agree-with-licenses",
                                "nvidia-driver", "nvidia-driver-G06-kmp-default"]
-                elif shutil.which("yum"):
-                    await _driver_prereq(["yum", "install", "-y",
-                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms"],
-                        "Installing kernel headers and build tools")
-                    pkg_cmd = ["yum", "install", "-y", "nvidia-driver"]
+
+                # ============================================================
+                # ARCH / MANJARO / ENDEAVOUROS (pacman)
+                # ============================================================
                 elif shutil.which("pacman"):
-                    # Arch / Manjaro / EndeavourOS — linux-headers auto-matched to kernel
-                    await _driver_prereq(["pacman", "-S", "--noconfirm", "--needed",
+                    _install_tasks[tool]["log"] += "Arch-based — using pacman...\n"
+                    await _drv_run(["pacman", "-S", "--noconfirm", "--needed",
                         "linux-headers", "base-devel", "dkms"],
                         "Installing kernel headers and build tools")
                     pkg_cmd = ["pacman", "-S", "--noconfirm", "nvidia-dkms", "nvidia-utils", "nvidia-settings"]
-                if not pkg_cmd:
-                    raise RuntimeError("No supported package manager found for driver install. "
-                                       "Supported: apt (Ubuntu/Debian/Mint/Pop!_OS), dnf (Fedora/RHEL/Alma/Rocky), "
-                                       "zypper (openSUSE/SLES), pacman (Arch/Manjaro), yum (older RHEL)")
-                _install_tasks[tool]["log"] += f"Running: {' '.join(pkg_cmd)}\n"
-                proc = await _run_sudo(*pkg_cmd)
-                async for line in proc.stdout:
-                    text = line.decode(errors="replace").rstrip()
-                    if text:
-                        _install_tasks[tool]["log"] += text + "\n"
-                        if len(_install_tasks[tool]["log"]) > 5000:
-                            _install_tasks[tool]["log"] = "...\n" + _install_tasks[tool]["log"][-4500:]
-                await proc.wait()
-                if proc.returncode != 0:
-                    raise RuntimeError("Driver installation failed")
+
+                # ============================================================
+                # GENERIC DNF FALLBACK (unknown RHEL-like)
+                # ============================================================
+                elif shutil.which("dnf"):
+                    _install_tasks[tool]["log"] += f"Unknown dnf-based distro ({distro_id}) — trying NVIDIA repo...\n"
+                    await _drv_run(["dnf", "install", "-y",
+                        "kernel-devel", "kernel-headers", "gcc", "make", "dkms"],
+                        "Installing kernel headers and build tools")
+                    # Try distro package first, fall back to CUDA repo
+                    rc = await _drv_run(["dnf", "install", "-y", "nvidia-driver"],
+                        "Trying distro nvidia-driver package")
+                    if rc == 0:
+                        pkg_cmd = None  # already installed
+                        _install_tasks[tool]["log"] += "nvidia-driver installed from distro repos.\n"
+                    else:
+                        el = el_ver_num or 9
+                        await _drv_run(["dnf", "config-manager", "--add-repo",
+                            f"https://developer.download.nvidia.com/compute/cuda/repos/rhel{el}/x86_64/cuda-rhel{el}.repo"],
+                            "Adding NVIDIA CUDA repo")
+                        pkg_cmd = ["dnf", "install", "-y", "nvidia-driver"]
+
+                # ============================================================
+                # GENERIC YUM FALLBACK
+                # ============================================================
+                elif shutil.which("yum"):
+                    await _drv_run(["yum", "install", "-y",
+                        "kernel-devel", "kernel-headers", "gcc", "make"],
+                        "Installing kernel headers and build tools")
+                    pkg_cmd = ["yum", "install", "-y", "nvidia-driver"]
+
+                if pkg_cmd is None and not any(k in _install_tasks[tool]["log"] for k in ["installed from distro", "installed successfully"]):
+                    raise RuntimeError(f"No supported driver install method for: {distro_id} {distro_version}")
+                if pkg_cmd:
+                    _install_tasks[tool]["log"] += f"Running: {' '.join(pkg_cmd)}\n"
+                    proc = await _run_sudo(*pkg_cmd)
+                    async for line in proc.stdout:
+                        text = line.decode(errors="replace").rstrip()
+                        if text:
+                            _install_tasks[tool]["log"] += text + "\n"
+                            if len(_install_tasks[tool]["log"]) > 5000:
+                                _install_tasks[tool]["log"] = "...\n" + _install_tasks[tool]["log"][-4500:]
+                    await proc.wait()
+                    if proc.returncode != 0:
+                        raise RuntimeError("Driver installation failed")
                 _install_tasks[tool]["log"] += "\nNVIDIA drivers installed successfully.\n"
                 _install_tasks[tool]["log"] += "*** A REBOOT IS REQUIRED for the drivers to take effect. ***\n"
                 _install_tasks[tool]["log"] += "After reboot, refresh this page to verify GPU detection.\n"
@@ -3759,6 +3997,54 @@ def cleanup_tmp_dir():
         log.info(f"Cleaned up {removed} orphan temp file(s) from {tmp_dir}")
 
 
+# ffmpeg-over-ip server process management
+_ffmpeg_server_proc: asyncio.subprocess.Process = None
+
+async def start_ffmpeg_server():
+    """Start the ffmpeg-over-ip server if enabled in settings."""
+    global _ffmpeg_server_proc
+    await stop_ffmpeg_server()
+    if not app_settings.get("ffmpeg_server_enabled"):
+        return
+    server_bin = os.path.join(BIN_DIR, "ffmpeg-over-ip-server")
+    if not os.path.isfile(server_bin):
+        log.warning("ffmpeg-over-ip-server binary not found — cannot start server mode")
+        return
+    port = app_settings.get("ffmpeg_server_port", 5050)
+    secret = app_settings.get("ffmpeg_server_secret", "")
+    # Write server config
+    config_dir = os.path.join(BASE_DIR, "remote-gpu")
+    os.makedirs(config_dir, exist_ok=True)
+    config_path = os.path.join(config_dir, "local-server.jsonc")
+    config = json.dumps({
+        "address": f"0.0.0.0:{port}",
+        "authSecret": secret,
+    }, indent=2)
+    with open(config_path, "w") as f:
+        f.write(config)
+    # Start server process
+    _ffmpeg_server_proc = await asyncio.create_subprocess_exec(
+        server_bin, "--config", config_path,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    log.info(f"ffmpeg-over-ip server started on port {port} (PID {_ffmpeg_server_proc.pid})")
+
+async def stop_ffmpeg_server():
+    """Stop the ffmpeg-over-ip server if running."""
+    global _ffmpeg_server_proc
+    if _ffmpeg_server_proc and _ffmpeg_server_proc.returncode is None:
+        try:
+            _ffmpeg_server_proc.terminate()
+            await asyncio.wait_for(_ffmpeg_server_proc.wait(), timeout=5)
+        except Exception:
+            try:
+                _ffmpeg_server_proc.kill()
+            except Exception:
+                pass
+        log.info("ffmpeg-over-ip server stopped")
+    _ffmpeg_server_proc = None
+
 @app.on_event("startup")
 async def startup():
     # Remove sudoers file if flagged from setup completion
@@ -3772,21 +4058,25 @@ async def startup():
             log.warning("Could not remove sudoers file — remove manually: sudo rm /etc/sudoers.d/recode")
         save_settings(app_settings)
 
-    # Kill any orphan ffmpeg processes from previous server instance
+    # Kill any orphan ffmpeg/ffmpeg-over-ip-client processes from previous server instance
     try:
         tmp_dir = app_settings.get("tmp_dir", "/tmp/recode")
-        result = await asyncio.create_subprocess_exec(
-            "pgrep", "-f", f"ffmpeg.*{tmp_dir}",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        stdout, _ = await result.communicate()
-        if stdout.strip():
-            pids = stdout.decode().strip().split('\n')
-            for pid in pids:
-                try:
-                    os.kill(int(pid), 9)
-                    log.info(f"Killed orphan ffmpeg process PID {pid}")
-                except (ProcessLookupError, ValueError):
-                    pass
+        for pattern in [f"ffmpeg.*{tmp_dir}", "ffmpeg-over-ip-client"]:
+            result = await asyncio.create_subprocess_exec(
+                "pgrep", "-f", pattern,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            stdout, _ = await result.communicate()
+            if stdout.strip():
+                pids = stdout.decode().strip().split('\n')
+                my_pid = str(os.getpid())
+                for pid in pids:
+                    pid = pid.strip()
+                    if pid and pid != my_pid:
+                        try:
+                            os.kill(int(pid), 9)
+                            log.info(f"Killed orphan process PID {pid} ({pattern})")
+                        except (ProcessLookupError, ValueError):
+                            pass
     except Exception:
         pass
     # Clean up any jobs that were active when the service was last stopped
@@ -3800,6 +4090,8 @@ async def startup():
     asyncio.create_task(job_watchdog())
     global watch_task
     watch_task = asyncio.create_task(folder_watcher())
+    # Start ffmpeg-over-ip server if enabled
+    await start_ffmpeg_server()
 
 
 @app.get("/")
@@ -4031,8 +4323,8 @@ async def system_check():
     results = {}
 
     for tool in ("ffmpeg", "ffprobe", "mediainfo"):
-        results[tool] = shutil.which(tool) is not None
-    # Also check our preferred ffmpeg
+        found = _find_bin(tool)
+        results[tool] = os.path.isfile(found) if found else False
     results["ffmpeg_path"] = FFMPEG
     try:
         _lp = subprocess.run([FFMPEG, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=5)
@@ -4468,7 +4760,7 @@ async def check_permissions(path: str = ""):
 async def queue_add(req: QueueAddRequest):
     base_settings = {
         "preset": req.preset, "cq": req.cq, "maxbitrate": req.maxbitrate,
-        "speed": req.speed, "use_cpu": req.use_cpu, "gpu_id": req.gpu_id, "video_codec": req.video_codec, "dv_mode": req.dv_mode, "resize": req.resize,
+        "speed": req.speed, "encoder": req.encoder, "use_cpu": req.use_cpu, "gpu_id": req.gpu_id, "gpu_target": req.gpu_target, "video_codec": req.video_codec, "dv_mode": req.dv_mode, "resize": req.resize,
         "skip_4k": req.skip_4k, "hdr_only": req.hdr_only,
         "delete_original": req.delete_original, "discard_larger": req.discard_larger,
         "english_only": req.english_only, "audio_codec": req.audio_codec,
@@ -5211,6 +5503,55 @@ async def cleanup_duplicate(path: str, keep: str = "encoded"):
 # Settings Endpoints
 # =============================================================================
 
+@app.get("/api/remote-gpu/status")
+async def remote_gpu_status():
+    """Check online status of all configured remote GPU servers by running a test encode."""
+    servers = app_settings.get("remote_gpu_servers", [])
+    results = []
+    client_bin = _find_bin("ffmpeg-over-ip-client")
+    for i, srv in enumerate(servers):
+        addr = (srv.get("address") or "").strip()
+        secret = (srv.get("secret") or "").strip()
+        name = srv.get("name") or addr or f"Server {i}"
+        if not addr:
+            results.append({"index": i, "name": name, "online": False, "error": "No address"})
+            continue
+        if not os.path.isfile(client_bin):
+            results.append({"index": i, "name": name, "online": False, "error": "Client binary not found"})
+            continue
+        # Write temp config and run a null encode to verify auth + connectivity
+        config_path = os.path.join(BASE_DIR, "remote-gpu", f"server-{i}.jsonc")
+        try:
+            env = {**os.environ, "FFMPEG_OVER_IP_CLIENT_CONFIG": config_path}
+            proc = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    client_bin, "-f", "lavfi", "-i", "nullsrc=s=16x16:d=0.01",
+                    "-frames:v", "1", "-f", "null", "-",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    env=env),
+                timeout=10)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode == 0:
+                results.append({"index": i, "name": name, "online": True, "address": addr})
+            else:
+                err = stderr.decode(errors="replace").strip().split("\n")[-1][:100] if stderr else "Unknown error"
+                results.append({"index": i, "name": name, "online": False, "error": err})
+        except asyncio.TimeoutError:
+            results.append({"index": i, "name": name, "online": False, "error": "Timeout"})
+        except Exception as e:
+            results.append({"index": i, "name": name, "online": False, "error": str(e)})
+    return {"servers": results}
+
+@app.get("/api/ffmpeg-server/status")
+async def ffmpeg_server_status():
+    """Check if the local ffmpeg-over-ip server is running."""
+    running = _ffmpeg_server_proc is not None and _ffmpeg_server_proc.returncode is None
+    return {
+        "enabled": app_settings.get("ffmpeg_server_enabled", False),
+        "running": running,
+        "port": app_settings.get("ffmpeg_server_port", 5050),
+    }
+
 @app.get("/api/settings")
 async def get_settings():
     """Return all app settings."""
@@ -5285,6 +5626,10 @@ async def update_settings(new_settings: dict):
             encode_queue.running = len(encode_queue.active_jobs) > 0
             encode_queue._save_state(force=True)
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+
+    # Restart ffmpeg-over-ip server if settings changed
+    if any(k in new_settings for k in ("ffmpeg_server_enabled", "ffmpeg_server_port", "ffmpeg_server_secret")):
+        await start_ffmpeg_server()
 
     return {"ok": True, "settings": app_settings}
 

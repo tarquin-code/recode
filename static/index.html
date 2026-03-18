@@ -547,6 +547,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <span class="status-dot"><span class="dot" id="dotWs"></span>WS</span>
             <span class="status-dot"><span class="dot" id="dotFfmpeg"></span>ffmpeg</span>
             <span class="status-dot"><span class="dot" id="dotGpu"></span>GPU</span>
+            <span class="status-dot" id="dotGpuServerWrap" style="display:none;"><span class="dot" id="dotGpuServer"></span>Server</span>
             <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light theme" id="themeBtn"></button>
         </div>
     </header>
@@ -661,12 +662,12 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="form-group">
                     <label>Hardware</label>
                     <select id="selEncoder" onchange="onEncodeSettingsChange()">
-                        <option value="gpu">GPU (NVENC)</option>
+                        <option value="gpu">GPU (Hardware)</option>
                         <option value="cpu">CPU (Software)</option>
                     </select>
                     <div id="gpuSelectRow" style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-                        <label for="selGpuId" style="font-size:12px;white-space:nowrap;">GPU</label>
-                        <select id="selGpuId" style="font-size:11px;flex:1;" onchange="onEncodeSettingsChange()">
+                        <label for="selGpuTarget" style="font-size:12px;white-space:nowrap;">Target</label>
+                        <select id="selGpuTarget" style="font-size:11px;flex:1;" onchange="onEncodeSettingsChange()">
                             <option value="auto">Auto (least loaded)</option>
                         </select>
                     </div>
@@ -843,13 +844,13 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div id="testModeBanner" style="display:none;text-align:center;padding:8px 16px;margin-bottom:12px;background:rgba(255,165,0,0.15);border:1px solid orange;border-radius:6px;font-weight:700;font-size:13px;color:orange;animation:testFlash 1.5s ease-in-out infinite;">TEST MODE — Encodes limited to 5 minutes</div>
                 <div id="systemGraphs" style="display:none;margin-bottom:16px;">
                     <div id="statsGraphsRow" class="stats-graphs-row" style="display:flex;gap:12px;">
-                        <div style="flex:1;">
-                            <div id="cpuLabel" style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">CPU: 0%</div>
+                        <div style="flex:1;min-width:150px;">
+                            <div id="cpuLabel" style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;white-space:nowrap;">CPU: 0%</div>
                             <canvas id="cpuGraph" width="400" height="80" style="width:100%;height:80px;background:var(--bg-secondary);border-radius:4px;"></canvas>
                         </div>
-                        <div id="gpuGraphsContainer" class="gpu-graphs-container" style="flex:1;display:flex;gap:12px;">
+                        <div id="gpuGraphsContainer" class="gpu-graphs-container" style="flex:3;display:flex;gap:12px;min-width:0;">
                             <div style="flex:1;">
-                                <div id="gpuLabel" style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">GPU: 0% &nbsp; Temp: 0&deg;C</div>
+                                <div id="gpuLabel" style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">GPU: 0% &nbsp; Temp: 0&deg;C</div>
                                 <canvas id="gpuGraph" width="400" height="80" style="width:100%;height:80px;background:var(--bg-secondary);border-radius:4px;"></canvas>
                             </div>
                         </div>
@@ -1632,7 +1633,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.13.2</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.14.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1665,6 +1666,28 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.14.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li>Remote GPU encoding via ffmpeg-over-ip &mdash; encode on remote GPU servers</li>
+                                <li>Multiple remote servers with enable/disable, status check, load balancing</li>
+                                <li>GPU Server Mode &mdash; share local GPU with other Recode instances</li>
+                                <li>Unified GPU Target selector: Auto, All Local, All Remote, specific GPU/server</li>
+                                <li>Remote server auth validation (tests actual encode, not just TCP connect)</li>
+                                <li>CUDA hwaccel for remote encodes (hardware decode on remote GPU)</li>
+                                <li>Live progress for remote encodes via stderr stats parsing</li>
+                                <li>Orphan ffmpeg-over-ip-client process cleanup on restart</li>
+                                <li>Settings: unsaved changes indicator, save without closing modal</li>
+                                <li>Settings: Remote GPU tab, reorganized General tab, consistent profile layouts</li>
+                                <li>Header: GPU Server indicator, restarting... badge on disconnect</li>
+                                <li>GPU graphs: abbreviated labels, CPU 1/4 width, GPU 3/4 width</li>
+                                <li>History: unlimited entries (no more 100/1000 cap)</li>
+                                <li>System check: uses app bin dir (fixes ffmpeg dot on bundled installs)</li>
+                                <li>Setup wizard: matches Settings profile layout, GPU target, GPU server mode</li>
+                                <li>Per-distro NVIDIA driver install (separate handlers, no cross-distro breakage)</li>
+                                <li>All binaries self-contained in /opt/Recode/bin/ including mediainfo</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.13.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -1930,6 +1953,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="settings-nav-item active" onclick="switchSettingsTab('profiles',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span> Profiles</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('schedule',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span> Schedule</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('watch',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span> Folder Watch</div>
+                <div class="settings-nav-item" onclick="switchSettingsTab('remote-gpu',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span> Remote GPU</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('general',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> General</div>
             </nav>
             <div class="settings-panel">
@@ -1949,7 +1973,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <span style="font-weight:700;font-size:15px;">Default Profile</span>
                             <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">Used for manual encodes &amp; as fallback for webhooks/folder watch</span>
                         </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;">
+                        <!-- Row 1: Preset, Video Codec, Hardware, GPU Target -->
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
                             <div class="form-group" style="margin:0;">
                                 <label style="font-size:11px;">Preset</label>
                                 <select id="setPreset" onchange="onSettingsPresetChange()" style="font-size:12px;">
@@ -1994,10 +2019,19 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <div class="form-group" style="margin:0;">
                                 <label style="font-size:11px;">Hardware</label>
                                 <select id="setEncoder" style="font-size:12px;">
-                                    <option value="gpu">GPU (NVENC)</option>
+                                    <option value="gpu">GPU (Hardware)</option>
                                     <option value="cpu">CPU (Software)</option>
                                 </select>
                             </div>
+                            <div class="form-group" style="margin:0;">
+                                <label style="font-size:11px;">GPU Target</label>
+                                <select id="setGpuTarget" style="font-size:12px;">
+                                    <option value="auto">Auto</option>
+                                </select>
+                            </div>
+                        </div>
+                        <!-- Row 2: Resolution, Speed, CQ, Bitrate -->
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
                             <div class="form-group" style="margin:0;">
                                 <label style="font-size:11px;">Output Resolution</label>
                                 <select id="setResize" style="font-size:12px;">
@@ -2021,8 +2055,6 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                     <option value="p7">p7 (best quality)</option>
                                 </select>
                             </div>
-                        </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
                             <div class="form-group" style="margin:0;">
                                 <label style="font-size:11px;">CQ: <span id="setCqVal">24</span></label>
                                 <input type="range" id="setCq" min="1" max="50" value="24" oninput="document.getElementById('setCqVal').textContent=this.value;" style="font-size:12px;">
@@ -2032,9 +2064,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <input type="range" id="setMaxbitrate" min="3" max="50" value="20" oninput="document.getElementById('setMaxbitrateVal').textContent=this.value;" style="font-size:12px;">
                             </div>
                         </div>
+                        <!-- Row 3: Audio -->
                         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
                             <div class="form-group" style="margin:0;">
-                                <label style="font-size:11px;">Keep only audio type</label>
+                                <label style="font-size:11px;">Audio Filter</label>
                                 <select id="setAudioFilter" style="font-size:12px;">
                                     <option value="all">All streams</option>
                                     <option value="truehd">TrueHD / Atmos only</option>
@@ -2059,22 +2092,22 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <label style="font-size:11px;">Audio Bitrate</label>
                                 <select id="setAudioBitrate" style="font-size:12px;"></select>
                             </div>
-                            <div></div>
-                        </div>
-                        <div class="set-checks-grid" style="margin-top:10px;">
-                            <label class="set-chk"><input type="checkbox" id="setSkip4k"> Skip 4K files<span class="set-desc">Don't encode 4K/UHD content</span></label>
-                            <label class="set-chk"><input type="checkbox" id="setHdrOnly"> HDR only<span class="set-desc">Only encode HDR/DV content</span></label>
-                            <div style="display:flex;align-items:center;gap:6px;">
-                                <label style="font-size:12px;white-space:nowrap;">Dolby Vision</label>
-                                <select id="setDvMode" style="font-size:11px;">
+                            <div class="form-group" style="margin:0;">
+                                <label style="font-size:11px;">Dolby Vision</label>
+                                <select id="setDvMode" style="font-size:12px;">
                                     <option value="skip">Skip</option>
                                     <option value="hdr10">Convert to HDR10</option>
                                     <option value="encode_dv">Convert to DV P8.4</option>
-                                            </select>
+                                </select>
                             </div>
-                            <label class="set-chk"><input type="checkbox" id="setDiscardLarger"> Discard if larger<span class="set-desc">Delete output if it's bigger than original</span></label>
-                            <label class="set-chk" style="color:var(--error);"><input type="checkbox" id="setDeleteOriginal"> Delete original<span class="set-desc">Remove source file after successful encode</span></label>
-                            <label class="set-chk"><input type="checkbox" id="setEnglishOnly"> English only<span class="set-desc">Drop non-English audio tracks</span></label>
+                        </div>
+                        <!-- Row 4: Checkboxes -->
+                        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;">
+                            <label class="set-chk"><input type="checkbox" id="setSkip4k"> Skip 4K files</label>
+                            <label class="set-chk"><input type="checkbox" id="setHdrOnly"> HDR only</label>
+                            <label class="set-chk"><input type="checkbox" id="setDiscardLarger"> Discard if larger</label>
+                            <label class="set-chk" style="color:var(--error);"><input type="checkbox" id="setDeleteOriginal"> Delete original</label>
+                            <label class="set-chk"><input type="checkbox" id="setEnglishOnly"> English only</label>
                         </div>
                     </div>
 
@@ -2134,75 +2167,119 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     </div>
                 </div>
 
+                <!-- Remote GPU -->
+                <div class="set-section" id="setTab-remote-gpu">
+                    <div class="set-section-title">Remote GPU</div>
+                    <div class="set-section-desc">Use remote GPU servers for hardware-accelerated encoding via <a href="https://github.com/steelbrain/ffmpeg-over-ip" target="_blank" style="color:var(--accent);">ffmpeg-over-ip</a>. Jobs are load-balanced across enabled servers. Select "Remote" targets in the Hardware &rarr; GPU Target dropdown.</div>
+
+                    <!-- Remote Servers -->
+                    <div style="margin-top:16px;">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Remote Servers</div>
+                        <div id="remoteGpuServersList"></div>
+                        <div style="display:flex;gap:6px;margin-top:6px;">
+                            <button class="btn btn-sm btn-primary" style="font-size:11px;" onclick="addRemoteGpuServer()">+ Add Server</button>
+                            <button class="btn btn-sm" style="font-size:11px;" onclick="checkAllRemoteServers()">Check Servers</button>
+                        </div>
+                    </div>
+
+                    <!-- GPU Server Mode -->
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">GPU Server Mode</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Share this machine's GPU with other Recode instances over the network. Local encoding is not affected.</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                            <div class="form-group" style="margin:0;">
+                                <label>Port</label>
+                                <input type="text" id="setFfmpegServerPort" value="5050" placeholder="5050">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Shared Secret</label>
+                                <input type="text" id="setFfmpegServerSecret" placeholder="Auth secret for clients">
+                            </div>
+                        </div>
+                        <div style="margin-top:6px;">
+                            <label class="set-chk"><input type="checkbox" id="setFfmpegServerEnabled"> Enable GPU Server</label>
+                        </div>
+                        <div id="ffmpegServerStatus" style="margin-top:4px;font-size:11px;color:var(--text-muted);"></div>
+                    </div>
+                </div>
+
                 <!-- General -->
                 <div class="set-section" id="setTab-general">
                     <div class="set-section-title">General</div>
-                    <div class="set-section-desc">System-wide settings that apply to all encodes.</div>
-                    <div class="set-field-grid">
-                        <div class="form-group">
-                            <label>Allowed Paths</label>
-                            <input type="text" id="setAllowedPaths" placeholder="/mnt">
-                            <span class="set-desc">Comma-separated root paths allowed for scanning/browsing (e.g. /mnt, /data/media)</span>
+
+                    <!-- Encoding -->
+                    <div style="margin-bottom:20px;">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Encoding</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                            <div class="form-group" style="margin:0;">
+                                <label>Concurrent Encodes</label>
+                                <select id="setMaxConcurrent"><option value="1">1 (sequential)</option></select>
+                                <span class="set-desc" id="setConcurrentDesc">Files encoded in parallel</span>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Temp Directory</label>
+                                <input type="text" id="setTmpDir">
+                                <span class="set-desc">Fast SSD recommended</span>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Encode File Suffix</label>
+                                <input type="text" id="setEncodeSuffix" pattern="[A-Za-z0-9_-]+" placeholder="e.g. recode">
+                                <span class="set-desc">Movie_h265_HDR10_<b>suffix</b>.mkv</span>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>Concurrent Encodes</label>
-                            <select id="setMaxConcurrent"><option value="1">1 (sequential)</option></select>
-                            <span class="set-desc" id="setConcurrentDesc">How many files to encode in parallel. Higher uses more GPU/CPU.</span>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px;">
+                            <div class="form-group" style="margin:0;">
+                                <label>CPU Threads</label>
+                                <input type="range" id="setCpuThreads" min="0" max="1" value="0" oninput="document.getElementById('setCpuThreadsVal').textContent=this.value==0?'Auto':this.value">
+                                <span class="set-desc">For CPU encoding: <span id="setCpuThreadsVal">Auto</span></span>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Allowed Paths</label>
+                                <input type="text" id="setAllowedPaths" placeholder="/mnt">
+                                <span class="set-desc">Comma-separated scan paths</span>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Theme</label>
+                                <select id="setTheme">
+                                    <option value="dark">Dark</option>
+                                    <option value="light">Light</option>
+                                </select>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label><input type="checkbox" id="setAutoStartQueue"> Auto-start queue on server restart</label>
-                            <span class="set-desc">When disabled, the queue starts paused after a restart and must be started manually.</span>
-                        </div>
-                        <div class="form-group">
-                            <label>CPU Threads</label>
-                            <input type="range" id="setCpuThreads" min="0" max="1" value="0" oninput="document.getElementById('setCpuThreadsVal').textContent=this.value==0?'Auto':this.value">
-                            <span class="set-desc">Threads for CPU encoding. <span id="setCpuThreadsVal">Auto</span></span>
-                        </div>
-                        <div class="form-group">
-                            <label>Temp Directory</label>
-                            <input type="text" id="setTmpDir">
-                            <span class="set-desc">Where temp encode files are written. Fast SSD recommended.</span>
-                        </div>
-                        <div class="form-group">
-                            <label>Theme</label>
-                            <select id="setTheme">
-                                <option value="dark">Dark</option>
-                                <option value="light">Light</option>
-                            </select>
-                            <span class="set-desc">Also toggleable with the moon/sun icon in the header.</span>
-                        </div>
-                    </div>
-                    <div class="form-group" style="margin-top:16px;">
-                        <label>Encode File Suffix</label>
-                        <input type="text" id="setEncodeSuffix" style="font-size:12px;width:200px;" pattern="[A-Za-z0-9_-]+" placeholder="e.g. Streamer">
-                        <span class="set-desc">Appended to encoded filenames: Movie_h265_HDR10_<b>suffix</b>.mkv. Letters, numbers, hyphens, underscores only.</span>
-                    </div>
-                    <div style="margin-top:16px;">
-                        <label class="set-chk" style="color:orange;font-weight:600;"><input type="checkbox" id="setTestMode"> Test mode (5 min)<span class="set-desc">Limit all encodes to first 5 minutes for quick testing. Disable for production.</span></label>
-                    </div>
-                    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
-                        <div class="set-section-title" style="font-size:14px;">Plex Webhook</div>
-                        <div class="set-section-desc">
-                            <span id="setPlexTokenStatus"></span><br>
-                            Webhook URL: <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;">http://&lt;server&gt;:9877/api/plex-webhook</code>
-                            &mdash; Add this in Plex under Settings &gt; Webhooks.<br>
-                            <span style="color:var(--text-muted);">When Plex sends a webhook, the system uses the matching library profile or falls back to the Default profile.</span>
+                        <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;">
+                            <label class="set-chk"><input type="checkbox" id="setAutoStartQueue"> Auto-start queue on restart</label>
+                            <label class="set-chk" style="color:orange;font-weight:600;"><input type="checkbox" id="setTestMode"> Test mode (5 min encodes)</label>
                         </div>
                     </div>
-                    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
-                        <div class="set-section-title" style="font-size:14px;">Service</div>
-                        <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+
+                    <!-- Plex -->
+                    <div style="padding-top:16px;border-top:1px solid var(--border);margin-bottom:20px;">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:6px;">Plex Integration</div>
+                        <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+                            <span id="setPlexTokenStatus"></span>
+                            Webhook: <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;font-size:11px;">http://&lt;server&gt;:9877/api/plex-webhook</code>
+                            <span style="color:var(--text-muted);"> &mdash; Add in Plex &rarr; Settings &rarr; Webhooks. Uses matching library profile or Default.</span>
+                        </div>
+                    </div>
+
+                    <!-- Service -->
+                    <div style="padding-top:16px;border-top:1px solid var(--border);">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Service</div>
+                        <div style="display:flex;align-items:center;gap:12px;">
                             <button class="btn btn-danger btn-sm" style="font-size:12px;" onclick="restartService(this)">Restart Service</button>
-                            <span style="font-size:11px;color:var(--text-muted);" id="restartStatus">Restarts the Recode server. Active encodes will be interrupted and re-queued.</span>
+                            <span style="font-size:11px;color:var(--text-muted);" id="restartStatus">Active encodes will be interrupted and re-queued.</span>
                         </div>
                     </div>
                 </div>
 
             </div>
         </div>
-        <div class="modal-footer">
-            <button class="btn" onclick="closeSettings()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+        <div class="modal-footer" style="display:flex;align-items:center;justify-content:space-between;">
+            <span id="settingsUnsaved" style="font-size:11px;color:var(--warning);display:none;">Unsaved changes</span>
+            <div style="display:flex;gap:8px;margin-left:auto;">
+                <button class="btn" onclick="closeSettings()">Close</button>
+                <button class="btn btn-primary" id="btnSaveSettings" onclick="saveSettings()">Save Settings</button>
+            </div>
         </div>
     </div>
 </div>
@@ -2283,8 +2360,19 @@ let reconnectDelay = 1000;
 function connectWs() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.onopen = () => { state.connected = true; reconnectDelay = 1000; document.getElementById('dotWs').className = 'dot ok'; };
-    ws.onclose = () => { state.connected = false; document.getElementById('dotWs').className = 'dot err'; setTimeout(connectWs, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 10000); };
+    ws.onopen = () => {
+        state.connected = true; reconnectDelay = 1000;
+        document.getElementById('dotWs').className = 'dot ok';
+        const vBadge = document.getElementById('appVersionBadge');
+        if (vBadge && vBadge._wasRestarting) { vBadge.textContent = vBadge._savedVersion || ''; vBadge.style.color = ''; vBadge._wasRestarting = false; }
+    };
+    ws.onclose = () => {
+        state.connected = false;
+        document.getElementById('dotWs').className = 'dot err';
+        const vBadge = document.getElementById('appVersionBadge');
+        if (vBadge) { vBadge._savedVersion = vBadge._savedVersion || vBadge.textContent; vBadge._wasRestarting = true; vBadge.textContent = 'restarting...'; vBadge.style.color = 'var(--warning)'; }
+        setTimeout(connectWs, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+    };
     ws.onerror = () => ws.close();
     ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
 }
@@ -2326,6 +2414,17 @@ async function checkSystem() {
         state.system = await res.json();
         document.getElementById('dotFfmpeg').className = state.system.ffmpeg ? 'dot ok' : 'dot err';
         document.getElementById('dotGpu').className = state.system.gpu ? 'dot ok' : 'dot err';
+        // GPU Server indicator
+        fetch('/api/ffmpeg-server/status').then(r => r.json()).then(d => {
+            const wrap = document.getElementById('dotGpuServerWrap');
+            const dot = document.getElementById('dotGpuServer');
+            if (d.enabled) {
+                if (wrap) wrap.style.display = '';
+                if (dot) dot.className = d.running ? 'dot ok' : 'dot err';
+            } else {
+                if (wrap) wrap.style.display = 'none';
+            }
+        }).catch(() => {});
         // Show version in header
         const verEl = document.getElementById('appVersion');
         if (state.system.version) {
@@ -2335,26 +2434,26 @@ async function checkSystem() {
             const aboutVer = document.getElementById('aboutVersion');
             if (aboutVer) aboutVer.textContent = `v${state.system.version}`;
         }
-        // Populate GPU selector — only if GPU is actually working
-        const gpuSel = document.getElementById('selGpuId');
+        // Populate GPU target selector
+        const gpuTargetSel = document.getElementById('selGpuTarget');
         const gpuCnt = state.system.gpu ? (state.system.gpu_count || 0) : 0;
         const encoderSel = document.getElementById('selEncoder');
-        if (gpuCnt > 0) {
-            if (gpuSel && gpuSel.options.length <= 1) {
-                for (let i = 0; i < gpuCnt; i++) gpuSel.add(new Option('GPU ' + i, String(i)));
-            }
-            document.getElementById('gpuSelectRow').style.display = encoderSel.value === 'gpu' ? 'flex' : 'none';
-        } else {
-            // No working GPU — force CPU, hide GPU options
-            document.getElementById('gpuSelectRow').style.display = 'none';
+        if (gpuTargetSel && !gpuTargetSel._populated) {
+            populateGpuTargets(gpuTargetSel, gpuCnt);
+        }
+        // No local GPU and no remote servers — disable GPU option
+        const hasRemote = (state.settings?.remote_gpu_servers || []).length > 0;
+        if (gpuCnt === 0 && !hasRemote) {
             if (encoderSel) {
-                encoderSel.value = 'cpu';
-                // Disable GPU option
                 for (const opt of encoderSel.options) {
                     if (opt.value === 'gpu') opt.disabled = true;
                 }
+                if (encoderSel.value === 'gpu') encoderSel.value = 'cpu';
             }
         }
+        // Show/hide target row
+        const gpuRow = document.getElementById('gpuSelectRow');
+        if (gpuRow) gpuRow.style.display = encoderSel.value === 'gpu' ? 'flex' : 'none';
         // Disable DV P8.4 option if libplacebo is not available
         const hasLibplacebo = state.system.ffmpeg_libplacebo;
         document.querySelectorAll('#selDvMode option, #setDvMode option').forEach(opt => {
@@ -2408,8 +2507,10 @@ function getSettings() {
         cq: parseInt(document.getElementById('inpCq').value) || 24,
         maxbitrate: document.getElementById('inpBitrate').value + 'M',
         speed: 'p' + (document.getElementById('inpSpeed').value || '5'),
+        encoder: document.getElementById('selEncoder').value,
         use_cpu: document.getElementById('selEncoder').value === 'cpu',
-        gpu_id: document.getElementById('selGpuId').value,
+        gpu_target: document.getElementById('selGpuTarget').value,
+        gpu_id: document.getElementById('selGpuTarget').value,
         video_codec: document.getElementById('selVideoCodec').value || 'hevc',
         dv_mode: document.getElementById('selDvMode').value,
         resize: document.getElementById('selResize').value,
@@ -2600,6 +2701,18 @@ function renderScanResults() {
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function cleanRes(r) { r = (r || '').replace(/\s*\(.*\)/, ''); if (r === '2160p') return '4K'; if (r === '2K') return '1440p'; if (/^\d+x\d+$/.test(r)) return 'SD'; return r; }
+function getHwLabel(s) {
+    if (s.use_cpu) return 'CPU';
+    const ri = s._remote_server_idx;
+    if (ri != null && ri >= 0) {
+        const servers = state.settings?.remote_gpu_servers || [];
+        const name = (ri < servers.length) ? servers[ri].name : '';
+        return 'Remote: ' + (name || 'GPU ' + ri);
+    }
+    const gid = s.gpu_id;
+    if (gid != null && gid !== 'auto' && gid !== '-1' && gid !== -1) return 'GPU ' + gid;
+    return 'GPU';
+}
 function buildOutputFilename(fileInfo, settings) {
     const stem = fileInfo.filename.replace(/\.[^.]+$/, '');
     const codec = (settings.video_codec || 'hevc') === 'hevc' ? 'h265' : 'h264';
@@ -2941,7 +3054,7 @@ function renderQueue() {
         const vc = job.settings.video_codec || 'hevc';
         const vcLabel = vc === 'h264' ? 'H.264' : 'HEVC';
         const gpuId = job.settings.gpu_id;
-        const hwLabel = job.settings.use_cpu ? 'CPU' : (gpuId != null && gpuId !== 'auto' ? 'GPU ' + gpuId : 'GPU');
+        const hwLabel = getHwLabel(job.settings);
         const dm = job.settings.dv_mode || 'skip';
         const isDv = (f.hdr_type||'').startsWith('Dolby Vision');
         const origHdr = isDv ? (f.hdr_type||'').replace('Dolby Vision', 'DV') : (f.hdr_type||'SDR');
@@ -3046,7 +3159,7 @@ function renderEncoding() {
             const p = job.progress || {};
             const vc = job.settings.video_codec || 'hevc';
             const vcLabel = vc === 'h264' ? 'H.264' : 'HEVC';
-            const hwLabel = job.settings.use_cpu ? 'CPU' : 'GPU';
+            const hwLabel = getHwLabel(job.settings);
             const encoder = `${hwLabel} ${vcLabel}`;
             const acfg = job.settings.audio_config || [];
             let audioDetail = '';
@@ -3087,7 +3200,7 @@ function renderEncoding() {
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                         <span class="expand-arrow" id="jobarr-${job.id}" style="transition:transform 0.2s;display:inline-flex;${isOpen ? 'transform:rotate(90deg);' : ''}">${svgIcon('chevron-right', 12)}</span>
                         <span class="badge badge-sm badge-hdr">Recode</span>
-                        <span class="badge badge-sm badge-codec">${job.settings.use_cpu ? 'CPU' : 'GPU ' + (job.settings.gpu_id ?? 0)}</span>
+                        <span class="badge badge-sm badge-codec">${getHwLabel(job.settings)}</span>
                         <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(f.path)}">${escHtml(f.filename)}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySize-${job.id}">${f.size_human} → ${curSize}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummaryPct-${job.id}">${p.pct||0}%</span>
@@ -3135,7 +3248,7 @@ function renderEncoding() {
                             <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;margin-bottom:4px;">Encoding</div>
                             <div style="font-weight:600;" id="encDetSize-${job.id}">${curSize}</div>
                             <div>${(() => {
-                                const enc = s.use_cpu ? 'CPU' : 'GPU ' + (s.gpu_id ?? 0);
+                                const enc = getHwLabel(s);
                                 const dm = s.dv_mode || 'skip';
                                 const isDv = (f.hdr_type||'').startsWith('Dolby Vision');
                                 const tgtHdr = (dm === 'encode_dv' && (isDv || f.hdr_type === 'HDR10')) ? 'Dolby Vision P8.4' : (dm === 'hdr10' && isDv) ? 'HDR10' : f.hdr_type;
@@ -3319,9 +3432,9 @@ function drawGraphs(data) {
             const tempStr = lastTemp > 0 ? ` &nbsp; Temp: ${lastTemp}&deg;C` : '';
             const memStr = gi.mem_total ? ` &nbsp; VRAM: ${(gi.mem_used/1024).toFixed(1)}/${(gi.mem_total/1024).toFixed(1)} GB` : '';
             if (isCompact) {
-                gpuLabel.innerHTML = `GPU 0 &nbsp; ${gpuPts[gpuPts.length - 1].v}%`;
+                gpuLabel.innerHTML = `GPU0 ${gpuPts[gpuPts.length - 1].v}%`;
             } else {
-                gpuLabel.innerHTML = `GPU 0: ${gpuName} &nbsp; ${gpuPts[gpuPts.length - 1].v}%${tempStr}${memStr}`;
+                gpuLabel.innerHTML = `GPU0 ${gpuPts[gpuPts.length - 1].v}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gi.mem_total ? (gi.mem_used/1024).toFixed(1) + '/' + (gi.mem_total/1024).toFixed(1) + 'G' : ''}`;
             }
         }
         const memPctPts = (perGpu['0'] || {}).mem_pct || [];
@@ -3333,8 +3446,8 @@ function drawGraphs(data) {
             container.innerHTML = '';
             for (let i = 0; i < gpuCount; i++) {
                 const div = document.createElement('div');
-                div.style.cssText = 'flex:1;';
-                div.innerHTML = `<div id="gpuLabel${i}" style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;">GPU ${i}: 0% &nbsp; Temp: 0&deg;C</div>
+                div.style.cssText = 'flex:1;min-width:0;';
+                div.innerHTML = `<div id="gpuLabel${i}" style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">GPU ${i}: 0% &nbsp; Temp: 0&deg;C</div>
                     <canvas id="gpuGraph${i}" width="400" height="80" style="width:100%;height:80px;background:var(--bg-secondary);border-radius:4px;"></canvas>`;
                 container.appendChild(div);
             }
@@ -3352,9 +3465,9 @@ function drawGraphs(data) {
                     const tempStr = lastTemp > 0 ? ` &nbsp; Temp: ${lastTemp}&deg;C` : '';
                     const memStr = gd.mem_total ? ` &nbsp; VRAM: ${(gd.mem_used/1024).toFixed(1)}/${(gd.mem_total/1024).toFixed(1)} GB` : '';
                     if (isCompact) {
-                        lbl.innerHTML = `GPU ${i} &nbsp; ${lastUtil}%`;
+                        lbl.innerHTML = `GPU${i} ${lastUtil}%`;
                     } else {
-                        lbl.innerHTML = `GPU ${i}: ${gpuName} &nbsp; ${lastUtil}%${tempStr}${memStr}`;
+                        lbl.innerHTML = `GPU${i} ${lastUtil}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gd.mem_total ? (gd.mem_used/1024).toFixed(1) + '/' + (gd.mem_total/1024).toFixed(1) + 'G' : ''}`;
                     }
                 }
             }
@@ -3624,10 +3737,10 @@ function renderHistory() {
         const rspd = s.resolved_speed || s.speed || '?';
         const vcLabel = (s.video_codec || 'hevc') === 'h264' ? 'H.264' : 'HEVC';
         const hGpuId = s.gpu_id;
-        const encoderLabel = (s.use_cpu ? 'CPU' : (hGpuId != null && hGpuId !== 'auto' ? 'GPU ' + hGpuId : 'GPU')) + ' ' + vcLabel;
+        const encoderLabel = getHwLabel(s) + ' ' + vcLabel;
 
         let detailHtml = `<span class="badge badge-sm ${badgeClass}">${statusText}</span>`;
-        detailHtml += ` <span class="badge badge-sm badge-codec">${s.use_cpu ? 'CPU' : (hGpuId != null && hGpuId !== 'auto' ? 'GPU ' + hGpuId : 'GPU')}</span>`;
+        detailHtml += ` <span class="badge badge-sm badge-codec">${getHwLabel(s)}</span>`;
         detailHtml += ` <span class="badge badge-sm badge-sdr">${presetLabel}</span>`;
         detailHtml += ` <span class="badge badge-sm badge-audio">CQ${rcq}</span>`;
         detailHtml += ` <span class="badge badge-sm badge-res">${rbit}</span>`;
@@ -3661,7 +3774,7 @@ function renderHistory() {
         const hdm = s.dv_mode || 'skip';
         const hisDv = (f.hdr_type||'').startsWith('Dolby Vision');
         const hisTargetHdr = (hdm === 'encode_dv' && (hisDv || f.hdr_type === 'HDR10')) ? 'Dolby Vision P8.4' : (hdm === 'hdr10' && hisDv) ? 'HDR10' : (f.hdr_type||'SDR');
-        const hisEnc = s.use_cpu ? 'CPU' : 'GPU';
+        const hisEnc = getHwLabel(s);
         const hisTgtRes = (s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label || '?');
         const hisAudioCodec = s.audio_codec === 'copy' ? 'Passthrough' : (s.audio_codec || 'auto').replace('lib','');
         const encDetails = r.new_size ? `
@@ -4354,6 +4467,18 @@ async function openSettings() {
         document.getElementById('setPreset').value = s.preset || 'auto';
         document.getElementById('setVideoCodec').value = s.video_codec || 'hevc';
         document.getElementById('setEncoder').value = s.encoder || 'gpu';
+        // Populate GPU target in default profile
+        const setTgtSel = document.getElementById('setGpuTarget');
+        if (setTgtSel) {
+            const gpuCnt = (state.system?.gpu_count) || 0;
+            setTgtSel.innerHTML = '<option value="auto">Auto</option>';
+            if (gpuCnt > 1) setTgtSel.add(new Option('All Local', 'local'));
+            for (let i = 0; i < gpuCnt; i++) setTgtSel.add(new Option('Local GPU ' + i, 'gpu:' + i));
+            const remotes = s.remote_gpu_servers || [];
+            if (remotes.length > 1) setTgtSel.add(new Option('All Remote', 'remote'));
+            remotes.forEach((srv, i) => { if (srv.enabled !== false) setTgtSel.add(new Option('Remote: ' + (srv.name || srv.address), 'remote:' + i)); });
+            if (s.gpu_target) setTgtSel.value = s.gpu_target;
+        }
         const setCqVal = s.cq || 24;
         document.getElementById('setCq').value = setCqVal;
         document.getElementById('setCqVal').textContent = setCqVal;
@@ -4373,6 +4498,26 @@ async function openSettings() {
         document.getElementById('setEnglishOnly').checked = !!s.english_only;
         document.getElementById('setTestMode').checked = !!s.test_mode;
         document.getElementById('setEncodeSuffix').value = s.encode_suffix || '';
+        // Remote GPU servers
+        window._remoteGpuServers = s.remote_gpu_servers || [];
+        renderRemoteGpuServers();
+        // GPU Server mode
+        document.getElementById('setFfmpegServerEnabled').checked = !!s.ffmpeg_server_enabled;
+        document.getElementById('setFfmpegServerPort').value = s.ffmpeg_server_port || 5050;
+        document.getElementById('setFfmpegServerSecret').value = s.ffmpeg_server_secret || '';
+        // Check server status
+        fetch('/api/ffmpeg-server/status').then(r => r.json()).then(d => {
+            const el = document.getElementById('ffmpegServerStatus');
+            if (el) {
+                if (d.running) {
+                    el.innerHTML = '<span style="color:var(--success);">Server running on port ' + d.port + '</span>';
+                } else if (d.enabled) {
+                    el.innerHTML = '<span style="color:var(--error);">Server enabled but not running</span>';
+                } else {
+                    el.textContent = 'Server disabled';
+                }
+            }
+        }).catch(() => {});
         // General
         document.getElementById('setAllowedPaths').value = (s.allowed_paths || ['/mnt']).join(', ');
         document.getElementById('setTmpDir').value = s.tmp_dir || '/var/lib/plex/tmp';
@@ -4401,7 +4546,7 @@ async function openSettings() {
         libraryProfiles = s.library_profiles || {};
         // Backfill missing keys in existing profiles so webhooks/folder-watch use correct values
         const profileDefaults = {
-            preset: 'auto', video_codec: 'hevc', encoder: 'gpu', resize: 'original',
+            preset: 'auto', video_codec: 'hevc', encoder: 'gpu', gpu_target: 'auto', resize: 'original',
             speed: 'p5', cq: 24, maxbitrate: '20M',
             audio_filter: 'all', audio_codec: s.audio_codec || 'libopus', audio_bitrate: s.audio_bitrate || '448k',
             skip_4k: false, hdr_only: false, dv_mode: 'skip',
@@ -4419,6 +4564,24 @@ async function openSettings() {
     onSettingsPresetChange();
     document.getElementById('settingsModal').classList.add('open');
     loadProfileSuggestions();
+    // Track unsaved changes
+    window._settingsDirty = false;
+    const unsaved = document.getElementById('settingsUnsaved');
+    if (unsaved) unsaved.style.display = 'none';
+    const modal = document.getElementById('settingsModal');
+    if (!modal._changeListenerAdded) {
+        modal.addEventListener('input', () => { markSettingsDirty(); });
+        modal.addEventListener('change', () => { markSettingsDirty(); });
+        modal._changeListenerAdded = true;
+    }
+}
+
+function markSettingsDirty() {
+    window._settingsDirty = true;
+    const unsaved = document.getElementById('settingsUnsaved');
+    if (unsaved) unsaved.style.display = '';
+    const btn = document.getElementById('btnSaveSettings');
+    if (btn && btn.textContent === 'Saved') { btn.textContent = 'Save Settings'; btn.style.background = ''; }
 }
 
 function switchSettingsTab(name, el) {
@@ -4427,6 +4590,7 @@ function switchSettingsTab(name, el) {
     if (el) el.classList.add('active');
     const tab = document.getElementById('setTab-' + name);
     if (tab) tab.classList.add('active');
+    if (name === 'remote-gpu') checkAllRemoteServers();
 }
 
 function switchHelpTab(name, el) {
@@ -4486,6 +4650,130 @@ async function loadAboutSystemInfo() {
     } catch(e) {
         container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Failed to load system info.</div>';
     }
+}
+
+// GPU target population with remote server status check
+async function populateGpuTargets(sel, localGpuCount) {
+    const savedVal = sel.value;
+    sel.innerHTML = '<option value="auto">Auto (least loaded)</option>';
+    // Local GPUs
+    if (localGpuCount > 1) sel.add(new Option('All Local GPUs', 'local'));
+    for (let i = 0; i < localGpuCount; i++) sel.add(new Option('Local GPU ' + i, 'gpu:' + i));
+    // Check remote servers
+    const remoteServers = (state.settings?.remote_gpu_servers || []).filter(s => s.enabled !== false);
+    if (remoteServers.length > 0) {
+        if (remoteServers.length > 1) sel.add(new Option('All Remote GPUs', 'remote'));
+        // Add enabled remote servers as "checking..."
+        remoteServers.forEach((srv, i) => {
+            // Find original index in full server list
+            const origIdx = (state.settings?.remote_gpu_servers || []).indexOf(srv);
+            const opt = new Option('Remote: ' + (srv.name || srv.address) + ' (checking...)', 'remote:' + origIdx);
+            opt.id = 'gpuTarget_remote_' + origIdx;
+            sel.add(opt);
+        });
+        // Check online status async
+        try {
+            const r = await fetch('/api/remote-gpu/status');
+            const data = await r.json();
+            for (const srv of (data.servers || [])) {
+                const opt = document.getElementById('gpuTarget_remote_' + srv.index);
+                if (opt) {
+                    if (srv.online) {
+                        opt.textContent = 'Remote: ' + srv.name + ' (online)';
+                        opt.style.color = '';
+                    } else {
+                        opt.textContent = 'Remote: ' + srv.name + ' (offline)';
+                        opt.disabled = true;
+                        opt.style.color = 'var(--error)';
+                    }
+                }
+            }
+        } catch(e) {}
+    }
+    // Restore selection if still valid
+    if (savedVal) {
+        for (const opt of sel.options) {
+            if (opt.value === savedVal) { sel.value = savedVal; break; }
+        }
+    }
+    sel._populated = true;
+}
+
+// Remote GPU server management
+window._remoteGpuServers = [];
+function renderRemoteGpuServers() {
+    const container = document.getElementById('remoteGpuServersList');
+    if (!container) return;
+    const servers = window._remoteGpuServers;
+    if (!servers.length) {
+        container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0;">No remote servers configured.</div>';
+        return;
+    }
+    let html = `<div style="display:grid;grid-template-columns:auto 1fr 1.5fr 1fr auto;gap:8px 8px;padding:0 10px;margin-bottom:4px;">
+        <span></span><label style="font-size:11px;">Name</label><label style="font-size:11px;">Address</label><label style="font-size:11px;">Secret</label><span></span>
+    </div>`;
+    servers.forEach((srv, i) => {
+        const disabled = srv.enabled === false;
+        const statusId = 'rgs-status-' + i;
+        html += `<div style="display:grid;grid-template-columns:auto 1fr 1.5fr 1fr auto;gap:8px;align-items:center;margin-bottom:4px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
+            <input type="checkbox" ${disabled ? '' : 'checked'} title="${disabled ? 'Enable' : 'Disable'} server" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;" onchange="window._remoteGpuServers[${i}].enabled=this.checked;renderRemoteGpuServers();">
+            <input type="text" value="${escHtml(srv.name || '')}" placeholder="Server name" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].name=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'">
+            <input type="text" value="${escHtml(srv.address || '')}" placeholder="192.168.1.100:5050" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].address=this.value" oninput="const v=this.value.trim();const ok=/^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$/.test(v)||/^\\[[\\da-fA-F:]+\\]:\\d{1,5}$/.test(v)||/^[\\w.-]+:\\d{1,5}$/.test(v);this.style.borderColor=(!v||ok)?'':'var(--error)'">
+            <input type="text" value="${escHtml(srv.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].secret=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'">
+            <div style="display:flex;gap:6px;align-items:center;">
+                <span id="${statusId}" class="badge badge-sm" style="font-size:10px;min-width:44px;text-align:center;${disabled ? 'background:rgba(139,148,158,0.15);color:var(--text-muted);' : ''}">${disabled ? 'disabled' : ''}</span>
+                <button class="btn btn-danger btn-sm" style="padding:7px 10px;" onclick="window._remoteGpuServers.splice(${i},1);renderRemoteGpuServers();">Remove</button>
+            </div>
+        </div>`;
+    });
+    container.innerHTML = html;
+}
+async function checkAllRemoteServers() {
+    const servers = window._remoteGpuServers || [];
+    if (!servers.length) return;
+    // Show checking state for enabled servers
+    servers.forEach((srv, i) => {
+        const el = document.getElementById('rgs-status-' + i);
+        if (el && srv.enabled !== false) {
+            el.textContent = '...';
+            el.className = 'badge badge-sm';
+            el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;background:rgba(139,148,158,0.15);color:var(--text-muted);';
+        }
+    });
+    try {
+        // Save only valid servers before checking
+        const validServers = servers.filter(s => s.name?.trim() && s.address?.trim() && s.secret?.trim());
+        if (validServers.length > 0) {
+            await fetch('/api/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({remote_gpu_servers: validServers}),
+            });
+        }
+        const r = await fetch('/api/remote-gpu/status');
+        const data = await r.json();
+        for (const srv of (data.servers || [])) {
+            const el = document.getElementById('rgs-status-' + srv.index);
+            if (!el) continue;
+            if (window._remoteGpuServers[srv.index]?.enabled === false) {
+                el.textContent = 'disabled';
+                el.className = 'badge badge-sm';
+                el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;background:rgba(139,148,158,0.15);color:var(--text-muted);';
+            } else if (srv.online) {
+                el.textContent = 'online';
+                el.className = 'badge badge-sm badge-done';
+                el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;';
+            } else {
+                el.textContent = 'offline';
+                el.className = 'badge badge-sm badge-fail';
+                el.style.cssText = 'font-size:10px;min-width:44px;text-align:center;';
+            }
+        }
+    } catch(e) {}
+}
+function addRemoteGpuServer() {
+    window._remoteGpuServers.push({name: '', address: '', secret: '', enabled: true});
+    renderRemoteGpuServers();
 }
 
 function onSettingsPresetChange() {
@@ -4651,6 +4939,7 @@ async function saveSettings() {
         preset: document.getElementById('setPreset').value,
         video_codec: document.getElementById('setVideoCodec').value || 'hevc',
         encoder: document.getElementById('setEncoder').value,
+        gpu_target: document.getElementById('setGpuTarget').value,
         cq: parseInt(document.getElementById('setCq').value) || 24,
         maxbitrate: document.getElementById('setMaxbitrate').value + 'M',
         speed: document.getElementById('setSpeed').value,
@@ -4680,13 +4969,28 @@ async function saveSettings() {
         watch_enabled: document.getElementById('setWatchEnabled').checked,
         watch_interval: parseInt(document.getElementById('setWatchInterval').value) || 300,
         watch_paths: document.getElementById('setWatchPaths').value.split('\n').map(s => s.trim()).filter(Boolean),
+        // Remote GPU — only save servers with all fields filled and valid address
+        remote_gpu_servers: (window._remoteGpuServers || []).filter(s => {
+            if (!s.name?.trim() || !s.address?.trim() || !s.secret?.trim()) return false;
+            const addr = s.address.trim();
+            // IPv4:port, IPv6:port (e.g. [::1]:5050), or hostname:port
+            if (!/^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$/.test(addr) &&
+                !/^\[[\da-fA-F:]+\]:\d{1,5}$/.test(addr) &&
+                !/^[\w.-]+:\d{1,5}$/.test(addr)) return false;
+            return true;
+        }),
+        ffmpeg_server_enabled: document.getElementById('setFfmpegServerEnabled').checked,
+        ffmpeg_server_port: parseInt(document.getElementById('setFfmpegServerPort').value) || 5050,
+        ffmpeg_server_secret: document.getElementById('setFfmpegServerSecret').value,
         // Library profiles
         library_profiles: libraryProfiles,
         // Theme
         theme: document.getElementById('setTheme').value,
     };
-    // Close modal immediately so user isn't blocked
-    closeSettings();
+    const btn = document.getElementById('btnSaveSettings');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
     try {
         const res = await fetch('/api/settings', {
             method: 'POST',
@@ -4696,10 +5000,22 @@ async function saveSettings() {
         const data = await res.json();
         if (data.ok) {
             applySettingsToSidebar(data.settings);
+            btn.textContent = 'Saved';
+            btn.style.background = 'var(--success)';
+            const unsaved = document.getElementById('settingsUnsaved');
+            if (unsaved) unsaved.style.display = 'none';
+            window._settingsDirty = false;
+            setTimeout(() => { btn.textContent = origText; btn.style.background = ''; btn.disabled = false; }, 1500);
         } else {
-            alert('Failed to save settings');
+            btn.textContent = 'Failed';
+            btn.style.background = 'var(--error)';
+            setTimeout(() => { btn.textContent = origText; btn.style.background = ''; btn.disabled = false; }, 2000);
         }
-    } catch(e) { alert('Error saving settings: ' + e.message); }
+    } catch(e) {
+        btn.textContent = 'Error';
+        btn.style.background = 'var(--error)';
+        setTimeout(() => { btn.textContent = origText; btn.style.background = ''; btn.disabled = false; }, 2000);
+    }
 }
 
 function applySettingsToSidebar(s) {
@@ -4707,9 +5023,11 @@ function applySettingsToSidebar(s) {
     document.getElementById('selPreset').value = s.preset || 'auto';
     onPresetChange();
     document.getElementById('selVideoCodec').value = s.video_codec || 'hevc';
-    document.getElementById('selEncoder').value = (s.encoder || 'gpu') === 'cpu' ? 'cpu' : 'gpu';
-    if (s.gpu_id != null) document.getElementById('selGpuId').value = String(s.gpu_id);
-    document.getElementById('gpuSelectRow').style.display = (s.encoder || 'gpu') === 'cpu' ? 'none' : 'flex';
+    document.getElementById('selEncoder').value = s.encoder || 'gpu';
+    const gpuTargetEl = document.getElementById('selGpuTarget');
+    if (gpuTargetEl && s.gpu_target) gpuTargetEl.value = s.gpu_target;
+    else if (gpuTargetEl && s.gpu_id != null) gpuTargetEl.value = s.gpu_id;
+    document.getElementById('gpuSelectRow').style.display = (s.encoder || 'gpu') === 'gpu' ? 'flex' : 'none';
     const cqVal = s.cq || 24;
     document.getElementById('inpCq').value = cqVal;
     document.getElementById('inpCqVal').textContent = cqVal;
@@ -5146,7 +5464,8 @@ function renderLibraryProfiles() {
                 <input type="text" value="${escHtml(lpath)}" style="flex:1;font-weight:600;" onchange="renameLibProfile(this, '${escHtml(lpath)}')" title="Library path">
                 <button class="btn btn-danger btn-sm" style="padding:7px 10px;" onclick="removeLibProfile('${escHtml(lpath)}')">Remove</button>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;">
+            <!-- Row 1: Preset, Video Codec, Hardware, GPU Target -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
                 <div class="form-group" style="margin:0;">
                     <label style="font-size:11px;">Preset</label>
                     <select onchange="updateLibProfile('${escHtml(lpath)}','preset',this.value);renderLibraryProfiles();" style="font-size:12px;">
@@ -5190,11 +5509,20 @@ function renderLibraryProfiles() {
                 </div>
                 <div class="form-group" style="margin:0;">
                     <label style="font-size:11px;">Hardware</label>
-                    <select onchange="updateLibProfile('${escHtml(lpath)}','encoder',this.value)" style="font-size:12px;">
-                        <option value="gpu" ${(p.encoder||'gpu')==='gpu'?'selected':''}>GPU (NVENC)</option>
+                    <select id="lp-encoder-${escHtml(lpath)}" onchange="updateLibProfile('${escHtml(lpath)}','encoder',this.value)" style="font-size:12px;">
+                        <option value="gpu" ${(p.encoder||'gpu')==='gpu'?'selected':''}>GPU (Hardware)</option>
                         <option value="cpu" ${p.encoder==='cpu'?'selected':''}>CPU (Software)</option>
                     </select>
                 </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:11px;">GPU Target</label>
+                    <select onchange="updateLibProfile('${escHtml(lpath)}','gpu_target',this.value)" style="font-size:12px;" id="lp-gputarget-${escHtml(lpath)}">
+                        <option value="auto" ${(p.gpu_target||'auto')==='auto'?'selected':''}>Auto</option>
+                    </select>
+                </div>
+            </div>
+            <!-- Row 2: Resolution, Speed, CQ, Bitrate -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
                 <div class="form-group" style="margin:0;">
                     <label style="font-size:11px;">Output Resolution</label>
                     <select onchange="updateLibProfile('${escHtml(lpath)}','resize',this.value)" style="font-size:12px;">
@@ -5218,8 +5546,6 @@ function renderLibraryProfiles() {
                         <option value="p7" ${p.speed==='p7'?'selected':''}>p7 (best quality)</option>
                     </select>
                 </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
                 <div class="form-group" style="margin:0;">
                     <label style="font-size:11px;">CQ: <span id="lpcq-${escHtml(lpath)}">${p.cq||24}</span></label>
                     <input type="range" min="1" max="50" value="${p.cq||24}" ${isCustom?'':'disabled'} oninput="document.getElementById('lpcq-${escHtml(lpath)}').textContent=this.value;" onchange="updateLibProfile('${escHtml(lpath)}','cq',parseInt(this.value))" style="font-size:12px;">
@@ -5229,9 +5555,10 @@ function renderLibraryProfiles() {
                     <input type="range" min="3" max="50" value="${parseInt(String(p.maxbitrate||'20M').replace(/M/i,''))||20}" ${isCustom?'':'disabled'} oninput="document.getElementById('lpbr-${escHtml(lpath)}').textContent=this.value;" onchange="updateLibProfile('${escHtml(lpath)}','maxbitrate',this.value+'M')" style="font-size:12px;">
                 </div>
             </div>
+            <!-- Row 3: Audio -->
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
                 <div class="form-group" style="margin:0;">
-                    <label style="font-size:11px;">Keep only audio type</label>
+                    <label style="font-size:11px;">Audio Filter</label>
                     <select onchange="updateLibProfile('${escHtml(lpath)}','audio_filter',this.value)" style="font-size:12px;">
                         <option value="all" ${(p.audio_filter||'all')==='all'?'selected':''}>All streams</option>
                         <option value="truehd" ${p.audio_filter==='truehd'?'selected':''}>TrueHD / Atmos only</option>
@@ -5256,31 +5583,43 @@ function renderLibraryProfiles() {
                     <label style="font-size:11px;">Audio Bitrate</label>
                     <select id="lp-abitrate-${escHtml(lpath)}" onchange="updateLibProfile('${escHtml(lpath)}','audio_bitrate',this.value)" style="font-size:12px;"></select>
                 </div>
-                <div></div>
-            </div>
-            <div class="set-checks-grid" style="margin-top:8px;">
-                <label class="set-chk" style="font-size:11px;"><input type="checkbox" ${p.skip_4k?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','skip_4k',this.checked)"> Skip 4K files<span class="set-desc">Don't encode 4K/UHD content</span></label>
-                <label class="set-chk" style="font-size:11px;"><input type="checkbox" ${p.hdr_only?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','hdr_only',this.checked)"> HDR only<span class="set-desc">Only encode HDR/DV content</span></label>
-                <div style="display:flex;align-items:center;gap:4px;font-size:11px;">
-                    <label>DV Mode</label>
-                    <select style="font-size:11px;" onchange="updateLibProfile('${escHtml(lpath)}','dv_mode',this.value)">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:11px;">Dolby Vision</label>
+                    <select style="font-size:12px;" onchange="updateLibProfile('${escHtml(lpath)}','dv_mode',this.value)">
                         <option value="skip" ${(p.dv_mode||'skip')==='skip'?'selected':''}>Skip</option>
                         <option value="hdr10" ${p.dv_mode==='hdr10'?'selected':''}>Convert to HDR10</option>
                         <option value="encode_dv" ${p.dv_mode==='encode_dv'?'selected':''}>Convert to DV P8.4</option>
                     </select>
                 </div>
-                <label class="set-chk" style="font-size:11px;"><input type="checkbox" ${p.discard_larger?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','discard_larger',this.checked)"> Discard if larger<span class="set-desc">Delete output if it's bigger than original</span></label>
-                <label class="set-chk" style="font-size:11px;color:var(--error);"><input type="checkbox" ${p.delete_original?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','delete_original',this.checked)"> Delete original<span class="set-desc">Remove source file after successful encode</span></label>
-                <label class="set-chk" style="font-size:11px;"><input type="checkbox" ${p.english_only?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','english_only',this.checked)"> English only<span class="set-desc">Drop non-English audio tracks</span></label>
+            </div>
+            <!-- Row 4: Checkboxes -->
+            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;font-size:11px;">
+                <label class="set-chk"><input type="checkbox" ${p.skip_4k?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','skip_4k',this.checked)"> Skip 4K</label>
+                <label class="set-chk"><input type="checkbox" ${p.hdr_only?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','hdr_only',this.checked)"> HDR only</label>
+                <label class="set-chk"><input type="checkbox" ${p.discard_larger?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','discard_larger',this.checked)"> Discard if larger</label>
+                <label class="set-chk" style="color:var(--error);"><input type="checkbox" ${p.delete_original?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','delete_original',this.checked)"> Delete original</label>
+                <label class="set-chk"><input type="checkbox" ${p.english_only?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','english_only',this.checked)"> English only</label>
             </div>
         </div>`;
     }
     container.innerHTML = html;
-    // Populate bitrate dropdowns after DOM insertion
+    // Populate bitrate and GPU target dropdowns after DOM insertion
     for (const lpath of paths) {
         const p = libraryProfiles[lpath];
         const brSel = document.getElementById('lp-abitrate-' + lpath);
         if (brSel) updateBitrateOptions(brSel, p.audio_codec || 'libopus', p.audio_bitrate || '448k');
+        // Populate GPU target dropdown
+        const tgtSel = document.getElementById('lp-gputarget-' + lpath);
+        if (tgtSel) {
+            const gpuCnt = state.system?.gpu_count || 0;
+            tgtSel.innerHTML = '<option value="auto">Auto</option>';
+            if (gpuCnt > 1) tgtSel.add(new Option('All Local', 'local'));
+            for (let i = 0; i < gpuCnt; i++) tgtSel.add(new Option('Local GPU ' + i, 'gpu:' + i));
+            const remotes = state.settings?.remote_gpu_servers || [];
+            if (remotes.length > 1) tgtSel.add(new Option('All Remote', 'remote'));
+            remotes.forEach((srv, i) => { if (srv.enabled !== false) tgtSel.add(new Option('Remote: ' + (srv.name || srv.address), 'remote:' + i)); });
+            if (p.gpu_target) tgtSel.value = p.gpu_target;
+        }
     }
 }
 
@@ -5290,7 +5629,7 @@ function addLibraryProfile() {
     if (!path) { input.focus(); return; }
     if (libraryProfiles[path]) { input.focus(); return; }
     libraryProfiles[path] = {
-        preset: 'auto', video_codec: 'hevc', encoder: 'gpu', resize: 'original',
+        preset: 'auto', video_codec: 'hevc', encoder: 'gpu', gpu_target: 'auto', resize: 'original',
         speed: 'p5', cq: 24, maxbitrate: '20M',
         audio_filter: 'all', audio_codec: 'libopus', audio_bitrate: '448k',
         skip_4k: false, hdr_only: false, dv_mode: 'skip',
