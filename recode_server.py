@@ -58,9 +58,13 @@ import uvicorn
 # =============================================================================
 # Configuration & Constants
 # =============================================================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# When running from PyInstaller, __file__ points to a temp dir — use the working directory instead
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.getcwd()
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.14.6"
+VERSION = "2.14.7"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -232,7 +236,7 @@ def trigger_plex_rescan(section_key: str):
         log.error(f"Failed to trigger Plex rescan: {e}")
 
 # Webhook default encode settings
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 
 APP_DEFAULTS = {
     # Encode defaults (sidebar)
