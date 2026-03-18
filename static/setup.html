@@ -1035,25 +1035,31 @@ async function saveSetup() {
         });
         const data = await res.json();
         if (data.ok) {
-            btn.textContent = 'Restarting server...';
-            btn.style.background = 'var(--green)';
-            // Server restarts — wait for it to go down, then come back up
+            // Show full-page restart message (same style as reboot)
+            document.body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#c9d1d9;background:#0d1117;text-align:center;padding:20px;">
+                <div>
+                    <h2>Setup Complete!</h2>
+                    <p style="color:#8b949e;margin-top:12px;">Server is restarting with your settings...</p>
+                    <p style="color:#8b949e;margin-top:8px;" id="restartStatus">Waiting for server...</p>
+                </div>
+            </div>`;
+            // Wait then poll for server to come back
             setTimeout(() => {
-                let serverWentDown = false;
                 const check = setInterval(async () => {
                     try {
-                        const r = await fetch('/api/system/check', {signal: AbortSignal.timeout(3000)});
-                        if (r.ok && serverWentDown) {
-                            // Server is back up after going down — redirect
+                        const r = await fetch('/api/system/check');
+                        if (r.ok) {
                             clearInterval(check);
-                            window.location.href = '/';
+                            const el = document.getElementById('restartStatus');
+                            if (el) el.textContent = 'Redirecting...';
+                            setTimeout(() => { window.location.href = '/'; }, 500);
                         }
                     } catch(e) {
-                        // Server is down — this is expected during restart
-                        serverWentDown = true;
+                        const el = document.getElementById('restartStatus');
+                        if (el) el.textContent = 'Restarting...';
                     }
                 }, 2000);
-            }, 2000);
+            }, 3000);
         } else {
             btn.textContent = 'Error — try again';
             btn.disabled = false;

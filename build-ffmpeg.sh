@@ -310,11 +310,12 @@ ldconfig
 log "ffmpeg installed to ${INSTALL_PREFIX}/bin/ffmpeg"
 ${INSTALL_PREFIX}/bin/ffmpeg -version | head -1
 
-# Symlink to app bin dir
+# Copy to app bin dir (self-contained, no symlinks to /usr/local)
 mkdir -p "$APP_BIN"
 for binary in ffmpeg ffprobe; do
-    ln -sf "${INSTALL_PREFIX}/bin/${binary}" "${APP_BIN}/${binary}" 2>/dev/null || true
-    log "Linked ${binary} → ${APP_BIN}/"
+    cp -f "${INSTALL_PREFIX}/bin/${binary}" "${APP_BIN}/${binary}" 2>/dev/null || true
+    chmod 755 "${APP_BIN}/${binary}" 2>/dev/null || true
+    log "Installed ${binary} → ${APP_BIN}/"
 done
 
 echo ""
