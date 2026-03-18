@@ -34,6 +34,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 import shutil
@@ -59,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.12.2"
+VERSION = "2.13.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -2864,6 +2865,28 @@ app = FastAPI(title="Plex Re-Encoder")
 FIRST_RUN = not app_settings.get("setup_complete", False)
 
 
+def _get_cpu_name():
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+def _get_os_name():
+    try:
+        with open("/etc/os-release") as f:
+            pretty = ""
+            for line in f:
+                if line.startswith("PRETTY_NAME="):
+                    pretty = line.strip().split("=", 1)[1].strip('"')
+                    return pretty
+    except Exception:
+        pass
+    return ""
+
 @app.get("/api/setup/status")
 async def setup_status():
     """Check if first-run setup is needed."""
@@ -2959,6 +2982,35 @@ async def setup_status():
         except Exception:
             pass
 
+    # Get tool versions
+    def _get_version(bin_name, args=None, parse=None):
+        try:
+            path = _find_bin(bin_name)
+            if not path or not os.path.isfile(path):
+                return ""
+            cmd = [path] + (args or ["--version"])
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            out = (r.stdout + r.stderr).strip()
+            if parse:
+                return parse(out)
+            return out.split("\n")[0][:100]
+        except Exception:
+            return ""
+
+    ffmpeg_version = ""
+    if ffmpeg_found:
+        ffmpeg_version = _get_version("ffmpeg", ["-version"], lambda o: o.split("\n")[0].replace("ffmpeg version ", "").split(" ")[0] if o else "")
+    dovi_version = _get_version("dovi_tool", ["--version"], lambda o: o.replace("dovi_tool ", "").split("\n")[0] if o else "")
+    mkvmerge_version = _get_version("mkvmerge", ["--version"], lambda o: o.split("(")[0].replace("mkvmerge v", "v").strip() if o else "")
+    mediainfo_version = _get_version("mediainfo", ["--Version"], lambda o: o.replace("MediaInfoLib - v", "v").split("\n")[-1].strip() if o else "")
+    nvidia_driver_ver = ""
+    if has_gpu:
+        try:
+            r = subprocess.run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"], capture_output=True, text=True, timeout=5)
+            nvidia_driver_ver = r.stdout.strip().split("\n")[0] if r.returncode == 0 else ""
+        except Exception:
+            pass
+
     return {
         "first_run": FIRST_RUN,
         "version": VERSION,
@@ -2976,9 +3028,17 @@ async def setup_status():
         "has_dovi_tool": os.path.isfile(_find_bin("dovi_tool")),
         "has_mkvmerge": os.path.isfile(_find_bin("mkvmerge")),
         "hostname": HOSTNAME,
-        "cpu_name": "",
+        "cpu_name": _get_cpu_name(),
         "cpu_cores": psutil.cpu_count(logical=True) or 1,
         "ram_gb": round(psutil.virtual_memory().total / (1024**3), 1),
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "os_name": _get_os_name(),
+        "kernel": subprocess.run(["uname", "-r"], capture_output=True, text=True, timeout=5).stdout.strip() if shutil.which("uname") else "",
+        "ffmpeg_version": ffmpeg_version,
+        "dovi_version": dovi_version,
+        "mkvmerge_version": mkvmerge_version,
+        "mediainfo_version": mediainfo_version,
+        "nvidia_driver_version": nvidia_driver_ver,
     }
 
 
@@ -2996,15 +3056,17 @@ async def setup_complete(settings: dict):
     merged["_remove_sudoers_on_start"] = True
     save_settings(merged)
     async def _delayed_restart():
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
         # Create flag file — systemd path watcher triggers restart
         flag = os.path.join(BASE_DIR, ".restart-flag")
         try:
             with open(flag, "w") as f:
                 f.write("restart")
         except Exception:
-            # Fallback: just exit and let systemd Restart=always handle it
-            os._exit(1)
+            pass
+        # If path watcher doesn't trigger within 5 seconds, force exit
+        await asyncio.sleep(5)
+        os._exit(0)
     asyncio.create_task(_delayed_restart())
     return {"ok": True}
 
@@ -3544,14 +3606,23 @@ async def install_tool(tool: str):
                     raise RuntimeError("build-ffmpeg.sh not found")
                 bash_bin = "/usr/bin/bash" if os.path.exists("/usr/bin/bash") else "/bin/bash"
                 proc = await _run_sudo(bash_bin, build_script)
-                # Stream output line by line so the UI shows progress
-                async for line in proc.stdout:
-                    text = line.decode(errors="replace").rstrip()
-                    if text:
-                        _install_tasks[tool]["log"] += text + "\n"
-                        # Keep last 5000 chars to avoid memory bloat
-                        if len(_install_tasks[tool]["log"]) > 5000:
-                            _install_tasks[tool]["log"] = "...\n" + _install_tasks[tool]["log"][-4500:]
+                # Read output in chunks to avoid blocking on partial lines
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=300)
+                    except asyncio.TimeoutError:
+                        # Build still running but no output for 5 min — check if process alive
+                        if proc.returncode is not None:
+                            break
+                        _install_tasks[tool]["log"] += "[still building...]\n"
+                        continue
+                    if not chunk:
+                        break
+                    text = chunk.decode(errors="replace")
+                    _install_tasks[tool]["log"] += text
+                    # Keep last 10000 chars to avoid memory bloat
+                    if len(_install_tasks[tool]["log"]) > 10000:
+                        _install_tasks[tool]["log"] = "...\n" + _install_tasks[tool]["log"][-9000:]
                 await proc.wait()
                 if proc.returncode != 0:
                     raise RuntimeError("ffmpeg build failed")

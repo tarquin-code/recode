@@ -79,29 +79,20 @@ WRAPPER
     rm -rf "$MKV_TMP"
 fi
 
-# Download static ffmpeg (CPU-only, works on any Linux x86_64)
-echo "Downloading static ffmpeg..."
-FFMPEG_TMP="/tmp/ffmpeg_dl"
-mkdir -p "$FFMPEG_TMP"
-FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-if curl -sL "$FFMPEG_URL" -o "${FFMPEG_TMP}/ffmpeg-static.tar.xz"; then
-    cd "$FFMPEG_TMP"
-    tar -xf ffmpeg-static.tar.xz
-    FFMPEG_DIR=$(find . -maxdepth 1 -type d -name "ffmpeg-*" | head -1)
-    if [[ -n "$FFMPEG_DIR" && -f "${FFMPEG_DIR}/ffmpeg" ]]; then
-        mkdir -p "${DIST_DIR}/plex-recode/bin/static"
-        cp "${FFMPEG_DIR}/ffmpeg" "${DIST_DIR}/plex-recode/bin/static/ffmpeg"
-        cp "${FFMPEG_DIR}/ffprobe" "${DIST_DIR}/plex-recode/bin/static/ffprobe"
-        chmod +x "${DIST_DIR}/plex-recode/bin/static/ffmpeg" "${DIST_DIR}/plex-recode/bin/static/ffprobe"
-        STATIC_VER=$("${DIST_DIR}/plex-recode/bin/static/ffmpeg" -version 2>/dev/null | head -1 || echo "unknown")
-        echo "  ffmpeg static bundled: ${STATIC_VER}"
-    else
-        echo "  WARNING: failed to extract static ffmpeg"
+# Bundle Jellyfin ffmpeg (pre-built with NVENC, libplacebo, Vulkan, libx265, etc.)
+echo "Bundling ffmpeg..."
+mkdir -p "${DIST_DIR}/plex-recode/bin"
+for binary in ffmpeg ffprobe; do
+    if [[ -f "/opt/Recode/bin/${binary}" && ! -L "/opt/Recode/bin/${binary}" ]]; then
+        cp "/opt/Recode/bin/${binary}" "${DIST_DIR}/plex-recode/bin/${binary}"
+        chmod +x "${DIST_DIR}/plex-recode/bin/${binary}"
     fi
-    cd /tmp
-    rm -rf "$FFMPEG_TMP"
+done
+if [[ -f "${DIST_DIR}/plex-recode/bin/ffmpeg" ]]; then
+    FFMPEG_VER=$("${DIST_DIR}/plex-recode/bin/ffmpeg" -version 2>/dev/null | head -1 || echo "unknown")
+    echo "  ffmpeg bundled: ${FFMPEG_VER}"
 else
-    echo "  WARNING: failed to download static ffmpeg"
+    echo "  WARNING: ffmpeg binary not found in /opt/Recode/bin/"
 fi
 
 # Create tarball

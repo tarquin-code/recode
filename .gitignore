@@ -8,3 +8,6 @@ scan_cache.db
 .claude/
 *.db-shm
 *.db-wal
+bin/ffmpeg
+bin/ffprobe
+bin/ffmpeg-over-ip-*
