@@ -1,5 +1,5 @@
 [workspace]
-members = ["rrp-proto", "rrp-client", "rrp-server", "rrp-app"]
+members = ["rrp-proto", "rrp-app"]
 resolver = "2"
 
 [workspace.dependencies]
