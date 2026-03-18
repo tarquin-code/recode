@@ -2,14 +2,12 @@
 # Package Plex Re-Encoder for distribution
 set -e
 
-# Read version from recode_server.py and increment patch
+# Read version from recode_server.py — use as-is (set version before running package.sh)
 VERSION=$(grep -oP 'VERSION = "\K[^"]+' /opt/Recode/recode_server.py)
 [[ -z "$VERSION" ]] && VERSION="0.0.0"
-IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-PATCH=$((PATCH + 1))
-VERSION="${MAJOR}.${MINOR}.${PATCH}"
-# Write new version back to recode_server.py
-sed -i "s/^VERSION = \".*\"/VERSION = \"${VERSION}\"/" /opt/Recode/recode_server.py
+
+# Sync version across all files
+sed -i "s|version-[0-9.]*-blue|version-${VERSION}-blue|" /opt/Recode/README.md
 
 DIST_DIR="/tmp/recode-dist"
 TARBALL="/tmp/plex-recode-v${VERSION}.tar.gz"

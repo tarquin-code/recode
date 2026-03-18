@@ -4,7 +4,7 @@ mod server;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "recode-remote", about = "Recode Remote Protocol — GPU encoding over TCP")]
+#[command(name = "recode-remote", version, about = "Recode Remote Protocol — GPU encoding over TCP")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

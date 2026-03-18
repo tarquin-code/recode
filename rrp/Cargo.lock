@@ -400,21 +400,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rrp-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "clap",
- "rrp-proto",
- "serde",
- "sha2",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "rrp-proto"
 version = "0.1.0"
 dependencies = [
@@ -424,24 +409,6 @@ dependencies = [
  "serde",
  "sha2",
  "tokio",
-]
-
-[[package]]
-name = "rrp-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "clap",
- "fuser",
- "libc",
- "rrp-proto",
- "serde",
- "sha2",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

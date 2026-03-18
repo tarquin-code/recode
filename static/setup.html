@@ -558,7 +558,7 @@ function renderSystemCheck() {
     html += checkItem('dovi_tool', s.has_dovi_tool, s.dovi_version || 'DV conversion ready', !s.has_dovi_tool ? 'dovi_tool' : null);
     html += checkItem('mkvmerge', s.has_mkvmerge, s.mkvmerge_version || 'MKV muxing ready', !s.has_mkvmerge ? 'mkvmerge' : null);
     html += checkItem('mediainfo', !!s.mediainfo_version, s.mediainfo_version || 'Not installed');
-    html += checkItem('Python', true, s.python_version || 'OK');
+    html += checkItem('RRP', !!s.rrp_version, s.rrp_version || 'Not found');
     html += '</div>';
     if (s.has_nvidia_hw && !s.has_gpu) {
         html += `<div class="warn-box" style="margin-top:12px;">
