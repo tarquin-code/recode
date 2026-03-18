@@ -1,8 +1,11 @@
 use anyhow::{Context, Result, bail};
+#[cfg(feature = "fuse")]
 use fuser::{Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
 use rrp_proto::*;
 use sha2::{Sha256, Digest};
+#[cfg(feature = "fuse")]
 use std::collections::HashMap;
+#[cfg(feature = "fuse")]
 use std::ffi::OsStr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,6 +17,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
+#[cfg(feature = "fuse")]
 const TTL: Duration = Duration::from_secs(3600);
 
 /// Removes the job directory on drop — guarantees cleanup on cancel, disconnect, or error.
@@ -21,15 +25,32 @@ struct CleanupGuard(PathBuf);
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         if self.0.exists() {
-            let mnt = self.0.join("mnt");
-            if mnt.exists() {
-                let _ = std::process::Command::new("fusermount3").args(["-u", &mnt.to_string_lossy()]).output();
-                let _ = std::process::Command::new("fusermount").args(["-u", &mnt.to_string_lossy()]).output();
+            #[cfg(feature = "fuse")]
+            {
+                let mnt = self.0.join("mnt");
+                if mnt.exists() {
+                    fuse_unmount(&mnt);
+                }
             }
             if let Err(e) = std::fs::remove_dir_all(&self.0) {
                 eprintln!("Cleanup failed for {:?}: {}", self.0, e);
             }
         }
+    }
+}
+
+#[cfg(feature = "fuse")]
+/// Platform-specific FUSE unmount
+fn fuse_unmount(path: &std::path::Path) {
+    let path_str = path.to_string_lossy();
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("fusermount3").args(["-u", path_str.as_ref()]).output();
+        let _ = std::process::Command::new("fusermount").args(["-u", path_str.as_ref()]).output();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("umount").args([path_str.as_ref()]).output();
     }
 }
 
@@ -78,7 +99,7 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
         _ => bail!("Expected Auth"),
     }
 
-    // Job (may be a ping — client disconnects after auth)
+    // Next message: GetInfo (ping with capabilities), SubmitJob, or disconnect
     let job: ControlMsg = match read_msg(&mut rx).await {
         Ok(msg) => msg,
         Err(_) => {
@@ -86,6 +107,18 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
             return Ok(());
         }
     };
+
+    // Handle GetInfo request (ping with capabilities)
+    if matches!(job, ControlMsg::GetInfo) {
+        let encoders = detect_encoders(ffmpeg);
+        let os = std::env::consts::OS.to_string();
+        let arch = std::env::consts::ARCH.to_string();
+        let has_fuse = cfg!(feature = "fuse");
+        info!("{}: info request — encoders: {:?}, {}/{}, fuse={}", peer, encoders, os, arch, has_fuse);
+        write_msg(&mut tx, &ControlMsg::ServerInfo { encoders, os, arch, has_fuse }).await?;
+        return Ok(());
+    }
+
     let (job_id, ffmpeg_args, input_files, _out_path, transfer_mode) = match job {
         ControlMsg::SubmitJob { job_id, ffmpeg_args, input_files, output_path, transfer_mode } =>
             (job_id, ffmpeg_args, input_files, output_path, transfer_mode),
@@ -106,9 +139,14 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
         peer.ip(), orig_input.replace('\\', "\\\\").replace('"', "\\\""), job_id);
     let _ = std::fs::write(&marker, &marker_json);
 
+    #[cfg(feature = "fuse")]
     let mount_dir = job_dir.join("mnt");
-    let _fuse_session: Option<()> = None;
 
+    // Determine effective transfer mode (fall back to Upload if FUSE not compiled in)
+    #[cfg(not(feature = "fuse"))]
+    let transfer_mode = TransferMode::Upload;
+
+    #[cfg(feature = "fuse")]
     if transfer_mode == TransferMode::Mount {
         // --- FUSE mode: mount files on-demand ---
         std::fs::create_dir_all(&mount_dir)?;
@@ -120,11 +158,12 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
         let mount_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mount_ok2 = mount_ok.clone();
         let fuse_handle = std::thread::spawn(move || {
-            let options = vec![
+            let mut options = vec![
                 MountOption::RO,
                 MountOption::FSName("rrp".into()),
-                MountOption::AllowOther,
             ];
+            #[cfg(target_os = "linux")]
+            options.push(MountOption::AllowOther);
             mount_ok2.store(true, std::sync::atomic::Ordering::SeqCst);
             if let Err(e) = fuser::mount2(fs, &mount_path, &options) {
                 mount_ok2.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -226,8 +265,7 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
         let status = child.wait().await?;
         let exit_code = status.code().unwrap_or(1);
 
-        let _ = std::process::Command::new("fusermount3").args(["-u", &mount_dir.to_string_lossy()]).output();
-        let _ = std::process::Command::new("fusermount").args(["-u", &mount_dir.to_string_lossy()]).output();
+        fuse_unmount(&mount_dir);
         let _ = fuse_handle.join();
 
         if exit_code == 0 && output_local.exists() {
@@ -389,6 +427,7 @@ fn rewrite_args(ffmpeg_args: &[String], input_files: &[FileInfo], input_dir: &Pa
 
 // ============ FUSE Filesystem ============
 
+#[cfg(feature = "fuse")]
 struct FuseReadRequest {
     file_idx: u32,
     offset: u64,
@@ -396,6 +435,7 @@ struct FuseReadRequest {
     resp_tx: std::sync::mpsc::Sender<Result<Vec<u8>, ()>>,
 }
 
+#[cfg(feature = "fuse")]
 struct RrpFuse {
     files: Vec<FileInfo>,
     inode_map: HashMap<u64, usize>,
@@ -403,6 +443,7 @@ struct RrpFuse {
     req_tx: tokio::sync::mpsc::Sender<FuseReadRequest>,
 }
 
+#[cfg(feature = "fuse")]
 impl RrpFuse {
     fn new(files: Vec<FileInfo>, req_tx: tokio::sync::mpsc::Sender<FuseReadRequest>) -> Self {
         let mut inode_map = HashMap::new();
@@ -429,6 +470,7 @@ impl RrpFuse {
     }
 }
 
+#[cfg(feature = "fuse")]
 fn dir_attr(ino: u64) -> fuser::FileAttr {
     fuser::FileAttr {
         ino, size: 0, blocks: 0,
@@ -439,6 +481,7 @@ fn dir_attr(ino: u64) -> fuser::FileAttr {
     }
 }
 
+#[cfg(feature = "fuse")]
 impl Filesystem for RrpFuse {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         if parent != 1 { reply.error(libc::ENOENT); return; }
@@ -520,4 +563,23 @@ fn extract_time(s: &str) -> Option<f64> {
     let p: Vec<&str> = t.split(':').collect();
     if p.len() == 3 { Some(p[0].parse::<f64>().ok()? * 3600.0 + p[1].parse::<f64>().ok()? * 60.0 + p[2].parse::<f64>().ok()?) }
     else { None }
+}
+
+/// Detect available HEVC encoders by probing the ffmpeg binary
+fn detect_encoders(ffmpeg: &str) -> Vec<String> {
+    let mut encoders = Vec::new();
+    if let Ok(output) = std::process::Command::new(ffmpeg)
+        .args(["-hide_banner", "-encoders"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("hevc_nvenc") { encoders.push("nvenc".into()); }
+        if stdout.contains("hevc_videotoolbox") { encoders.push("videotoolbox".into()); }
+        if stdout.contains("hevc_amf") { encoders.push("amf".into()); }
+        if stdout.contains("hevc_qsv") { encoders.push("qsv".into()); }
+        if stdout.contains("hevc_vaapi") { encoders.push("vaapi".into()); }
+        if stdout.contains("libx265") { encoders.push("cpu".into()); }
+    }
+    if encoders.is_empty() { encoders.push("cpu".into()); }
+    encoders
 }

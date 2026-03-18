@@ -137,6 +137,16 @@ if [[ -f "${DIST_DIR}/plex-recode/bin/ffmpeg" ]]; then
     echo "  ffmpeg version: ${FFMPEG_VER}"
 fi
 
+# Bundle macOS ARM64 binaries if available
+if [[ -d "/opt/Recode/bin/MacOS-arm64" ]]; then
+    echo "Bundling macOS ARM64 binaries..."
+    mkdir -p "${DIST_DIR}/plex-recode/macos"
+    cp -a /opt/Recode/bin/MacOS-arm64/* "${DIST_DIR}/plex-recode/macos/"
+    for f in "${DIST_DIR}/plex-recode/macos/"*; do
+        [[ -f "$f" ]] && chmod +x "$f" && echo "  $(basename "$f"): bundled ($(du -h "$f" | awk '{print $1}'))"
+    done
+fi
+
 # Create tarball
 cd "$DIST_DIR"
 tar -czf "$TARBALL" plex-recode/

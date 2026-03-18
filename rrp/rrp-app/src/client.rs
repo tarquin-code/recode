@@ -16,10 +16,24 @@ pub async fn run_ping() -> Result<()> {
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
     write_msg(&mut tx, &ControlMsg::Auth { timestamp: ts, hmac: generate_hmac(&server_secret, ts) }).await?;
     match read_msg::<ControlMsg, _>(&mut rx).await? {
-        ControlMsg::AuthOk => { eprintln!("OK"); std::process::exit(0); }
+        ControlMsg::AuthOk => {}
         ControlMsg::AuthFail(e) => { eprintln!("Auth failed: {}", e); std::process::exit(1); }
         _ => { eprintln!("Unexpected response"); std::process::exit(1); }
     }
+
+    // Request server info (encoder capabilities)
+    write_msg(&mut tx, &ControlMsg::GetInfo).await?;
+    match read_msg::<ControlMsg, _>(&mut rx).await {
+        Ok(ControlMsg::ServerInfo { encoders, os, arch, has_fuse }) => {
+            // Output: OK encoder1,encoder2 os/arch fuse=true/false
+            eprintln!("OK {} {}/{} fuse={}", encoders.join(","), os, arch, has_fuse);
+        }
+        _ => {
+            // Old server without GetInfo support — just report OK
+            eprintln!("OK");
+        }
+    }
+    std::process::exit(0);
 }
 
 pub async fn run_client(args: Vec<String>) -> Result<()> {
