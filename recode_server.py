@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.19.0"
+VERSION = "2.19.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -2539,7 +2539,28 @@ async def encode_worker(worker_id: int):
                     try:
                         import shutil
                         shutil.move(tmp_output, output_file)
-                        log.info(f"[{job.id}] Remote encode complete: {output_file}")
+                        log.info(f"[{job.id}] Remote encode complete: {output_file} ({new_bytes/1e9:.2f} GB)")
+                        saved_pct = round((1 - new_bytes / orig_bytes) * 100) if orig_bytes > 0 else 0
+                        action = "kept original"
+                        if settings.get("delete_original", False):
+                            try:
+                                os.remove(info["path"])
+                                action = "deleted original"
+                                log.info(f"[{job.id}] Deleted original: {info['path']}")
+                            except Exception as e:
+                                action = "failed to delete original"
+                                log.warning(f"[{job.id}] Failed to delete original: {e}")
+                        job.result = {
+                            "output_path": output_file,
+                            "orig_size": human_size(orig_bytes),
+                            "new_size": human_size(new_bytes),
+                            "orig_bytes": orig_bytes,
+                            "new_bytes": new_bytes,
+                            "saved_pct": saved_pct,
+                            "action": action,
+                            "larger": new_bytes >= orig_bytes,
+                        }
+                        log.info(f"[{job.id}] Remote encode complete: {output_file} ({human_size(new_bytes)}, saved {saved_pct}%)")
                         _finish_job(JobStatus.DONE, "")
                     except Exception as e:
                         log.error(f"[{job.id}] Failed to move output: {e}")
