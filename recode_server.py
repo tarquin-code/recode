@@ -2186,18 +2186,36 @@ async def encode_worker(worker_id: int):
                     else:
                         gpu_id = -1  # will try remote below
 
-                # If no local slot, try remote
+                # If no local slot, try remote (check listener connected GPUs first)
                 if gpu_id == -1 and not is_cpu_job:
-                    servers = app_settings.get("remote_gpu_servers", [])
-                    enabled_idxs = [i for i, s in enumerate(servers)
-                                    if s.get("enabled", True) is not False and s.get("_online", False)]
+                    _auto_connected = []
+                    try:
+                        _auto_lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+                        with open(_auto_lsf) as _f:
+                            _auto_connected = [g for g in json.load(_f).get("gpus", []) if g.get("online")]
+                    except Exception:
+                        pass
+                    if _auto_connected:
+                        servers = [{"max_jobs": g.get("max_jobs", 1), "name": g.get("name", f"GPU {i}")} for i, g in enumerate(_auto_connected)]
+                        enabled_idxs = list(range(len(servers)))
+                    else:
+                        servers = app_settings.get("remote_gpu_servers", [])
+                        enabled_idxs = [i for i, s in enumerate(servers)
+                                        if s.get("enabled", True) is not False and s.get("_online", False)]
+                    # Count remote loads by name
+                    name_loads = {}
+                    for j in encode_queue.active_jobs.values():
+                        gname = j.settings.get("_remote_gpu_name", "")
+                        if gname and not j.paused:
+                            name_loads[gname] = name_loads.get(gname, 0) + 1
                     available = [i for i in enabled_idxs
-                                 if remote_loads.get(i, 0) < servers[i].get("max_jobs", 1)]
+                                 if name_loads.get(servers[i]["name"], 0) < servers[i].get("max_jobs", 1)]
                     if available:
                         import random
-                        min_load = min(remote_loads.get(i, 0) for i in available)
-                        tied = [i for i in available if remote_loads.get(i, 0) == min_load]
+                        min_load = min(name_loads.get(servers[i]["name"], 0) for i in available)
+                        tied = [i for i in available if name_loads.get(servers[i]["name"], 0) == min_load]
                         remote_server_idx = random.choice(tied)
+                        next_job.settings["_remote_gpu_name"] = servers[remote_server_idx]["name"]
                         next_job.settings["encoder"] = "remote"
                     else:
                         # Nothing available — wait

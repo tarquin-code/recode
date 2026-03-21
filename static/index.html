@@ -4075,19 +4075,29 @@ function renderStatsGrid(p, startedAt) {
         <div class="stat-item"><div class="stat-label">Elapsed</div><div class="stat-value">${formatTime(elapsed)}</div></div>
         <div class="stat-item"><div class="stat-label">ETA</div><div class="stat-value eta">${formatTime(p.eta_secs||0)}</div></div>
         <div class="stat-item"><div class="stat-label">Speed</div><div class="stat-value speed">${p.speed||'—'}</div></div>
-        <div class="stat-item"><div class="stat-label">Bitrate</div><div class="stat-value bitrate">${formatBitrate(p.bitrate)}</div></div>
+        <div class="stat-item"><div class="stat-label">Bitrate</div><div class="stat-value bitrate">${formatBitrate(p.bitrate, p.output_size, p.current_time)}</div></div>
         <div class="stat-item"><div class="stat-label">Current Size</div><div class="stat-value">${p.output_size ? formatSize(p.output_size) : '—'}</div></div>
         <div class="stat-item"><div class="stat-label">Frame</div><div class="stat-value">${(p.frame||0).toLocaleString()}</div></div>
         <div class="stat-item"><div class="stat-label">Movie Time</div><div class="stat-value">${formatTime(p.current_time||0)} / ${formatTime(p.total_time||0)}</div></div>`;
 }
 
-function formatBitrate(raw) {
-    if (!raw || raw === '—') return '—';
-    // ffmpeg gives e.g. "8926.1kbits/s" — extract number
+function formatBitrate(raw, outputSize, timeSecs) {
+    if (!raw || raw === '—' || raw === 'N/A' || raw === '0kbits/s') {
+        // Estimate from output size and time if available
+        if (outputSize > 0 && timeSecs > 0) {
+            raw = ((outputSize * 8) / timeSecs / 1000).toFixed(1) + 'kbits/s';
+        } else {
+            return '—';
+        }
+    }
     const m = String(raw).match(/([\d.]+)/);
-    if (!m) return raw;
-    const val = parseFloat(m[1]);
-    return val.toFixed(1) + ' Kb/s';
+    if (!m) return '—';
+    let val = parseFloat(m[1]); // value in kbits/s
+    if (val <= 0) return '—';
+    if (val < 1) return (val * 1000).toFixed(0) + ' b/s';
+    if (val < 1000) return val.toFixed(1) + ' Kb/s';
+    if (val < 1000000) return (val / 1000).toFixed(2) + ' Mb/s';
+    return (val / 1000000).toFixed(2) + ' Gb/s';
 }
 
 function formatTime(secs) {
