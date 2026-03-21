@@ -1001,17 +1001,17 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <ul>
                     <li><strong>Auto Detection</strong> &mdash; Detects all NVIDIA GPUs with VRAM-based concurrency</li>
                     <li><strong>Auto Load-Balance</strong> &mdash; Distributes across all local GPUs and remote servers equally</li>
-                    <li><strong>Remote GPU (RRP)</strong> &mdash; Offload to remote servers via FUSE mount over TCP</li>
-                    <li><strong>FUSE Mount</strong> &mdash; Stream input on-demand, encoding starts immediately, only transfers bytes ffmpeg reads</li>
-                    <li><strong>GPU Server Mode</strong> &mdash; Share your GPU with other Recode instances</li>
-                    <li><strong>Cancel Propagation</strong> &mdash; Cancelling kills ffmpeg on remote, disconnect auto-kills</li>
-                    <li><strong>Auto Cleanup</strong> &mdash; Temp files removed on cancel, failure, or disconnect</li>
-                    <li><strong>Health Check</strong> &mdash; Authenticated ping, live status dots in GPU Target dropdown</li>
-                    <li><strong>Per-Server Controls</strong> &mdash; Power button (green/orange/red), enable/disable per server</li>
-                    <li><strong>Secure</strong> &mdash; HMAC-SHA256 auth, SHA256 output verification, single port</li>
-                    <li><strong>macOS Support</strong> &mdash; Apple Silicon VideoToolbox encoding as remote GPU server</li>
-                    <li><strong>Auto-Detect</strong> &mdash; Server encoder type detected via ping (NVENC, VideoToolbox, QSV, AMF, CPU)</li>
-                    <li><strong>Remote GPU Jobs</strong> &mdash; GPU servers show incoming jobs with client IP and filename</li>
+                    <li><strong>Reverse-Connect</strong> &mdash; GPU servers connect OUT to clients, NAT-friendly, no port forwarding on GPU side</li>
+                    <li><strong>FUSE Mount</strong> &mdash; Stream input on-demand, encoding starts immediately, 8MB chunks for WAN</li>
+                    <li><strong>Hardware Probing</strong> &mdash; Tests actual GPU encoder capabilities, auto-strips unsupported flags</li>
+                    <li><strong>Cancel Propagation</strong> &mdash; Cancelling kills ffmpeg on remote, disconnect auto-cleans FUSE mounts</li>
+                    <li><strong>Auto Cleanup</strong> &mdash; Lazy FUSE unmount, temp files removed on cancel, failure, or disconnect</li>
+                    <li><strong>Live Status</strong> &mdash; Connected GPUs with H.264/H.265 badges, IP, job counts in header</li>
+                    <li><strong>Per-GPU Controls</strong> &mdash; Power button with spinner, enable/disable, connection error tooltips</li>
+                    <li><strong>Secure</strong> &mdash; HMAC-SHA256 auth, SHA256 output verification, heartbeat monitoring</li>
+                    <li><strong>macOS Support</strong> &mdash; Apple Silicon VideoToolbox encoding as remote GPU</li>
+                    <li><strong>Auto-Detect</strong> &mdash; Encoder type and capabilities detected via hardware probe (NVENC, VideoToolbox, QSV, AMF, CPU)</li>
+                    <li><strong>Name Targeting</strong> &mdash; Select specific GPUs by name, stable across reconnects</li>
                 </ul>
 
                 <h4>Plex Integration</h4>
@@ -1453,54 +1453,62 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="tip">GPU stats poll every 2 seconds during encoding, every 5 seconds when idle. Polling pauses entirely when the browser tab is hidden.</div>
 
                 <h4>Remote GPU Encoding</h4>
-                <p>Recode includes RRP (Recode Remote Protocol) for offloading encodes to remote GPU servers. Everything runs over a single TCP connection &mdash; authentication, file transfer, progress, and output &mdash; using a single binary: <code>recode-remote</code>.</p>
+                <p>Recode uses RRP (Recode Remote Protocol) for offloading encodes to remote GPU servers. GPU servers connect OUT to your machine &mdash; no port forwarding needed on the GPU side. Everything runs over TCP with HMAC-SHA256 authentication.</p>
                 <div class="example-box">
-                    <div class="example-title">How remote encoding works</div>
+                    <div class="example-title">How remote encoding works (reverse-connect)</div>
                     <div class="flow-diagram">
-                        <div class="flow-step">Client sends job</div>
+                        <div class="flow-step">GPU server connects to client</div>
                         <span class="flow-arrow">&rarr;</span>
-                        <div class="flow-step active">Auth (HMAC-SHA256)</div>
+                        <div class="flow-step active">Auth + heartbeats</div>
                         <span class="flow-arrow">&rarr;</span>
-                        <div class="flow-step">FUSE mount input</div>
+                        <div class="flow-step">Job assigned via control channel</div>
                         <span class="flow-arrow">&rarr;</span>
-                        <div class="flow-step success">Remote ffmpeg encodes</div>
+                        <div class="flow-step success">Data connection: FUSE mount + encode</div>
                         <span class="flow-arrow">&rarr;</span>
                         <div class="flow-step">Output returned (SHA256 verified)</div>
                     </div>
                 </div>
-                <p>The remote server mounts the input file on-demand via FUSE &mdash; encoding starts immediately without uploading the entire file. Only the bytes ffmpeg reads are transferred over the network. Output is sent back with SHA256 verification.</p>
+                <p>Two connection types: a persistent <strong>control channel</strong> (heartbeats, job assignment, status) and a per-job <strong>data channel</strong> (FUSE file reads, progress, output transfer). The GPU server mounts the input file on-demand via FUSE &mdash; encoding starts immediately without uploading the entire file.</p>
                 <ul>
+                    <li>NAT-friendly &mdash; GPU servers connect out, no port forwarding needed on the GPU side</li>
                     <li>CUDA hardware decode on the remote GPU</li>
-                    <li>Live progress streamed back to the client</li>
-                    <li>Cancel propagation &mdash; cancelling a job kills ffmpeg on the remote server</li>
-                    <li>Automatic temp file cleanup on cancel, failure, or disconnect</li>
-                    <li>Load balancing across multiple remote servers</li>
+                    <li>Live progress with estimated speed and bitrate</li>
+                    <li>Cancel propagation &mdash; cancelling a job kills ffmpeg on the remote server and cleans up</li>
+                    <li>Automatic FUSE unmount and temp file cleanup on cancel, failure, or disconnect</li>
+                    <li>Load balancing across multiple GPU servers with per-GPU max_jobs enforcement</li>
+                    <li>Hardware encoder probing &mdash; tests actual GPU capabilities (e.g. auto-strips temporal-aq on Maxwell GPUs)</li>
+                    <li>H.264 and H.265 capability badges for each connected GPU</li>
                 </ul>
 
-                <h4>GPU Server Mode</h4>
-                <p>Any Recode instance can share its GPU with other instances. Enable in Settings &rarr; Remote GPU &rarr; GPU Server Mode. Configure a port and shared secret, then add this machine as a remote server on other Recode instances.</p>
-                <p>The GPU server uses the Temp Directory from Settings for job working files. Remote GPU Jobs appear in the Encoding tab on the server showing the client IP and original filename.</p>
+                <h4>Remote Server (Client Machine)</h4>
+                <p>Enable <strong>Remote Server</strong> in Settings &rarr; Remote GPU. Set a port (default 9879) and shared secret. GPU servers connect to this port. Connected GPUs appear with green indicators showing name, IP, encoder capabilities, and job counts.</p>
+                <p>The header shows a "Server" indicator with a badge count of connected GPUs. The copyable address line makes it easy to configure GPU servers.</p>
 
-                <h4>Remote Server Setup</h4>
+                <h4>Remote Clients (GPU Server)</h4>
+                <p>On the GPU server, add entries under <strong>Remote Clients</strong> in Settings &rarr; Remote GPU. Enter the client's address (hostname:port) and the shared secret. The GPU server connects out and registers its capabilities automatically. Auto-reconnects with exponential backoff if the connection drops.</p>
+                <p>The header shows a "Client" indicator when connected to a client. Connection errors are shown in tooltips on the status buttons.</p>
+
+                <h4>Setup Steps</h4>
                 <ol style="font-size:12px;color:var(--text-secondary);">
-                    <li>Install Recode on the GPU server (same installer)</li>
-                    <li>Enable GPU Server Mode in Settings &rarr; Remote GPU, set a port and shared secret</li>
-                    <li>On the client machine, add the server in Settings &rarr; Remote GPU &rarr; Remote Servers</li>
-                    <li>Select "Remote" targets in the GPU Target dropdown</li>
+                    <li>On the <strong>client</strong> (machine with files): enable Remote Server in Settings &rarr; Remote GPU, set port and secret</li>
+                    <li>On each <strong>GPU server</strong>: install Recode, add the client under Remote Clients with address and secret</li>
+                    <li>The GPU server connects automatically &mdash; you'll see it appear in the client's connected GPUs list</li>
+                    <li>Select "Remote" or "Auto" in the GPU Target dropdown, or pick a specific GPU by name</li>
                 </ol>
 
                 <h4>Firewall Configuration</h4>
-                <p>The GPU server needs one port open for RRP (default <strong>9878</strong>). The web UI uses port <strong>9877</strong>.</p>
+                <p>The <strong>client machine</strong> needs port <strong>9879</strong> (Remote Server) open for incoming GPU server connections. The web UI uses port <strong>9877</strong>. GPU servers need no inbound ports &mdash; they connect out.</p>
                 <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># On the CLIENT machine — open port 9879 for GPU server connections</div>
                     <div style="color:var(--text-muted);margin-bottom:4px;"># firewalld (RHEL/Fedora/Rocky/Alma)</div>
-                    firewall-cmd --permanent --add-port=9878/tcp<br>
+                    firewall-cmd --permanent --add-port=9879/tcp<br>
                     firewall-cmd --reload<br><br>
                     <div style="color:var(--text-muted);margin-bottom:4px;"># ufw (Ubuntu/Debian)</div>
-                    ufw allow 9878/tcp<br><br>
+                    ufw allow 9879/tcp<br><br>
                     <div style="color:var(--text-muted);margin-bottom:4px;"># iptables</div>
-                    iptables -A INPUT -p tcp --dport 9878 -j ACCEPT
+                    iptables -A INPUT -p tcp --dport 9879 -j ACCEPT
                 </div>
-                <div class="tip">If you change the GPU Server port in Settings, update the firewall rule accordingly. Only the RRP port needs to be open &mdash; the web UI port (9877) only needs to be accessible from your browser.</div>
+                <div class="tip">If you change the Remote Server port in Settings, update the firewall rule accordingly. GPU servers need no inbound ports open &mdash; they connect out to the client.</div>
 
                 <h4>FUSE Requirements</h4>
                 <p>The GPU server needs FUSE support for mount mode. The installer handles this automatically, but if setting up manually:</p>
@@ -1522,14 +1530,14 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <p>Status is checked automatically when settings are saved. The power button toggles enable/disable per server.</p>
 
                 <h4>macOS GPU Server</h4>
-                <p>Apple Silicon Macs can serve as remote GPU servers using VideoToolbox hardware encoding. The Mac runs <code>recode-remote server</code> only &mdash; no web UI or Plex integration needed.</p>
+                <p>Apple Silicon Macs can serve as remote GPU servers using VideoToolbox hardware encoding. The Mac connects out to your client machine &mdash; no port forwarding needed.</p>
                 <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">
                     <div style="color:var(--text-muted);margin-bottom:4px;"># Install macFUSE</div>
                     brew install macfuse<br><br>
                     <div style="color:var(--text-muted);margin-bottom:4px;"># Copy binaries from the macos/ folder in the release</div>
                     mkdir -p ~/recode &amp;&amp; cp macos/* ~/recode/ &amp;&amp; chmod +x ~/recode/*<br><br>
-                    <div style="color:var(--text-muted);margin-bottom:4px;"># Start the server</div>
-                    ~/recode/recode-remote server --port 9878 --secret xxx --ffmpeg ~/recode/ffmpeg
+                    <div style="color:var(--text-muted);margin-bottom:4px;"># Connect to your client machine (reverse-connect)</div>
+                    ~/recode/recode-remote connect --address client.example.com:9879 --secret xxx --name "Mac Studio" --ffmpeg ~/recode/ffmpeg
                 </div>
                 <ul>
                     <li>Requires <strong>macOS 11+</strong> on Apple Silicon (M1/M2/M3/M4)</li>
@@ -1834,7 +1842,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.17.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.18.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1867,6 +1875,26 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.18.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Reverse-connect remote GPU</strong> &mdash; GPU servers connect OUT to clients, no port forwarding needed on the GPU side</li>
+                                <li><strong>Remote Server</strong> &mdash; enable on the client machine, GPU servers connect to you. Shows connected GPUs with H.264/H.265 capabilities, IP address, encoder badges, and job counts</li>
+                                <li><strong>Remote Clients</strong> &mdash; configure on GPU servers with client address and secret. Auto-reconnect with exponential backoff</li>
+                                <li><strong>Header indicators</strong> &mdash; "Server" dot with GPU count badge, "Client" dot on GPU servers showing connection status</li>
+                                <li><strong>Encoder hardware probing</strong> &mdash; tests actual GPU by encoding a test frame with real NVENC flags. Detects temporal-aq limitation on older GPUs (Tesla M6/Maxwell) and auto-strips the flag</li>
+                                <li><strong>Auto GPU target</strong> &mdash; dispatches to both local and remote GPUs, load-balanced by name with max_jobs enforcement per GPU</li>
+                                <li><strong>GPU name targeting</strong> &mdash; select specific remote GPUs by name (e.g. "DS2") instead of index. Stable across reconnects</li>
+                                <li><strong>Remote progress</strong> &mdash; file-based progress polling with estimated time/speed/bitrate when CUDA hwaccel reports N/A</li>
+                                <li><strong>Cancel propagation</strong> &mdash; cancelling a remote job signals the GPU server to kill ffmpeg and clean up</li>
+                                <li><strong>FUSE cleanup</strong> &mdash; lazy unmount + ffmpeg kill timeout on cancel, disconnect, or error. No more orphaned mounts</li>
+                                <li><strong>Bitrate display</strong> &mdash; auto-scales between b/s, Kb/s, Mb/s, Gb/s. Estimates from output size when ffmpeg reports N/A</li>
+                                <li><strong>Confirm-twice pattern</strong> &mdash; Clear Cache, Reset Stats, and Kill Transcode use press-twice confirmation instead of browser dialogs</li>
+                                <li><strong>GPU Target dropdown</strong> &mdash; refreshes after scan and via websocket every 15 seconds. Shows connected remote GPUs with green dots</li>
+                                <li><strong>8MB FUSE chunks</strong> &mdash; larger read size for better WAN throughput (was 1MB)</li>
+                                <li>Removed legacy GPU Server Mode &mdash; replaced by the cleaner reverse-connect architecture</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.17.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
