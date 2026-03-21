@@ -2,7 +2,7 @@
 
 **GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.17.0-blue)
+![Version](https://img.shields.io/badge/version-2.18.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -41,24 +41,23 @@
 - **OOM Recovery** — Automatic re-queue on GPU out-of-memory (up to 3 retries)
 
 ### Remote GPU (RRP)
-- **Remote Encoding** — Offload encodes to remote GPU servers over TCP
-- **FUSE Mount** — Stream input files on-demand (encoding starts immediately, only transfers bytes ffmpeg reads)
+- **Reverse-Connect** — GPU servers connect OUT to clients, NAT-friendly (no port forwarding on GPU side)
+- **FUSE Mount** — Stream input files on-demand with 8MB chunks for WAN throughput
 - **Multi-Platform** — Linux (NVENC, QSV, VAAPI) and macOS (VideoToolbox) GPU servers
-- **Auto-Detect Encoder** — Server capabilities detected via ping (NVENC, VideoToolbox, QSV, AMF, CPU)
-- **HMAC-SHA256 Auth** — Secure authentication with shared secret and timestamp
+- **Hardware Probing** — Tests actual GPU encoder capabilities, auto-strips unsupported flags (e.g. temporal-aq on Maxwell)
+- **H.264/H.265 Badges** — Connected GPUs show verified encoder capabilities
+- **HMAC-SHA256 Auth** — Secure authentication with shared secret and heartbeat monitoring
 - **SHA256 Verification** — Output file integrity check
 - **CUDA Hwaccel** — Hardware decode on NVIDIA remote GPUs
 - **VideoToolbox** — Apple Silicon hardware encoding on macOS (HEVC/H.264)
-- **Live Progress** — Real-time encoding progress streamed back
-- **Cancel Propagation** — Cancelling kills ffmpeg on the remote server, disconnect auto-kills
-- **Auto Cleanup** — Temp files removed on cancel, failure, or disconnect
-- **Load Balancing** — Distribute jobs across multiple remote servers
-- **GPU Server Mode** — Share your GPU with other Recode instances
-- **Health Check** — Authenticated ping with live status dots and encoder type in GPU Target dropdown
-- **Per-Server Controls** — Power button (green/orange/red), enable/disable per server
-- **Remote GPU Jobs** — GPU servers show incoming jobs with client IP and filename
-- **Single Binary** — `recode-remote` handles server, client, and ping
-- **Single Port** — Everything over one TCP connection (default 9878)
+- **Live Progress** — Real-time encoding progress with estimated speed and bitrate
+- **Cancel Propagation** — Cancelling kills ffmpeg on remote, lazy FUSE unmount, temp cleanup
+- **Auto Cleanup** — FUSE unmount + temp files removed on cancel, failure, or disconnect
+- **Load Balancing** — Distribute jobs across GPU servers by name with per-GPU max_jobs
+- **GPU Name Targeting** — Select specific GPUs by name (stable across reconnects)
+- **Per-GPU Controls** — Power button with spinner, connection error tooltips, enable/disable
+- **Auto-Reconnect** — GPU servers reconnect with exponential backoff on disconnect
+- **Single Binary** — `recode-remote` handles server, client, listener, and connect
 
 ### Plex Integration
 - **Library Scanner** — Scan Plex libraries and detect candidates for re-encoding
