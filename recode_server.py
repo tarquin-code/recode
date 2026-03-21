@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.18.1"
+VERSION = "2.18.8"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -2178,13 +2178,15 @@ async def encode_worker(worker_id: int):
                     if ri >= 0 and not j.paused:
                         remote_loads[ri] = remote_loads.get(ri, 0) + 1
 
-                # Try local GPU first (if under concurrent limit or GPU has spare capacity)
-                if GPU_COUNT > 0:
+                # Try local GPU first (if under concurrent limit)
+                if GPU_COUNT > 0 and local_count < max_concurrent:
                     candidate_gpu = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
-                    if candidate_gpu is not None and (local_count < max_concurrent or encode_queue.get_gpu_loads().get(candidate_gpu, 0) == 0):
+                    if candidate_gpu is not None:
                         gpu_id = candidate_gpu
                     else:
                         gpu_id = -1  # will try remote below
+                else:
+                    gpu_id = -1  # at limit, try remote
 
                 # If no local slot, try remote (check listener connected GPUs first)
                 if gpu_id == -1 and not is_cpu_job:
@@ -2374,9 +2376,26 @@ async def encode_worker(worker_id: int):
                     use_remote_listener = True
                     log.info(f"[{job.id}] Using remote GPU via listener ({len(connected_gpus)} GPUs available)")
                 else:
-                    log.warning(f"[{job.id}] No remote GPUs connected — falling back to local")
+                    # No remote GPUs — put job back in queue and wait
+                    log.info(f"[{job.id}] No remote GPUs connected — waiting in queue")
+                    job.status = JobStatus.QUEUED
+                    job.started_at = None
+                    job.progress = None
+                    encode_queue.active_jobs.pop(job.id, None)
+                    encode_queue.ffmpeg_procs.pop(job.id, None)
+                    encode_queue.job_gpus.pop(job.id, None)
+                    encode_queue.queue_order = [j for j in encode_queue.queue_order if j != job.id]
+                    encode_queue.queue_order.insert(0, job.id)  # front of queue
+                    encode_queue.jobs[job.id] = job
+                    encode_queue.running = len(encode_queue.active_jobs) > 0
+                    encode_queue._save_state()
+                    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                    await asyncio.sleep(5)
+                    continue
             except Exception:
-                log.warning(f"[{job.id}] Listener status not available — falling back to local")
+                log.info(f"[{job.id}] Listener status not available — waiting in queue")
+                await asyncio.sleep(5)
+                continue
 
         ffmpeg_bin = FFMPEG
 
@@ -2500,6 +2519,10 @@ async def encode_worker(worker_id: int):
         if use_remote_listener:
             # Remote job complete — handle result and post-processing
             job.finished_at = time.time()
+            if job.status == JobStatus.CANCELLED:
+                _finish_job(JobStatus.CANCELLED, "Cancelled by user")
+                await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                continue
             if exit_code != 0:
                 _finish_job(JobStatus.FAILED, error_msg or f"Remote encode failed (exit {exit_code})")
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
@@ -4393,6 +4416,9 @@ async def stop_remote_connectors():
 
 @app.on_event("startup")
 async def startup():
+    # Note: staged .new binaries are swapped by systemd ExecStartPre, not here
+    # (Swapping inside the running process corrupts PyInstaller binaries)
+
     # Remove sudoers file if flagged from setup completion
     if app_settings.pop("_remove_sudoers_on_start", False):
         sudoers_file = "/etc/sudoers.d/recode"
@@ -4732,20 +4758,13 @@ async def system_check():
 
     results["cpu_count"] = os.cpu_count() or 1
 
-    # Check if recode-remote binary is newer than running listener/connector processes
+    # Check if staged .new binaries exist (waiting for restart to swap)
     restart_needed = False
-    rrp_bin = os.path.join(BIN_DIR, "recode-remote")
-    if os.path.isfile(rrp_bin):
-        bin_mtime = os.path.getmtime(rrp_bin)
-        for proc in [_remote_client_proc] + list(_remote_connect_procs.values()):
-            if proc and proc.returncode is None:
-                try:
-                    proc_start = os.path.getmtime(f"/proc/{proc.pid}/exe")
-                except Exception:
-                    proc_start = bin_mtime  # can't check, assume ok
-                if bin_mtime > proc_start + 2:  # 2s grace
-                    restart_needed = True
-                    break
+    for binary in ("recode-remote", "recode"):
+        staged = os.path.join(BIN_DIR, f"{binary}.new")
+        if os.path.isfile(staged):
+            restart_needed = True
+            break
     results["restart_needed"] = restart_needed
 
     return results

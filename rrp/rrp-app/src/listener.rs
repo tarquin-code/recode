@@ -202,18 +202,57 @@ async fn dispatch_job(
             .min_by_key(|(_, g)| g.active_jobs)
     };
 
-    let (conn_id, _) = match candidate {
-        Some(c) => c,
-        None => {
-            warn!("No GPU servers available for job {}", job_id);
-            // Write failure response
+    // If no GPU available, retry a few times (GPUs may reconnect after cancel/restart)
+    let candidate = if candidate.is_none() {
+        drop(gpus);
+        let mut found = None;
+        for attempt in 1..=3 {
+            info!("No GPU available for job {} — waiting (attempt {}/3)", job_id, attempt);
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let gpus = state.gpus.read().await;
+            let c = if !target_gpu.is_empty() {
+                gpus.iter()
+                    .filter(|(_, g)| g.name == target_gpu)
+                    .filter(|(_, g)| g.last_heartbeat.elapsed().as_secs() < 45)
+                    .filter(|(_, g)| (g.active_jobs as usize) < g.max_jobs)
+                    .next()
+                    .or_else(|| gpus.iter()
+                        .filter(|(_, g)| g.last_heartbeat.elapsed().as_secs() < 45)
+                        .filter(|(_, g)| (g.active_jobs as usize) < g.max_jobs)
+                        .min_by_key(|(_, g)| g.active_jobs))
+            } else {
+                gpus.iter()
+                    .filter(|(_, g)| g.last_heartbeat.elapsed().as_secs() < 45)
+                    .filter(|(_, g)| (g.active_jobs as usize) < g.max_jobs)
+                    .min_by_key(|(_, g)| g.active_jobs)
+            };
+            if let Some((id, _)) = c {
+                found = Some(id.clone());
+                break;
+            }
+        }
+        if found.is_none() {
+            warn!("No GPU servers available for job {} after retries", job_id);
             let resp_path = PathBuf::from(format!("/tmp/recode/rrp/listener-jobs/{}.result", job_id));
             let _ = std::fs::write(&resp_path, serde_json::json!({"error": "No GPU servers available"}).to_string());
             return;
         }
+        found.unwrap()
+    } else {
+        let (conn_id, _) = candidate.unwrap();
+        conn_id.clone()
     };
-    let conn_id = conn_id.clone();
-    let job_tx = gpus[&conn_id].job_tx.clone();
+    let conn_id = candidate;
+    let gpus = state.gpus.read().await;
+    let job_tx = match gpus.get(&conn_id) {
+        Some(g) => g.job_tx.clone(),
+        None => {
+            warn!("GPU {} disappeared before job dispatch", conn_id);
+            let resp_path = PathBuf::from(format!("/tmp/recode/rrp/listener-jobs/{}.result", job_id));
+            let _ = std::fs::write(&resp_path, serde_json::json!({"error": "GPU disconnected"}).to_string());
+            return;
+        }
+    };
     drop(gpus);
 
     // Store job details for when the data connection arrives
