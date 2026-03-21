@@ -390,6 +390,7 @@ pub async fn run_fuse_job(
         }
     });
 
+    let mut child_done = false;
     loop {
         // Drain any pending progress and send to client
         let mut sent = 0u32;
@@ -398,6 +399,9 @@ pub async fn run_fuse_job(
             sent += 1;
         }
         if sent > 0 { let _ = tx.flush().await; }
+
+        // If ffmpeg already exited, break out
+        if child_done { break; }
 
         tokio::select! {
             Some(freq) = req_rx.recv() => {
@@ -437,6 +441,11 @@ pub async fn run_fuse_job(
                     }
                     _ => { let _ = freq.resp_tx.send(Err(())); }
                 }
+            }
+            status = child.wait() => {
+                // ffmpeg exited — break to send output
+                info!("ffmpeg exited: {:?}", status);
+                child_done = true;
             }
         }
     }

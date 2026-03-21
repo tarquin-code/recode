@@ -563,6 +563,13 @@ tr.file-row:hover td { background: var(--bg-hover); }
         </div>
         <button class="btn btn-sm" style="font-size:11px;padding:2px 8px;" onclick="event.stopPropagation();document.getElementById('updateBanner').style.display='none';">Dismiss</button>
     </div>
+    <div id="restartBanner" style="display:none;background:linear-gradient(90deg,rgba(210,153,34,0.15),rgba(210,153,34,0.05));border-bottom:1px solid var(--warning);padding:8px 24px;font-size:12px;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="color:var(--warning);font-weight:600;">Service restart required</span>
+            <span style="color:var(--text-muted);">New binaries have been deployed. Restart the service to apply changes.</span>
+        </div>
+        <button class="btn btn-sm" style="font-size:11px;padding:2px 8px;" onclick="document.getElementById('restartBanner').style.display='none';">Dismiss</button>
+    </div>
 
     <div class="layout">
         <aside class="sidebar">
@@ -1823,7 +1830,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li>The banner persists across page reloads until dismissed or the update is applied</li>
                     <li>Open Help &rarr; About to check for updates and apply them</li>
                     <li>The full changelog is shown before you update so you can review what changed</li>
-                    <li><strong>Update Now</strong> downloads the release, backs up your current version, extracts the new files, and restarts the service</li>
+                    <li><strong>Update Now</strong> downloads the release, backs up your current version, and extracts the new files</li>
+                    <li>The service is <strong>not restarted automatically</strong> &mdash; a yellow "Service restart required" banner appears so you can restart when no encodes are running</li>
                     <li>Your settings, queue, history, and configuration are preserved across updates</li>
                     <li>A live log shows download and install progress</li>
                 </ul>
@@ -1842,7 +1850,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.18.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.18.1</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1875,6 +1883,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.18.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Safe updates</strong> &mdash; auto-updater no longer restarts services automatically. Shows a "Service restart required" banner so users can restart when no encodes are running</li>
+                                <li><strong>Restart required banner</strong> &mdash; yellow warning banner shown when binaries have been updated but the service hasn't been restarted yet</li>
+                                <li><strong>Profile GPU targets</strong> &mdash; library profile GPU Target dropdown now shows connected remote GPUs with same format as sidebar (indents, green dots, encoder type)</li>
+                                <li><strong>ffmpeg exit detection</strong> &mdash; fixed remote encode stalling at 99% when ffmpeg finishes but FUSE loop didn't detect the exit</li>
+                                <li><strong>Bitrate auto-scale</strong> &mdash; bitrate display auto-scales between b/s, Kb/s, Mb/s, Gb/s with estimation from output size when ffmpeg reports N/A</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.18.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -2845,6 +2863,11 @@ async function checkSystem() {
         state.system = await res.json();
         document.getElementById('dotFfmpeg').className = state.system.ffmpeg ? 'dot ok' : 'dot err';
         document.getElementById('dotGpu').className = state.system.gpu ? 'dot ok' : 'dot err';
+        // Restart needed banner
+        const rb = document.getElementById('restartBanner');
+        if (rb) {
+            rb.style.display = state.system.restart_needed ? 'flex' : 'none';
+        }
         // GPU Server indicator
         updateGpuServerStatus();
         // Show version in header
@@ -5471,17 +5494,12 @@ async function applyUpdate(btn) {
             if (logEl) { logEl.textContent = task.log || ''; logEl.scrollTop = logEl.scrollHeight; }
             if (task.status === 'done') {
                 clearInterval(poll);
-                if (logEl) logEl.textContent += '\nUpdate complete! Restarting server...\n';
-                btn.textContent = 'Restarting...';
-                // Wait for restart then reload
-                setTimeout(() => {
-                    const check = setInterval(async () => {
-                        try {
-                            const sr = await fetch('/api/system/check');
-                            if (sr.ok) { clearInterval(check); window.location.reload(); }
-                        } catch(e) {}
-                    }, 2000);
-                }, 3000);
+                if (logEl) logEl.textContent += '\nUpdate complete! Restart the service to activate the new version.\n';
+                btn.textContent = 'Updated';
+                btn.style.background = 'var(--success)';
+                // Show restart banner
+                const rb = document.getElementById('restartBanner');
+                if (rb) rb.style.display = 'flex';
             } else if (task.status === 'error') {
                 clearInterval(poll);
                 btn.disabled = false;
@@ -6213,13 +6231,9 @@ function renderLibraryProfiles() {
         // Populate GPU target dropdown
         const tgtSel = document.getElementById('lp-gputarget-' + lpath);
         if (tgtSel) {
+            // Use same format as sidebar GPU Target dropdown
             const gpuCnt = state.system?.gpu_count || 0;
-            tgtSel.innerHTML = '<option value="auto">Auto</option>';
-            if (gpuCnt > 1) tgtSel.add(new Option('All Local', 'local'));
-            for (let i = 0; i < gpuCnt; i++) tgtSel.add(new Option('Local GPU ' + i, 'gpu:' + i));
-            const remotes = state.settings?.remote_gpu_servers || [];
-            if (remotes.length > 1) tgtSel.add(new Option('All Remote', 'remote'));
-            remotes.forEach((srv, i) => { if (srv.enabled !== false) tgtSel.add(new Option('Remote: ' + (srv.name || srv.address), 'remote:' + i)); });
+            populateGpuTargets(tgtSel, gpuCnt);
             if (p.gpu_target) tgtSel.value = p.gpu_target;
         }
     }

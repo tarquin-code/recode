@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.18.0"
+VERSION = "2.18.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -4673,14 +4673,8 @@ echo "Files copied successfully"
             # Cleanup
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-            _install_tasks["update"]["log"] += f"Update applied! Restarting...\n"
+            _install_tasks["update"]["log"] += f"Update applied! Restart the service to activate the new version.\n"
             _install_tasks["update"]["status"] = "done"
-
-            # Trigger restart
-            await asyncio.sleep(2)
-            flag = os.path.join(BASE_DIR, ".restart-flag")
-            with open(flag, "w") as f:
-                f.write("restart")
         except Exception as e:
             _install_tasks["update"]["status"] = "error"
             _install_tasks["update"]["log"] += f"Update failed: {e}\n"
@@ -4737,6 +4731,22 @@ async def system_check():
         results["h264_nvenc"] = False
 
     results["cpu_count"] = os.cpu_count() or 1
+
+    # Check if recode-remote binary is newer than running listener/connector processes
+    restart_needed = False
+    rrp_bin = os.path.join(BIN_DIR, "recode-remote")
+    if os.path.isfile(rrp_bin):
+        bin_mtime = os.path.getmtime(rrp_bin)
+        for proc in [_remote_client_proc] + list(_remote_connect_procs.values()):
+            if proc and proc.returncode is None:
+                try:
+                    proc_start = os.path.getmtime(f"/proc/{proc.pid}/exe")
+                except Exception:
+                    proc_start = bin_mtime  # can't check, assume ok
+                if bin_mtime > proc_start + 2:  # 2s grace
+                    restart_needed = True
+                    break
+    results["restart_needed"] = restart_needed
 
     return results
 
