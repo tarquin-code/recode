@@ -285,6 +285,10 @@ APP_DEFAULTS = {
     "ffmpeg_server_enabled": False,
     "ffmpeg_server_port": 9878,
     "ffmpeg_server_secret": "",
+    # Remote Clients (reverse-connect) — GPU servers behind NAT connect to us
+    "remote_client_enabled": False,
+    "remote_client_port": 9879,
+    "remote_client_secret": "",
 }
 
 def load_settings() -> dict:
@@ -2056,27 +2060,62 @@ async def encode_worker(worker_id: int):
             if is_cpu_job:
                 pass  # gpu_id stays -1
             elif gpu_target.startswith("remote:"):
-                # Specific remote server
+                # Specific remote GPU by name — check if it has capacity
+                remote_gpu_name = gpu_target.split(":", 1)[1]
+                # Count active jobs on this GPU
+                active_on_gpu = sum(1 for j in encode_queue.active_jobs.values()
+                    if j.settings.get("_remote_gpu_name") == remote_gpu_name)
+                # Get max_jobs for this GPU from listener status
+                gpu_max = 1
                 try:
-                    remote_server_idx = int(gpu_target.split(":")[1])
-                except (ValueError, IndexError):
-                    remote_server_idx = 0
+                    _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+                    with open(_lsf) as _f:
+                        for g in json.load(_f).get("gpus", []):
+                            if g.get("name") == remote_gpu_name:
+                                gpu_max = g.get("max_jobs", 1)
+                                break
+                except Exception:
+                    pass
+                if active_on_gpu >= gpu_max:
+                    encode_queue._claiming = False
+                    await asyncio.sleep(2)
+                    continue
+                next_job.settings["_remote_gpu_name"] = remote_gpu_name
+                remote_server_idx = 0
                 next_job.settings["encoder"] = "remote"
             elif gpu_target == "remote":
-                # Auto-balance across all enabled remote servers
-                servers = app_settings.get("remote_gpu_servers", [])
-                enabled_idxs = [i for i, s in enumerate(servers)
-                                if s.get("enabled", True) is not False and s.get("_online", False)]
+                # Auto-balance across connected GPUs (from listener) or configured remote servers
+                # Check listener for connected GPUs first
+                listener_status_file = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+                _connected_gpus = []
+                try:
+                    with open(listener_status_file) as _f:
+                        _ls = json.load(_f)
+                    _connected_gpus = [g for g in _ls.get("gpus", []) if g.get("online")]
+                except Exception:
+                    pass
+                # Use connected GPUs from listener
+                if _connected_gpus:
+                    enabled_idxs = list(range(len(_connected_gpus)))
+                    # Build a virtual servers list from connected GPUs for load balancing
+                    servers = [{"max_jobs": g.get("max_jobs", 1), "_online": True, "enabled": True, "name": g.get("name", f"GPU {i}")} for i, g in enumerate(_connected_gpus)]
+                else:
+                    # Fallback: check remote_gpu_servers config
+                    servers = app_settings.get("remote_gpu_servers", [])
+                    enabled_idxs = [i for i, s in enumerate(servers)
+                                    if s.get("enabled", True) is not False and s.get("_online", False)]
                 if enabled_idxs:
+                    # Count active jobs by GPU name
                     remote_loads = {}
                     for jid, j in encode_queue.active_jobs.items():
-                        ri = j.settings.get("_remote_server_idx", -1)
-                        if ri >= 0:
-                            remote_loads[ri] = remote_loads.get(ri, 0) + 1
+                        gname = j.settings.get("_remote_gpu_name", "")
+                        if gname:
+                            remote_loads[gname] = remote_loads.get(gname, 0) + 1
                     available_remotes = [i for i in enabled_idxs
-                                        if remote_loads.get(i, 0) < servers[i].get("max_jobs", 1)]
+                                        if remote_loads.get(servers[i]["name"], 0) < servers[i].get("max_jobs", 1)]
                     if available_remotes:
-                        remote_server_idx = min(available_remotes, key=lambda i: remote_loads.get(i, 0))
+                        remote_server_idx = min(available_remotes, key=lambda i: remote_loads.get(servers[i]["name"], 0))
+                        next_job.settings["_remote_gpu_name"] = servers[remote_server_idx]["name"]
                         next_job.settings["encoder"] = "remote"
                     else:
                         encode_queue._claiming = False
@@ -2303,29 +2342,25 @@ async def encode_worker(worker_id: int):
                 settings["use_cpu"] = True
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
-        # Select ffmpeg binary — use RRP client for remote GPU targets
-        ffmpeg_env = None
+        # Select ffmpeg binary — check if this is a remote GPU job via listener
+        use_remote_listener = False
         remote_idx = settings.get("_remote_server_idx", -1)
         if remote_idx >= 0:
-            ffmpeg_bin = _get_remote_ffmpeg_bin(remote_idx)
-            ffmpeg_env = _get_remote_ffmpeg_env(remote_idx)
-            servers = app_settings.get("remote_gpu_servers", [])
-            # Use mount mode if server supports FUSE, otherwise fall back to upload
-            if remote_idx < len(servers):
-                has_fuse = servers[remote_idx].get("_has_fuse", True)
-                remote_transfer_mode = "mount" if has_fuse else "upload"
-            else:
-                remote_transfer_mode = "mount"
-            if not os.path.isfile(ffmpeg_bin):
-                ffmpeg_bin = FFMPEG
-                ffmpeg_env = None
-                log.warning(f"[{job.id}] recode-remote not found, falling back to local ffmpeg")
-            else:
-                servers = app_settings.get("remote_gpu_servers", [])
-                srv_name = servers[remote_idx]["name"] if remote_idx < len(servers) else f"Server {remote_idx}"
-                log.info(f"[{job.id}] Using remote GPU: {srv_name} (transfer: {remote_transfer_mode})")
-        else:
-            ffmpeg_bin = FFMPEG
+            # Check if we have connected GPUs via the listener
+            listener_status_file = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+            try:
+                with open(listener_status_file) as _f:
+                    _ls = json.load(_f)
+                connected_gpus = [g for g in _ls.get("gpus", []) if g.get("online")]
+                if connected_gpus:
+                    use_remote_listener = True
+                    log.info(f"[{job.id}] Using remote GPU via listener ({len(connected_gpus)} GPUs available)")
+                else:
+                    log.warning(f"[{job.id}] No remote GPUs connected — falling back to local")
+            except Exception:
+                log.warning(f"[{job.id}] Listener status not available — falling back to local")
+
+        ffmpeg_bin = FFMPEG
 
         # Build ffmpeg command
         try:
@@ -2338,25 +2373,149 @@ async def encode_worker(worker_id: int):
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
             continue
 
-        # Insert subcommand and flags for unified recode-remote binary
-        if ffmpeg_env:
-            cmd.insert(1, "client")
-            if remote_transfer_mode == "mount":
-                cmd.insert(2, "--mount")
+        # Remote listener dispatch — write job file, poll for result
+        if use_remote_listener:
+            jobs_dir = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-jobs")
+            os.makedirs(jobs_dir, exist_ok=True)
+            # Build input file info for the listener
+            input_files_info = []
+            local_paths = []
+            for arg_i in range(len(cmd)):
+                if cmd[arg_i] == "-i" and arg_i + 1 < len(cmd):
+                    path = cmd[arg_i + 1]
+                    if os.path.isfile(path):
+                        local_paths.append(path)
+                        fname = os.path.basename(path)
+                        input_files_info.append({
+                            "original_path": path,
+                            "virtual_name": f"input_{len(input_files_info)}.{fname.rsplit('.', 1)[-1] if '.' in fname else 'mkv'}",
+                            "size": os.path.getsize(path),
+                        })
+            # Determine target GPU name — use explicit name if set, otherwise any
+            target_gpu_name = settings.get("_remote_gpu_name", "")
+            job_data = {
+                "job_id": job.id,
+                "ffmpeg_args": cmd[1:],  # skip ffmpeg binary path
+                "input_files": input_files_info,
+                "local_paths": local_paths,
+                "output_path": tmp_output,
+                "target_gpu": target_gpu_name,
+            }
+            job_file = os.path.join(jobs_dir, f"{job.id}.json")
+            progress_file = os.path.join(jobs_dir, f"{job.id}.progress")
+            result_file = os.path.join(jobs_dir, f"{job.id}.result")
+            # Clean any stale files
+            for f in (progress_file, result_file):
+                if os.path.exists(f): os.remove(f)
+            with open(job_file, "w") as _f:
+                json.dump(job_data, _f)
+            log.info(f"[{job.id}] Remote job dispatched via listener")
+            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Dispatched to remote GPU via listener")
+            duration = info.get("duration_secs", 0) or 0
+            job.progress = {
+                "pct": 0, "elapsed_secs": 0, "eta_secs": 0,
+                "speed": "0x", "bitrate": "0kbits/s", "frame": 0,
+                "current_time": 0, "total_time": duration,
+                "output_size": 0, "phase": "preparing",
+            }
+            await manager.broadcast({"type": "progress_update", "data": {"id": job.id, "progress": job.progress}})
+            # Poll for progress and result
+            import re as _re
+            exit_code = 1
+            error_msg = ""
+            while True:
+                await asyncio.sleep(1)
+                # Check for cancellation
+                if job.status == JobStatus.CANCELLED:
+                    exit_code = -1
+                    # Write cancel file so listener kills the remote encode
+                    cancel_file = os.path.join(jobs_dir, f"{job.id}.cancel")
+                    with open(cancel_file, "w") as _f:
+                        _f.write("cancel")
+                    # Wait briefly for result file from listener
+                    for _ in range(10):
+                        await asyncio.sleep(0.5)
+                        if os.path.isfile(result_file):
+                            break
+                    for f in (job_file, progress_file, result_file, cancel_file):
+                        if os.path.exists(f): os.remove(f)
+                    break
+                # Read progress
+                if os.path.isfile(progress_file):
+                    try:
+                        with open(progress_file) as _f:
+                            p = json.load(_f)
+                        current_time = p.get("time_secs", 0)
+                        frame = p.get("frame", 0)
+                        spd = p.get("speed", 0)
+                        br = p.get("bitrate_kbps", 0)
+                        output_size = p.get("output_size", 0)
+                        pct = min(100, round(current_time / duration * 100, 1)) if duration > 0 else 0
+                        elapsed = time.time() - job.started_at if job.started_at else 0
+                        remaining = max(duration - current_time, 0)
+                        eta = remaining / spd if spd > 0 else 0
+                        job.progress = {
+                            "pct": pct, "elapsed_secs": elapsed, "eta_secs": eta,
+                            "speed": f"{spd:.2f}x", "bitrate": f"{br:.1f}kbits/s", "frame": frame,
+                            "current_time": current_time, "total_time": duration,
+                            "output_size": output_size, "phase": "encoding",
+                        }
+                        await manager.broadcast({"type": "progress_update", "data": {"id": job.id, "progress": job.progress}})
+                    except Exception:
+                        pass
+                # Check for result
+                if os.path.isfile(result_file):
+                    try:
+                        with open(result_file) as _f:
+                            result = json.load(_f)
+                        exit_code = result.get("exit_code", 1)
+                        error_msg = result.get("error", "")
+                    except Exception as e:
+                        exit_code = 1
+                        error_msg = f"Failed to read result: {e}"
+                    # Cleanup job files
+                    for f in (job_file, progress_file, result_file):
+                        if os.path.exists(f): os.remove(f)
+                    break
+            # Remote job finished — exit_code is set, skip local ffmpeg below
 
-        # Run ffmpeg
+        if use_remote_listener:
+            # Remote job complete — handle result and post-processing
+            job.finished_at = time.time()
+            if exit_code != 0:
+                _finish_job(JobStatus.FAILED, error_msg or f"Remote encode failed (exit {exit_code})")
+                await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                continue
+            # Output file is at tmp_output — move to final location
+            if os.path.exists(tmp_output):
+                new_bytes = os.path.getsize(tmp_output)
+                orig_bytes = info.get("size_bytes", 0)
+                if settings.get("discard_larger") and new_bytes >= orig_bytes and orig_bytes > 0:
+                    log.info(f"[{job.id}] Encoded file larger ({new_bytes} >= {orig_bytes}) — discarding")
+                    os.remove(tmp_output)
+                    _finish_job(JobStatus.SKIPPED, "Encoded file is larger than original")
+                else:
+                    try:
+                        import shutil
+                        shutil.move(tmp_output, output_file)
+                        log.info(f"[{job.id}] Remote encode complete: {output_file}")
+                        _finish_job(JobStatus.DONE, "")
+                    except Exception as e:
+                        log.error(f"[{job.id}] Failed to move output: {e}")
+                        _finish_job(JobStatus.FAILED, f"Failed to move output: {e}")
+            else:
+                _finish_job(JobStatus.FAILED, "Output file not created (exit_code=0)")
+            await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+            continue
+
         log.info(f"[{job.id}] CMD: {' '.join(cmd[:20])}...")
         encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"$ {' '.join(cmd)}")
-        # Merge remote GPU env vars if needed
-        proc_env = None
-        if ffmpeg_env:
-            proc_env = {**os.environ, **ffmpeg_env}
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=proc_env,
+                env=None,
             )
             encode_queue.ffmpeg_procs[job.id] = proc
             encode_queue.ffmpeg_logs[job.id] = []
@@ -3991,6 +4150,9 @@ async def job_watchdog():
             if j.paused:
                 continue  # paused jobs are fine
             if j.status == JobStatus.ENCODING:
+                # Remote listener jobs have no local proc — skip watchdog for them
+                if j.settings.get("_remote_server_idx", -1) >= 0:
+                    continue
                 proc = encode_queue.ffmpeg_procs.get(jid)
                 if proc is None:
                     # No proc yet — job is still setting up (GPU check, building cmd)
@@ -4111,6 +4273,106 @@ async def stop_ffmpeg_server():
         log.info("GPU server stopped")
     _ffmpeg_server_proc = None
 
+_remote_client_proc = None
+
+async def start_remote_client_listener():
+    """Start the reverse-connect listener for incoming GPU servers."""
+    global _remote_client_proc
+    await stop_remote_client_listener()
+    if not app_settings.get("remote_client_enabled"):
+        return
+    port = app_settings.get("remote_client_port", 9879)
+    secret = app_settings.get("remote_client_secret", "")
+    if not secret:
+        log.warning("Remote client listener: no secret configured")
+        return
+    rrp_bin = os.path.join(BIN_DIR, "recode-remote")
+    if os.path.isfile(rrp_bin):
+        rrp_tmp = os.path.join(app_settings["tmp_dir"], "rrp")
+        os.makedirs(rrp_tmp, exist_ok=True)
+        status_file = os.path.join(rrp_tmp, "listener-status.json")
+        # Ensure status file exists and is writable by the listener process
+        with open(status_file, "w") as f:
+            f.write('{"enabled":true,"running":false,"gpus":[]}')
+        rrp_log = open(os.path.join(BASE_DIR, "rrp-client-listener.log"), "a")
+        _remote_client_proc = await asyncio.create_subprocess_exec(
+            rrp_bin, "listen", "--port", str(port), "--secret", secret,
+            "--status-file", status_file,
+            stdout=rrp_log, stderr=rrp_log,
+        )
+        log.info(f"Remote client listener started on port {port} (PID {_remote_client_proc.pid})")
+    else:
+        log.warning("recode-remote binary not found for listener")
+
+async def stop_remote_client_listener():
+    """Stop the reverse-connect listener."""
+    global _remote_client_proc
+    if _remote_client_proc and _remote_client_proc.returncode is None:
+        try:
+            _remote_client_proc.terminate()
+            await asyncio.wait_for(_remote_client_proc.wait(), timeout=5)
+        except Exception:
+            try: _remote_client_proc.kill()
+            except Exception: pass
+        log.info("Remote client listener stopped")
+    _remote_client_proc = None
+
+# Persistent connect processes — one per configured Remote Client
+_remote_connect_procs: dict = {}  # key: index -> subprocess
+
+async def start_remote_connectors():
+    """Start recode-remote connect for each configured remote client."""
+    await stop_remote_connectors()
+    rrp_bin = os.path.join(BIN_DIR, "recode-remote")
+    if not os.path.isfile(rrp_bin):
+        return
+    servers = app_settings.get("remote_gpu_servers", [])
+    ffmpeg_bin = os.path.join(BIN_DIR, "ffmpeg")
+    rrp_tmp = os.path.join(app_settings["tmp_dir"], "rrp")
+    os.makedirs(rrp_tmp, exist_ok=True)
+    hostname = os.uname().nodename
+    for i, srv in enumerate(servers):
+        if srv.get("enabled", True) is False:
+            continue
+        addr = (srv.get("address") or "").strip()
+        secret = (srv.get("secret") or "").strip()
+        name = srv.get("name") or hostname
+        max_jobs = srv.get("max_jobs", 1)
+        if not addr or not secret:
+            continue
+        # Append default port if not specified
+        if ":" not in addr.rsplit(".", 1)[-1]:
+            addr = f"{addr}:9879"
+        status_file = os.path.join(rrp_tmp, f"connect-status-{i}.json")
+        rrp_log = open(os.path.join(BASE_DIR, f"rrp-connect-{i}.log"), "a")
+        proc = await asyncio.create_subprocess_exec(
+            rrp_bin, "connect",
+            "--address", addr,
+            "--secret", secret,
+            "--name", name,
+            "--ffmpeg", ffmpeg_bin,
+            "--tmp-dir", rrp_tmp,
+            "--max-jobs", str(max_jobs),
+            "--status-file", status_file,
+            stdout=rrp_log, stderr=rrp_log,
+        )
+        _remote_connect_procs[i] = proc
+        log.info(f"Remote connector {i} started: {name} -> {addr} (PID {proc.pid})")
+
+async def stop_remote_connectors():
+    """Stop all remote connect processes."""
+    global _remote_connect_procs
+    for i, proc in list(_remote_connect_procs.items()):
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except Exception:
+                try: proc.kill()
+                except Exception: pass
+    _remote_connect_procs.clear()
+    log.info("Remote connectors stopped")
+
 @app.on_event("startup")
 async def startup():
     # Remove sudoers file if flagged from setup completion
@@ -4159,8 +4421,10 @@ async def startup():
     # Clear cached online status for remote servers (will be refreshed by status check)
     for srv in app_settings.get("remote_gpu_servers", []):
         srv.pop("_online", None)
-    # Start GPU server if enabled
-    await start_ffmpeg_server()
+    # Start reverse-connect listener if enabled
+    await start_remote_client_listener()
+    # Start remote client connectors
+    await start_remote_connectors()
     # Run initial remote server status check
     asyncio.create_task(remote_gpu_status())
 
@@ -5634,66 +5898,40 @@ async def cleanup_duplicate(path: str, keep: str = "encoded"):
 
 @app.get("/api/remote-gpu/status")
 async def remote_gpu_status():
-    """Check online status of all configured remote GPU servers."""
+    """Check online status of all configured remote clients (GPU→client connectors)."""
     servers = app_settings.get("remote_gpu_servers", [])
     results = []
     for i, srv in enumerate(servers):
         addr = (srv.get("address") or "").strip()
-        secret = (srv.get("secret") or "").strip()
-        name = srv.get("name") or addr or f"Server {i}"
+        name = srv.get("name") or addr or f"Client {i}"
         if not addr:
             results.append({"index": i, "name": name, "online": False, "error": "No address"})
             continue
-        # Test connectivity + auth using RRP client --ping
-        try:
-            client_bin = _get_remote_ffmpeg_bin(i)
-            env = _get_remote_ffmpeg_env(i)
-            env = {**os.environ, **env}
-            if os.path.isfile(client_bin):
-                proc = await asyncio.wait_for(
-                    asyncio.create_subprocess_exec(
-                        client_bin, "ping",
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                        env=env),
-                    timeout=10)
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-                if proc.returncode == 0:
-                    # Parse ping response: "OK encoder1,encoder2 os/arch fuse=true/false"
-                    ping_out = stderr.decode(errors="replace").strip() if stderr else "OK"
-                    parts = ping_out.split()
-                    encoders = parts[1].split(",") if len(parts) > 1 else []
-                    server_os = parts[2] if len(parts) > 2 else ""
-                    has_fuse = any(p.startswith("fuse=true") for p in parts)
-                    # Determine primary encoder type
-                    if "nvenc" in encoders:
-                        encoder_type = "nvenc"
-                    elif "videotoolbox" in encoders:
-                        encoder_type = "videotoolbox"
-                    elif "qsv" in encoders:
-                        encoder_type = "qsv"
-                    elif "amf" in encoders:
-                        encoder_type = "amf"
-                    else:
-                        encoder_type = "cpu"
-                    # Cache encoder type, FUSE support, and online status
-                    if i < len(servers):
-                        servers[i]["_encoder_type"] = encoder_type
-                        servers[i]["_has_fuse"] = has_fuse
-                        servers[i]["_online"] = True
-                    results.append({"index": i, "name": name, "online": True, "address": addr,
-                                    "encoders": encoders, "encoder_type": encoder_type,
-                                    "server_os": server_os, "has_fuse": has_fuse})
-                else:
-                    err = stderr.decode(errors="replace").strip().split("\n")[-1][:100] if stderr else "Connection failed"
-                    if i < len(servers):
-                        servers[i]["_online"] = False
-                    results.append({"index": i, "name": name, "online": False, "error": err})
-            else:
-                results.append({"index": i, "name": name, "online": False, "error": "Client binary not found"})
-        except asyncio.TimeoutError:
-            results.append({"index": i, "name": name, "online": False, "error": "Timeout"})
-        except Exception as e:
-            results.append({"index": i, "name": name, "online": False, "error": str(e)})
+        # Check actual connection status from connector's status file
+        proc = _remote_connect_procs.get(i)
+        proc_alive = proc is not None and proc.returncode is None
+        connected = False
+        connect_error = ""
+        if proc_alive:
+            status_file = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", f"connect-status-{i}.json")
+            try:
+                with open(status_file) as f:
+                    st = json.load(f)
+                connected = st.get("connected", False)
+                connect_error = st.get("error", "")
+            except Exception:
+                pass
+        if connected:
+            if i < len(servers):
+                servers[i]["_online"] = True
+            results.append({"index": i, "name": name, "online": True, "address": addr})
+        elif srv.get("enabled", True) is False:
+            results.append({"index": i, "name": name, "online": False, "error": "Disabled"})
+        else:
+            if i < len(servers):
+                servers[i]["_online"] = False
+            error_msg = connect_error or ("Not running" if not proc_alive else "Not connected")
+            results.append({"index": i, "name": name, "online": False, "error": error_msg})
     return {"servers": results}
 
 @app.get("/api/ffmpeg-server/status")
@@ -5704,6 +5942,26 @@ async def ffmpeg_server_status():
         "enabled": app_settings.get("ffmpeg_server_enabled", False),
         "running": running,
         "port": app_settings.get("ffmpeg_server_port", 9878),
+    }
+
+@app.get("/api/remote-clients/status")
+async def remote_client_status():
+    """Return status of GPU servers connected via reverse-connect."""
+    status_file = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+    running = _remote_client_proc is not None and _remote_client_proc.returncode is None
+    if running and os.path.isfile(status_file):
+        try:
+            with open(status_file) as f:
+                data = json.load(f)
+            data["port"] = app_settings.get("remote_client_port", 9879)
+            return data
+        except Exception:
+            pass
+    return {
+        "enabled": app_settings.get("remote_client_enabled", False),
+        "running": running,
+        "port": app_settings.get("remote_client_port", 9879),
+        "gpus": [],
     }
 
 @app.get("/api/settings")
@@ -5783,8 +6041,13 @@ async def update_settings(new_settings: dict):
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
     # Restart GPU server if settings changed
-    if any(k in new_settings for k in ("ffmpeg_server_enabled", "ffmpeg_server_port", "ffmpeg_server_secret")):
-        await start_ffmpeg_server()
+    # Restart reverse-connect listener if settings changed
+    if any(k in new_settings for k in ("remote_client_enabled", "remote_client_port", "remote_client_secret")):
+        await start_remote_client_listener()
+
+    # Restart remote client connectors if server list changed
+    if "remote_gpu_servers" in new_settings:
+        await start_remote_connectors()
 
     return {"ok": True, "settings": app_settings}
 

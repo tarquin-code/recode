@@ -146,4 +146,51 @@ pub fn verify_hmac(secret: &str, timestamp: u64, hmac_bytes: &[u8; 32]) -> bool 
 }
 
 pub const DEFAULT_PORT: u16 = 9878;
-pub const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks for FUSE reads
+pub const DEFAULT_LISTEN_PORT: u16 = 9879;
+pub const CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8MB chunks — larger = fewer round trips over WAN
+
+// Reverse-connect: connection type prefixes
+pub const CONN_TYPE_CONTROL: u8 = 0x01;
+pub const CONN_TYPE_DATA: u8 = 0x02;
+pub const HEARTBEAT_INTERVAL_SECS: u64 = 15;
+
+/// Messages for the reverse-connect control channel.
+/// GPU servers connect OUT to clients; this protocol manages that channel.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ReverseControlMsg {
+    /// GPU server → Client: initial auth + capabilities
+    Auth {
+        secret: String,
+        server_name: String,
+        encoders: Vec<String>,
+        os: String,
+        arch: String,
+        max_jobs: usize,
+        has_fuse: bool,
+    },
+    /// Client → GPU server: auth response
+    AuthOk,
+    AuthFail(String),
+    /// GPU server → Client: periodic heartbeat
+    Heartbeat { active_jobs: u32 },
+    /// Client → GPU server: assign a job
+    JobAssignment {
+        job_id: String,
+        ffmpeg_args: Vec<String>,
+        input_files: Vec<FileInfo>,
+        output_path: String,
+        connect_port: u16,
+    },
+    /// GPU server → Client: accept/reject
+    JobAccepted { job_id: String },
+    JobReject { job_id: String, reason: String },
+    /// GPU server → Client: job finished notification
+    JobFinished { job_id: String, exit_code: i32 },
+}
+
+/// Sent on a new data connection to identify which job it belongs to
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DataConnect {
+    pub job_id: String,
+    pub secret: String,
+}

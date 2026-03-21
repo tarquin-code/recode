@@ -1,4 +1,6 @@
 mod client;
+mod connect;
+mod listener;
 mod server;
 
 use clap::{Parser, Subcommand};
@@ -33,6 +35,34 @@ enum Commands {
     },
     /// Test authentication with a remote server
     Ping,
+    /// Listen for incoming GPU server connections (reverse-connect mode)
+    Listen {
+        #[arg(short, long, default_value_t = rrp_proto::DEFAULT_LISTEN_PORT)]
+        port: u16,
+        #[arg(short, long, env = "RRP_CLIENT_SECRET")]
+        secret: String,
+        #[arg(long, default_value = "/tmp/recode/rrp/listener-status.json")]
+        status_file: String,
+    },
+    /// Connect to a remote client as a GPU worker (reverse-connect mode)
+    Connect {
+        /// Client address (host:port)
+        #[arg(short, long)]
+        address: String,
+        #[arg(short, long, env = "RRP_CLIENT_SECRET")]
+        secret: String,
+        /// Name to advertise to clients
+        #[arg(long, default_value = "GPU Worker")]
+        name: String,
+        #[arg(long, default_value = "/opt/Recode/bin/ffmpeg")]
+        ffmpeg: String,
+        #[arg(long, default_value = "/tmp/rrp")]
+        tmp_dir: String,
+        #[arg(long, default_value_t = 4)]
+        max_jobs: usize,
+        #[arg(long, default_value = "/tmp/recode/rrp/connect-status.json")]
+        status_file: String,
+    },
 }
 
 #[tokio::main]
@@ -47,6 +77,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Ping => {
             client::run_ping().await
+        }
+        Commands::Listen { port, secret, status_file } => {
+            tracing_subscriber::fmt::init();
+            listener::run(port, secret, status_file).await
+        }
+        Commands::Connect { address, secret, name, ffmpeg, tmp_dir, max_jobs, status_file } => {
+            tracing_subscriber::fmt::init();
+            connect::run(address, secret, name, ffmpeg, tmp_dir, max_jobs, status_file).await
         }
     }
 }

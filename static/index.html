@@ -551,7 +551,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <span class="status-dot"><span class="dot" id="dotWs"></span>WS</span>
             <span class="status-dot"><span class="dot" id="dotFfmpeg"></span>ffmpeg</span>
             <span class="status-dot"><span class="dot" id="dotGpu"></span>GPU</span>
-            <span class="status-dot" id="dotGpuServerWrap" style="display:none;"><span class="dot" id="dotGpuServer"></span>Server</span>
+            <span class="status-dot" id="dotRemoteServerWrap" style="display:none;"><span class="dot" id="dotRemoteServer"></span>Server<span id="remoteServerBadge" style="display:none;margin-left:2px;background:var(--accent);color:#fff;border-radius:8px;padding:0 5px;font-size:9px;font-weight:700;vertical-align:top;"></span></span>
+            <span class="status-dot" id="dotRemoteClientWrap" style="display:none;"><span class="dot" id="dotRemoteClient"></span>Client</span>
             <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light theme" id="themeBtn"></button>
         </div>
     </header>
@@ -2419,36 +2420,39 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <!-- Remote GPU -->
                 <div class="set-section" id="setTab-remote-gpu">
                     <div class="set-section-title">Remote GPU</div>
-                    <div class="set-section-desc">Use remote GPU servers for hardware-accelerated encoding. Jobs are load-balanced across enabled servers. Select "Remote" targets in the Hardware &rarr; GPU Target dropdown.</div>
+                    <div class="set-section-desc">Use remote GPU servers for hardware-accelerated encoding. GPU servers connect out to this machine &mdash; no port forwarding needed on the GPU side.</div>
 
-                    <!-- Remote Servers -->
+                    <!-- Remote Server (listener — accept GPU server connections) -->
                     <div style="margin-top:16px;">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Remote Servers</div>
-                        <div id="remoteGpuServersList"></div>
-                        <div style="display:flex;gap:6px;margin-top:6px;">
-                            <button class="btn btn-sm btn-primary" style="font-size:11px;" onclick="addRemoteGpuServer()">+ Add Server</button>
-                            <button class="btn btn-sm" style="font-size:11px;" onclick="checkAllRemoteServers()">Check Servers</button>
-                        </div>
-                    </div>
-
-                    <!-- GPU Server Mode -->
-                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">GPU Server Mode</div>
-                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Share this machine's GPU with other Recode instances over the network. Local encoding is not affected.</div>
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Remote Server</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Accept connections from remote GPU servers. Add a Remote Client on each GPU server with the address and secret below.</div>
+                        <div id="remoteServerAddress" style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;padding:6px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;font-family:var(--font-mono);cursor:pointer;display:none;" onclick="navigator.clipboard.writeText(this.textContent.trim());this.style.borderColor='var(--success)';setTimeout(()=>this.style.borderColor='',1000);" title="Click to copy"></div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <div class="form-group" style="margin:0;">
                                 <label>Port</label>
-                                <input type="text" id="setFfmpegServerPort" value="5050" placeholder="5050">
+                                <input type="text" id="setRemoteServerPort" value="9879" placeholder="9879">
                             </div>
                             <div class="form-group" style="margin:0;">
                                 <label>Shared Secret</label>
-                                <input type="text" id="setFfmpegServerSecret" placeholder="Auth secret for clients">
+                                <input type="text" id="setRemoteServerSecret" placeholder="Secret for GPU servers to authenticate">
                             </div>
                         </div>
                         <div style="margin-top:6px;">
-                            <label class="set-chk"><input type="checkbox" id="setFfmpegServerEnabled"> Enable GPU Server</label>
+                            <label class="set-chk"><input type="checkbox" id="setRemoteServerEnabled"> Enable Remote Server</label>
                         </div>
-                        <div id="ffmpegServerStatus" style="margin-top:4px;font-size:11px;color:var(--text-muted);"></div>
+                        <div id="remoteServerStatus" style="margin-top:8px;"></div>
+                        <div id="connectedGpuList" style="margin-top:8px;"></div>
+                    </div>
+
+                    <!-- Remote Clients (connect this GPU out to clients) -->
+                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Remote Clients</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Connect this machine's GPU to remote Recode clients. Add the client's address and shared secret.</div>
+                        <div id="remoteClientsList"></div>
+                        <div style="display:flex;gap:6px;margin-top:6px;">
+                            <button class="btn btn-sm btn-primary" style="font-size:11px;" onclick="addRemoteClient()">+ Add Client</button>
+                            <button class="btn btn-sm" style="font-size:11px;" onclick="checkRemoteClients()">Check Clients</button>
+                        </div>
                     </div>
                 </div>
 
@@ -2635,11 +2639,11 @@ function handleMessage(msg) {
         state.active = msg.data.active || [];
         state.current = msg.data.current;  // backward compat
         state.history = msg.data.history || [];
-        // Check remote servers every 60s via state updates
+        // Refresh remote GPU targets every 15s via state updates
         const now = Date.now();
-        if (now - _lastRemoteCheck > 60000) {
+        if (now - _lastRemoteCheck > 15000) {
             _lastRemoteCheck = now;
-            updateRemoteTargetStatus();
+            refreshGpuTargets();
         }
         state.queueEnabled = msg.data.queue_enabled !== false;
         renderQueue(); renderEncoding(); renderHistory(); updateBadges();
@@ -2669,30 +2673,118 @@ function handleMessage(msg) {
 }
 
 function updateGpuServerStatus() {
-    fetch('/api/ffmpeg-server/status').then(r => r.json()).then(d => {
-        // Update header dot
-        const wrap = document.getElementById('dotGpuServerWrap');
-        const dot = document.getElementById('dotGpuServer');
+    // Update Remote Server header indicator
+    fetch('/api/remote-clients/status').then(r => r.json()).then(d => {
+        // Cache connected GPUs for getHwLabel()
+        state._connectedGpus = (d.gpus || []).filter(g => g.online);
+        // Show server address for easy copying
+        const addrEl = document.getElementById('remoteServerAddress');
+        if (addrEl) {
+            if (d.enabled && d.running) {
+                const host = window.location.hostname || 'YOUR_IP';
+                const port = d.port || 9879;
+                addrEl.textContent = host + ':' + port;
+                addrEl.style.display = '';
+                addrEl.title = 'Click to copy — use this address in Remote Clients on your GPU server';
+            } else {
+                addrEl.style.display = 'none';
+            }
+        }
+        const wrap = document.getElementById('dotRemoteServerWrap');
+        const dot = document.getElementById('dotRemoteServer');
+        const badge = document.getElementById('remoteServerBadge');
+        const onlineGpus = (d.gpus || []).filter(g => g.online);
         if (d.enabled) {
             if (wrap) wrap.style.display = '';
             if (dot) dot.className = d.running ? 'dot ok' : 'dot err';
+            if (badge) {
+                if (onlineGpus.length > 0) {
+                    badge.textContent = onlineGpus.length;
+                    badge.style.display = '';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
         } else {
             if (wrap) wrap.style.display = 'none';
+            if (badge) badge.style.display = 'none';
         }
-        // Update settings panel status text
-        const el = document.getElementById('ffmpegServerStatus');
-        if (el) {
+        // Update settings panel
+        const statusEl = document.getElementById('remoteServerStatus');
+        if (statusEl) {
             if (d.running) {
-                el.innerHTML = '<span style="color:var(--success);">Server running on port ' + d.port + '</span>';
+                const host = window.location.hostname || 'localhost';
+                statusEl.innerHTML = '<span style="color:var(--success);font-size:11px;">&#9679; Listening on ' + host + ':' + (d.port || '9879') + '</span>';
             } else if (d.enabled) {
-                el.innerHTML = '<span style="color:var(--error);">Server enabled but not running</span>';
+                statusEl.innerHTML = '<span style="color:var(--error);font-size:11px;">&#9679; Enabled but not running</span>';
             } else {
-                el.textContent = 'Server disabled';
+                statusEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">Disabled</span>';
+            }
+        }
+        // Update connected GPU list
+        const listEl = document.getElementById('connectedGpuList');
+        if (listEl) {
+            if (!d.enabled) {
+                listEl.innerHTML = '';
+            } else if (!onlineGpus.length) {
+                listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0;">No GPU servers connected.</div>';
+            } else {
+                let html = '<div style="font-size:11px;color:var(--text-secondary);font-weight:500;margin-bottom:4px;">Connected GPUs</div>';
+                onlineGpus.forEach(gpu => {
+                    const enc = gpu.encoders || [];
+                    const h265 = enc.filter(e => e.startsWith('hevc_') || e === 'libx265');
+                    const h264 = enc.filter(e => e.startsWith('h264_') || e === 'libx264');
+                    const h265short = h265.map(e => e.replace('hevc_','').replace('/no-temporal-aq','*').replace('libx265','cpu'));
+                    const h264short = h264.map(e => e.replace('h264_','').replace('libx264','cpu'));
+                    const badges = [];
+                    if (h265.length) badges.push('<span style="background:rgba(88,166,255,0.15);color:#58a6ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">H.265 ' + h265short.join(', ') + '</span>');
+                    if (h264.length) badges.push('<span style="background:rgba(63,185,80,0.15);color:#3fb950;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">H.264 ' + h264short.join(', ') + '</span>');
+                    html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;flex-wrap:wrap;">
+                        <span style="color:var(--success);font-size:10px;">&#9679;</span>
+                        <span style="font-weight:500;font-size:12px;">${escHtml(gpu.name || 'Unknown')}</span>
+                        <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">${escHtml(gpu.address || '')}</span>
+                        <span style="font-size:11px;color:var(--text-muted);">${escHtml(gpu.os || '')}/${escHtml(gpu.arch || '')}</span>
+                        ${badges.join(' ')}
+                        <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">${gpu.active_jobs || 0}/${gpu.max_jobs || 1} jobs</span>
+                    </div>`;
+                });
+                listEl.innerHTML = html;
             }
         }
     }).catch(() => {});
-    // Also refresh remote server status dots in sidebar GPU target dropdown
+    // Update Client indicator (GPU server connecting to clients)
+    fetch('/api/remote-gpu/status').then(r => r.json()).then(d => {
+        const wrap = document.getElementById('dotRemoteClientWrap');
+        const dot = document.getElementById('dotRemoteClient');
+        const connected = (d.servers || []).some(s => s.online);
+        const hasClients = (d.servers || []).length > 0;
+        if (hasClients) {
+            if (wrap) wrap.style.display = '';
+            if (dot) dot.className = connected ? 'dot ok' : 'dot err';
+        } else {
+            if (wrap) wrap.style.display = 'none';
+        }
+    }).catch(() => {});
+    // Also refresh remote target options in sidebar GPU target dropdown
     updateRemoteTargetStatus();
+}
+// Poll server status every 10s so connected GPUs update live
+if (!window._remoteServerPoll) {
+    window._remoteServerPoll = setInterval(() => updateGpuServerStatus(), 10000);
+}
+
+async function refreshGpuTargets() {
+    // Fetch connected GPUs first, then rebuild dropdown
+    try {
+        const r = await fetch('/api/remote-clients/status');
+        const d = await r.json();
+        state._connectedGpus = (d.gpus || []).filter(g => g.online);
+    } catch(e) {}
+    const sel = document.getElementById('selGpuTarget');
+    if (sel) {
+        const gpuCnt = state.system?.gpu ? (state.system.gpu_count || 0) : 0;
+        populateGpuTargets(sel, gpuCnt);
+    }
 }
 
 async function updateRemoteTargetStatus() {
@@ -2740,11 +2832,11 @@ async function checkSystem() {
         const gpuTargetSel = document.getElementById('selGpuTarget');
         const gpuCnt = state.system.gpu ? (state.system.gpu_count || 0) : 0;
         const encoderSel = document.getElementById('selEncoder');
-        if (gpuTargetSel && !gpuTargetSel._populated) {
-            populateGpuTargets(gpuTargetSel, gpuCnt);
+        if (gpuTargetSel) {
+            refreshGpuTargets();
         }
-        // No local GPU and no remote servers — disable GPU option
-        const hasRemote = (state.settings?.remote_gpu_servers || []).length > 0;
+        // No local GPU and no remote GPUs — disable GPU option
+        const hasRemote = (state.settings?.remote_gpu_servers || []).length > 0 || (state._connectedGpus || []).length > 0;
         if (gpuCnt === 0 && !hasRemote) {
             if (encoderSel) {
                 for (const opt of encoderSel.options) {
@@ -2903,7 +2995,17 @@ async function cancelScan() {
 
 async function clearScanCache() {
     const btn = event.target;
-    const origText = btn.textContent;
+    if (!btn._origText) btn._origText = btn.textContent;
+    if (!btn._confirm) {
+        btn._confirm = true;
+        btn.textContent = 'Are you sure?';
+        btn.style.background = 'var(--error)';
+        btn.style.color = '#fff';
+        btn._timeout = setTimeout(() => { if (btn._confirm) { btn._confirm = false; btn.textContent = btn._origText; btn.style.background = ''; btn.style.color = ''; } }, 3000);
+        return;
+    }
+    btn._confirm = false;
+    clearTimeout(btn._timeout);
     btn.disabled = true;
     btn.textContent = 'Clearing...';
     try {
@@ -2911,10 +3013,11 @@ async function clearScanCache() {
         const data = await res.json();
         if (data.ok) {
             btn.textContent = 'Cleared!';
-            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+            btn.style.background = 'var(--success)';
+            setTimeout(() => { btn.textContent = btn._origText; btn.disabled = false; btn.style.background = ''; btn.style.color = ''; }, 2000);
         } else {
             btn.textContent = 'Error';
-            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+            setTimeout(() => { btn.textContent = btn._origText; btn.disabled = false; btn.style.background = ''; btn.style.color = ''; }, 2000);
         }
     } catch (err) {
         btn.textContent = 'Error';
@@ -2960,6 +3063,7 @@ async function doScan() {
         else {
             state.scanResults = data.files;
             renderScanResults();
+            refreshGpuTargets();
             if (data.cancelled) document.getElementById('scanProgressText').textContent = `Scan cancelled — ${data.files.length} files found before cancellation`;
         }
     } catch (err) { alert('Scan failed: ' + err.message); }
@@ -3007,9 +3111,13 @@ function getHwLabel(s) {
     if (s.use_cpu) return 'CPU';
     const ri = s._remote_server_idx;
     if (ri != null && ri >= 0) {
-        const servers = state.settings?.remote_gpu_servers || [];
-        const name = (ri < servers.length) ? servers[ri].name : '';
-        return 'Remote: ' + (name || 'GPU ' + ri);
+        // Try explicit name, then parse from gpu_target, then fallback
+        let name = s._remote_gpu_name || '';
+        if (!name && s.gpu_target && s.gpu_target.startsWith('remote:')) {
+            name = s.gpu_target.split(':').slice(1).join(':');
+        }
+        if (name && name !== 'remote') return 'Remote: ' + name;
+        return 'Remote GPU';
     }
     const gid = s.gpu_id;
     if (gid != null && gid !== 'auto' && gid !== '-1' && gid !== -1) return 'GPU ' + gid;
@@ -4025,14 +4133,28 @@ function toggleJobDetail(jobId) {
     if (arr) arr.style.transform = open ? 'rotate(90deg)' : '';
 }
 
-async function killTranscode(pid) {
-    if (!confirm(`Kill transcode process PID ${pid}?`)) return;
+async function killTranscode(pid, btn) {
+    if (!btn) btn = event.target;
+    if (!btn._origText) btn._origText = btn.textContent;
+    if (!btn._confirm) {
+        btn._confirm = true;
+        btn.textContent = 'Confirm Kill?';
+        btn.style.background = 'var(--error)';
+        btn.style.color = '#fff';
+        btn._timeout = setTimeout(() => { if (btn._confirm) { btn._confirm = false; btn.textContent = btn._origText; btn.style.background = ''; btn.style.color = ''; } }, 3000);
+        return;
+    }
+    btn._confirm = false;
+    clearTimeout(btn._timeout);
+    btn.disabled = true;
+    btn.textContent = 'Killing...';
     try {
         const res = await fetch(`/api/system/transcodes/${pid}/kill`, {method: 'POST'});
         const data = await res.json();
-        if (data.error) alert(data.error);
-        else setTimeout(pollSystemTranscodes, 500);
-    } catch(e) { alert('Failed to kill process: ' + e.message); }
+        if (data.error) { btn.textContent = 'Error'; }
+        else { btn.textContent = 'Killed'; setTimeout(pollSystemTranscodes, 500); }
+        setTimeout(() => { btn.textContent = btn._origText; btn.disabled = false; btn.style.background = ''; btn.style.color = ''; }, 2000);
+    } catch(e) { btn.textContent = 'Failed'; setTimeout(() => { btn.textContent = btn._origText; btn.disabled = false; btn.style.background = ''; btn.style.color = ''; }, 2000); }
 }
 
 /* =========================================================================
@@ -4883,17 +5005,15 @@ async function openSettings() {
         document.getElementById('setEnglishOnly').checked = !!s.english_only;
         document.getElementById('setTestMode').checked = !!s.test_mode;
         document.getElementById('setEncodeSuffix').value = s.encode_suffix || '';
-        // Remote GPU servers
-        window._remoteGpuServers = s.remote_gpu_servers || [];
-        renderRemoteGpuServers();
-        // Auto-check remote server status after rendering
-        setTimeout(() => checkAllRemoteServers(), 500);
-        // GPU Server mode
-        document.getElementById('setFfmpegServerEnabled').checked = !!s.ffmpeg_server_enabled;
-        document.getElementById('setFfmpegServerPort').value = s.ffmpeg_server_port || 5050;
-        document.getElementById('setFfmpegServerSecret').value = s.ffmpeg_server_secret || '';
-        // Check server status
+        // Remote Server (listener)
+        document.getElementById('setRemoteServerEnabled').checked = !!s.remote_client_enabled;
+        document.getElementById('setRemoteServerPort').value = s.remote_client_port || 9879;
+        document.getElementById('setRemoteServerSecret').value = s.remote_client_secret || '';
         updateGpuServerStatus();
+        // Remote Clients (connect out to clients)
+        window._remoteClients = s.remote_gpu_servers || [];
+        renderRemoteClients();
+        setTimeout(() => checkRemoteClients(), 500);
         // General
         document.getElementById('setAllowedPaths').value = (s.allowed_paths || ['/mnt']).join(', ');
         document.getElementById('setTmpDir').value = s.tmp_dir || '/var/lib/plex/tmp';
@@ -5031,8 +5151,8 @@ async function loadAboutSystemInfo() {
     }
 }
 
-// GPU target population with remote server status check
-async function populateGpuTargets(sel, localGpuCount) {
+// GPU target population using cached connected GPU state
+function populateGpuTargets(sel, localGpuCount) {
     const savedVal = sel.value;
     sel.innerHTML = '<option value="auto">Auto (all local + remote)</option>';
     // Local GPUs
@@ -5040,37 +5160,16 @@ async function populateGpuTargets(sel, localGpuCount) {
         if (localGpuCount > 1) { const o = new Option('\u00A0\u00A0All Local GPUs', 'local'); sel.add(o); }
         for (let i = 0; i < localGpuCount; i++) { const o = new Option('\u00A0\u00A0\u00A0\u00A0GPU ' + i, 'gpu:' + i); sel.add(o); }
     }
-    // Check remote servers
-    const remoteServers = (state.settings?.remote_gpu_servers || []).filter(s => s.enabled !== false);
-    if (remoteServers.length > 0) {
+    // Connected GPUs from Remote Server listener (cached by updateGpuServerStatus)
+    const connectedGpus = state._connectedGpus || [];
+    if (connectedGpus.length > 0) {
         sel.add(new Option('\u00A0\u00A0All Remote GPUs', 'remote'));
-        // Add enabled remote servers as "checking..."
-        remoteServers.forEach((srv, i) => {
-            // Find original index in full server list
-            const origIdx = (state.settings?.remote_gpu_servers || []).indexOf(srv);
-            const opt = new Option('\u00A0\u00A0\u00A0\u00A0\u26AA ' + (srv.name || srv.address), 'remote:' + origIdx);
-            opt.id = 'gpuTarget_remote_' + origIdx;
+        connectedGpus.forEach((gpu, i) => {
+            const enc = gpu.encoder_type ? ' (' + gpu.encoder_type + ')' : '';
+            const name = gpu.name || 'GPU ' + i;
+            const opt = new Option('\u00A0\u00A0\u00A0\u00A0\uD83D\uDFE2 ' + name + enc, 'remote:' + name);
             sel.add(opt);
         });
-        // Check online status async
-        try {
-            const r = await fetch('/api/remote-gpu/status');
-            const data = await r.json();
-            for (const srv of (data.servers || [])) {
-                const opt = document.getElementById('gpuTarget_remote_' + srv.index);
-                if (opt) {
-                    if (srv.online) {
-                        const enc = srv.encoder_type ? ' (' + srv.encoder_type + ')' : '';
-                        opt.textContent = '\u00A0\u00A0\u00A0\u00A0\uD83D\uDFE2 ' + srv.name + enc;
-                        opt.style.color = '';
-                    } else {
-                        opt.textContent = '\u00A0\u00A0\u00A0\u00A0\uD83D\uDD34 ' + srv.name;
-                        opt.disabled = true;
-                        opt.style.color = 'var(--error)';
-                    }
-                }
-            }
-        } catch(e) {}
     }
     // Restore selection if still valid
     if (savedVal) {
@@ -5078,87 +5177,129 @@ async function populateGpuTargets(sel, localGpuCount) {
             if (opt.value === savedVal) { sel.value = savedVal; break; }
         }
     }
-    sel._populated = true;
 }
 
-// Remote GPU server management
-window._remoteGpuServers = [];
-function renderRemoteGpuServers() {
-    const container = document.getElementById('remoteGpuServersList');
+// Remote Clients management (GPU servers connecting out to clients)
+window._remoteClients = [];
+function renderRemoteClients() {
+    const container = document.getElementById('remoteClientsList');
     if (!container) return;
-    const servers = window._remoteGpuServers;
-    if (!servers.length) {
-        container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0;">No remote servers configured.</div>';
+    const clients = window._remoteClients;
+    if (!clients.length) {
+        container.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0;">No remote clients configured.</div>';
         return;
     }
     let html = '';
-    servers.forEach((srv, i) => {
-        const disabled = srv.enabled === false;
-        const statusId = 'rgs-status-' + i;
-        // const tm = srv.transfer_mode || 'mount'; // Transfer mode UI disabled — defaulting to mount
-        const tm = 'mount';
+    clients.forEach((c, i) => {
+        const disabled = c.enabled === false;
+        const statusId = 'rc-status-' + i;
         const lbl = i === 0 ? (f) => `<label style="display:block;font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:4px;">${f}</label>` : () => '';
-        const mj = srv.max_jobs || 1;
+        const mj = c.max_jobs || 1;
         html += `<div style="display:grid;grid-template-columns:1fr 1.5fr 1fr 60px auto;gap:6px 8px;align-items:end;margin-bottom:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
-            <div>${lbl('Name')}<input type="text" value="${escHtml(srv.name || '')}" placeholder="Server name" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].name=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'"></div>
-            <div>${lbl('Address')}<input type="text" value="${escHtml(srv.address || '')}" placeholder="192.168.1.100:9878" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].address=this.value" oninput="const v=this.value.trim();const ok=/^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$/.test(v)||/^\\[[\\da-fA-F:]+\\]:\\d{1,5}$/.test(v)||/^[\\w.-]+:\\d{1,5}$/.test(v);this.style.borderColor=(!v||ok)?'':'var(--error)'"></div>
-            <div>${lbl('Secret')}<input type="text" value="${escHtml(srv.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].secret=this.value" oninput="this.style.borderColor=this.value.trim()?'':'var(--error)'"></div>
-            <div>${lbl('Jobs')}<input type="number" value="${mj}" min="1" max="4" style="width:100%;text-align:center;-moz-appearance:textfield;" ${disabled ? 'disabled' : ''} onchange="window._remoteGpuServers[${i}].max_jobs=Math.min(4,Math.max(1,parseInt(this.value)||1));this.value=window._remoteGpuServers[${i}].max_jobs"></div>
-            <!-- Transfer mode UI hidden — defaulting to mount. Uncomment to restore per-server mode selection:
-            <div>` + lbl('Mode') + `<select style="width:100%;" ` + (disabled ? 'disabled' : '') + ` onchange="window._remoteGpuServers[` + i + `].transfer_mode=this.value">
-                <option value="upload" ` + (tm === 'upload' ? 'selected' : '') + `>Upload</option>
-                <option value="mount" ` + (tm === 'mount' ? 'selected' : '') + `>Mount</option>
-            </select></div> -->
+            <div>${lbl('Name')}<input type="text" value="${escHtml(c.name || '')}" placeholder="Client name" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].name=this.value"></div>
+            <div>${lbl('Address')}<input type="text" value="${escHtml(c.address || '')}" placeholder="client.example.com:9879" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].address=this.value"></div>
+            <div>${lbl('Secret')}<input type="text" value="${escHtml(c.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].secret=this.value"></div>
+            <div>${lbl('Jobs')}<input type="number" value="${mj}" min="1" max="4" style="width:100%;text-align:center;-moz-appearance:textfield;" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].max_jobs=Math.min(4,Math.max(1,parseInt(this.value)||1));this.value=window._remoteClients[${i}].max_jobs"></div>
             <div style="display:flex;gap:6px;align-items:center;align-self:end;">
-                <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Enable server' : 'Disable server'}" style="height:34px;padding:0 12px;display:inline-flex;align-items:center;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;cursor:pointer;transition:filter 0.15s;" onclick="window._remoteGpuServers[${i}].enabled=${disabled};renderRemoteGpuServers();setTimeout(()=>checkAllRemoteServers(),300);">${svgIcon('power', 14)}</button>
-                <button class="btn btn-danger btn-sm" style="height:33px;padding:0 12px;display:inline-flex;align-items:center;" onclick="window._remoteGpuServers.splice(${i},1);renderRemoteGpuServers();">Remove</button>
+                <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="height:34px;padding:0 12px;display:inline-flex;align-items:center;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;cursor:pointer;" onclick="window._remoteClients[${i}].enabled=${disabled};renderRemoteClients();setTimeout(()=>checkRemoteClients(),300);">${svgIcon('power', 14)}</button>
+                <button class="btn btn-danger btn-sm" style="height:33px;padding:0 12px;display:inline-flex;align-items:center;" onclick="window._remoteClients.splice(${i},1);renderRemoteClients();">Remove</button>
             </div>
         </div>`;
     });
     container.innerHTML = html;
 }
-async function checkAllRemoteServers() {
-    const servers = window._remoteGpuServers || [];
-    if (!servers.length) return;
-    // Show checking state for enabled servers
-    servers.forEach((srv, i) => {
-        const el = document.getElementById('rgs-status-' + i);
-        if (el && srv.enabled !== false) {
+async function checkRemoteClients() {
+    const clients = window._remoteClients || [];
+    if (!clients.length) return;
+    // Show spinning indicator on each enabled client's power button
+    clients.forEach((c, i) => {
+        const el = document.getElementById('rc-status-' + i);
+        if (el && c.enabled !== false) {
             el.style.background = 'var(--warning)';
             el.title = 'Checking...';
+            el.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top:2px solid #fff;border-radius:50%;animation:spin 0.8s linear infinite;"></span>';
         }
     });
     try {
-        // Save only valid servers before checking
-        const validServers = servers.filter(s => s.name?.trim() && s.address?.trim() && s.secret?.trim());
-        if (validServers.length > 0) {
+        const validClients = clients.filter(c => c.name?.trim() && c.address?.trim() && c.secret?.trim());
+        if (validClients.length > 0) {
             await fetch('/api/settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({remote_gpu_servers: validServers}),
+                body: JSON.stringify({remote_gpu_servers: validClients}),
             });
         }
+        // Wait for connectors to restart and establish connections
+        await new Promise(r => setTimeout(r, 3000));
         const r = await fetch('/api/remote-gpu/status');
         const data = await r.json();
         for (const srv of (data.servers || [])) {
-            const el = document.getElementById('rgs-status-' + srv.index);
+            const el = document.getElementById('rc-status-' + srv.index);
             if (!el) continue;
-            if (window._remoteGpuServers[srv.index]?.enabled === false) {
-                el.style.background = 'var(--error)';
-                el.title = 'Disabled — click to enable';
+            el.innerHTML = svgIcon('power', 14);
+            if (window._remoteClients[srv.index]?.enabled === false) {
+                el.style.background = 'var(--error)'; el.title = 'Disabled';
             } else if (srv.online) {
-                el.style.background = 'var(--success)';
-                el.title = 'Online' + (srv.encoder_type ? ' (' + srv.encoder_type + ')' : '') + ' — click to disable';
+                el.style.background = 'var(--success)'; el.title = 'Connected to ' + (srv.address || '');
             } else {
-                el.style.background = 'var(--warning)';
-                el.title = (srv.error || 'Offline') + ' — click to disable';
+                el.style.background = 'var(--warning)'; el.title = srv.error || 'Not connected';
             }
         }
-    } catch(e) {}
+    } catch(e) {
+        // Restore icons on error
+        clients.forEach((c, i) => {
+            const el = document.getElementById('rc-status-' + i);
+            if (el) el.innerHTML = svgIcon('power', 14);
+        });
+    }
 }
+function addRemoteClient() {
+    window._remoteClients.push({name: '', address: '', secret: '', enabled: true, max_jobs: 1});
+    renderRemoteClients();
+}
+// Keep old function names as aliases for backward compatibility
+window._remoteGpuServers = window._remoteClients;
+function renderRemoteGpuServers() { renderRemoteClients(); }
+function checkAllRemoteServers() { checkRemoteClients(); }
 function addRemoteGpuServer() {
     window._remoteGpuServers.push({name: '', address: '', secret: '', enabled: true});
     renderRemoteGpuServers();
+}
+
+async function checkConnectedGpus() {
+    const statusEl = document.getElementById('remoteClientStatus');
+    const listEl = document.getElementById('connectedGpuList');
+    if (!statusEl) return;
+    try {
+        const r = await fetch('/api/remote-clients/status');
+        const data = await r.json();
+        if (!data.enabled) {
+            statusEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">Listener disabled</span>';
+            listEl.innerHTML = '';
+            return;
+        }
+        statusEl.innerHTML = data.running
+            ? '<span style="font-size:11px;color:var(--success);">&#9679; Listener running on port ' + (data.port || '9879') + '</span>'
+            : '<span style="font-size:11px;color:var(--error);">&#9679; Listener not running</span>';
+        const gpus = data.gpus || [];
+        if (!gpus.length) {
+            listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0;">No GPU servers connected.</div>';
+            return;
+        }
+        let html = '';
+        gpus.forEach(gpu => {
+            const online = gpu.online !== false;
+            html += `<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;">
+                <span style="color:${online ? 'var(--success)' : 'var(--error)'};font-size:10px;">&#9679;</span>
+                <span style="font-weight:500;font-size:12px;">${escHtml(gpu.name || 'Unknown')}</span>
+                <span style="font-size:11px;color:var(--text-muted);">${escHtml(gpu.encoder_type || '')} ${escHtml((gpu.os || '') + '/' + (gpu.arch || ''))}</span>
+                <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">Jobs: ${gpu.active_jobs || 0}/${gpu.max_jobs || 1}</span>
+            </div>`;
+        });
+        listEl.innerHTML = html;
+    } catch(e) {
+        statusEl.innerHTML = '<span style="font-size:11px;color:var(--error);">Error checking status</span>';
+    }
 }
 
 function onSettingsPresetChange() {
@@ -5374,19 +5515,19 @@ async function saveSettings() {
         watch_enabled: document.getElementById('setWatchEnabled').checked,
         watch_interval: parseInt(document.getElementById('setWatchInterval').value) || 300,
         watch_paths: document.getElementById('setWatchPaths').value.split('\n').map(s => s.trim()).filter(Boolean),
-        // Remote GPU — only save servers with all fields filled and valid address
-        remote_gpu_servers: (window._remoteGpuServers || []).filter(s => {
-            if (!s.name?.trim() || !s.address?.trim() || !s.secret?.trim()) return false;
-            const addr = s.address.trim();
-            // IPv4:port, IPv6:port (e.g. [::1]:5050), or hostname:port
+        // Remote Server (listener)
+        remote_client_enabled: document.getElementById('setRemoteServerEnabled').checked,
+        remote_client_port: parseInt(document.getElementById('setRemoteServerPort').value) || 9879,
+        remote_client_secret: document.getElementById('setRemoteServerSecret').value.trim(),
+        // Remote Clients (connect out)
+        remote_gpu_servers: (window._remoteClients || []).filter(c => {
+            if (!c.name?.trim() || !c.address?.trim() || !c.secret?.trim()) return false;
+            const addr = c.address.trim();
             if (!/^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$/.test(addr) &&
                 !/^\[[\da-fA-F:]+\]:\d{1,5}$/.test(addr) &&
                 !/^[\w.-]+:\d{1,5}$/.test(addr)) return false;
             return true;
         }),
-        ffmpeg_server_enabled: document.getElementById('setFfmpegServerEnabled').checked,
-        ffmpeg_server_port: parseInt(document.getElementById('setFfmpegServerPort').value) || 5050,
-        ffmpeg_server_secret: document.getElementById('setFfmpegServerSecret').value,
         // Library profiles
         library_profiles: libraryProfiles,
         // Theme
@@ -5405,8 +5546,8 @@ async function saveSettings() {
         const data = await res.json();
         if (data.ok) {
             applySettingsToSidebar(data.settings);
-            // Refresh GPU server status and re-check remote servers after save
-            setTimeout(() => { updateGpuServerStatus(); checkAllRemoteServers(); }, 1000);
+            // Refresh server status and check remote client connections after save
+            setTimeout(() => { updateGpuServerStatus(); checkRemoteClients(); }, 2000);
             btn.textContent = 'Saved';
             btn.style.background = 'var(--success)';
             const unsaved = document.getElementById('settingsUnsaved');
@@ -5570,8 +5711,24 @@ async function loadStats() {
 }
 
 async function resetStats() {
-    if (!confirm('Reset all encode statistics? This cannot be undone.')) return;
+    const btn = event.target;
+    if (!btn._origText) btn._origText = btn.textContent;
+    if (!btn._confirm) {
+        btn._confirm = true;
+        btn.textContent = 'Are you sure?';
+        btn.style.background = 'var(--error)';
+        btn.style.color = '#fff';
+        btn._timeout = setTimeout(() => { if (btn._confirm) { btn._confirm = false; btn.textContent = btn._origText; btn.style.background = ''; btn.style.color = ''; } }, 3000);
+        return;
+    }
+    btn._confirm = false;
+    clearTimeout(btn._timeout);
+    btn.disabled = true;
+    btn.textContent = 'Resetting...';
     await fetch('/api/stats/reset', {method: 'POST'});
+    btn.textContent = 'Reset!';
+    btn.style.background = 'var(--success)';
+    setTimeout(() => { btn.textContent = btn._origText; btn.disabled = false; btn.style.background = ''; btn.style.color = ''; }, 2000);
     loadStats();
 }
 

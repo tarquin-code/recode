@@ -21,7 +21,7 @@ use tracing::{error, info, warn};
 const TTL: Duration = Duration::from_secs(3600);
 
 /// Removes the job directory on drop — guarantees cleanup on cancel, disconnect, or error.
-struct CleanupGuard(PathBuf);
+pub struct CleanupGuard(pub PathBuf);
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         if self.0.exists() {
@@ -40,17 +40,21 @@ impl Drop for CleanupGuard {
 }
 
 #[cfg(feature = "fuse")]
-/// Platform-specific FUSE unmount
+/// Platform-specific FUSE unmount — uses lazy unmount to handle busy mounts
 fn fuse_unmount(path: &std::path::Path) {
     let path_str = path.to_string_lossy();
     #[cfg(target_os = "linux")]
     {
+        // Try normal unmount first, then lazy unmount if busy
         let _ = std::process::Command::new("fusermount3").args(["-u", path_str.as_ref()]).output();
         let _ = std::process::Command::new("fusermount").args(["-u", path_str.as_ref()]).output();
+        let _ = std::process::Command::new("fusermount3").args(["-uz", path_str.as_ref()]).output();
+        let _ = std::process::Command::new("fusermount").args(["-uz", path_str.as_ref()]).output();
     }
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("umount").args([path_str.as_ref()]).output();
+        let _ = std::process::Command::new("umount").args(["-f", path_str.as_ref()]).output();
     }
 }
 
@@ -148,146 +152,10 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
 
     #[cfg(feature = "fuse")]
     if transfer_mode == TransferMode::Mount {
-        // --- FUSE mode: mount files on-demand ---
-        std::fs::create_dir_all(&mount_dir)?;
-
-        let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<FuseReadRequest>(32);
-
-        let fs = RrpFuse::new(input_files.clone(), req_tx);
-        let mount_path = mount_dir.clone();
-        let mount_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let mount_ok2 = mount_ok.clone();
-        let fuse_handle = std::thread::spawn(move || {
-            let mut options = vec![
-                MountOption::RO,
-                MountOption::FSName("rrp".into()),
-            ];
-            #[cfg(target_os = "linux")]
-            options.push(MountOption::AllowOther);
-            mount_ok2.store(true, std::sync::atomic::Ordering::SeqCst);
-            if let Err(e) = fuser::mount2(fs, &mount_path, &options) {
-                mount_ok2.store(false, std::sync::atomic::Ordering::SeqCst);
-                error!("FUSE mount error: {}", e);
-            }
-        });
-
-        for _ in 0..20 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            if mount_dir.join(".").exists() && std::fs::read_dir(&mount_dir).map(|mut d| d.next().is_some()).unwrap_or(false) {
-                break;
-            }
-        }
-        if !mount_ok.load(std::sync::atomic::Ordering::SeqCst) {
-            let _ = write_tagged(&mut tx, TAG_CONTROL, &ControlMsg::JobError("FUSE mount failed".into())).await;
-            bail!("FUSE mount failed");
-        }
-
-        let output_local = job_dir.join("output.mkv");
-        let rw = rewrite_args(&ffmpeg_args, &input_files, &mount_dir, &output_local);
-        info!("ffmpeg {}", rw.join(" "));
-
-        let mut child = Command::new(ffmpeg)
-            .args(&rw)
-            .env("RRP_JOB_ID", &job_id)
-            .env("RRP_CLIENT", peer.ip().to_string())
-            .env("RRP_INPUT", orig_input)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        let stderr = child.stderr.take().unwrap();
-        let mut stderr_reader = BufReader::new(stderr);
-        let mut stderr_buf = vec![0u8; 4096];
-        let mut line_buf = String::new();
-
-        loop {
-            tokio::select! {
-                Some(freq) = req_rx.recv() => {
-                    let req = FileReadReq {
-                        file_idx: freq.file_idx,
-                        offset: freq.offset,
-                        length: freq.length,
-                    };
-                    if write_tagged(&mut tx, TAG_FILE_READ_REQ, &req).await.is_err() {
-                        warn!("Failed to send read request to client");
-                        let _ = freq.resp_tx.send(Err(()));
-                        let _ = child.kill().await;
-                        break;
-                    }
-                    tx.flush().await?;
-
-                    match read_tagged(&mut rx).await {
-                        Ok((TAG_FILE_READ_RESP, payload)) => {
-                            match bincode::deserialize::<FileReadResp>(&payload) {
-                                Ok(resp) if !resp.error => { let _ = freq.resp_tx.send(Ok(resp.data)); }
-                                _ => { let _ = freq.resp_tx.send(Err(())); }
-                            }
-                        }
-                        Ok((TAG_CONTROL, payload)) => {
-                            if let Ok(ControlMsg::CancelJob) = bincode::deserialize(&payload) {
-                                warn!("Job cancelled by client");
-                                let _ = freq.resp_tx.send(Err(()));
-                                let _ = child.kill().await;
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            warn!("Client disconnected during FUSE read");
-                            let _ = freq.resp_tx.send(Err(()));
-                            let _ = child.kill().await;
-                            break;
-                        }
-                        _ => { let _ = freq.resp_tx.send(Err(())); }
-                    }
-                }
-                result = stderr_reader.read(&mut stderr_buf) => {
-                    match result {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            line_buf.push_str(&String::from_utf8_lossy(&stderr_buf[..n]));
-                            let parts: Vec<&str> = line_buf.split(|c| c == '\r' || c == '\n').collect();
-                            let incomplete = parts.last().copied().unwrap_or("");
-                            for part in &parts[..parts.len().saturating_sub(1)] {
-                                let line = part.trim();
-                                if line.starts_with("frame=") {
-                                    if let Some(p) = parse_progress(line) {
-                                        let _ = write_tagged(&mut tx, TAG_PROGRESS, &p).await;
-                                    }
-                                }
-                            }
-                            line_buf = incomplete.to_string();
-                        }
-                    }
-                }
-            }
-        }
-
-        let status = child.wait().await?;
-        let exit_code = status.code().unwrap_or(1);
-
-        fuse_unmount(&mount_dir);
-        let _ = fuse_handle.join();
-
-        if exit_code == 0 && output_local.exists() {
-            let meta = tokio::fs::metadata(&output_local).await?;
-            let total = meta.len();
-            info!("Sending output: {:.1} MB", total as f64 / 1_048_576.0);
-            write_tagged(&mut tx, STREAM_OUTPUT, &total).await?;
-            let mut file = tokio::fs::File::open(&output_local).await?;
-            let mut hasher = Sha256::new();
-            let mut buf = vec![0u8; 256 * 1024];
-            loop {
-                let n = file.read(&mut buf).await?;
-                if n == 0 { break; }
-                hasher.update(&buf[..n]);
-                tx.write_all(&buf[..n]).await?;
-            }
-            let hash: [u8; 32] = hasher.finalize().into();
-            tx.write_all(&hash).await?;
-            tx.flush().await?;
-            info!("Output sent");
-        }
-
+        let exit_code = run_fuse_job(
+            &mut rx, &mut tx, ffmpeg, &ffmpeg_args, &input_files,
+            &job_dir, &job_id, &peer.ip().to_string(),
+        ).await?;
         let _ = write_tagged(&mut tx, TAG_CONTROL, &ControlMsg::JobComplete { exit_code }).await;
         let _ = tx.flush().await;
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -400,6 +268,218 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
     }
 
     Ok(())
+}
+
+/// Run a FUSE-mounted encode job over an established TCP connection.
+/// Used by both the traditional server (client connects in) and
+/// reverse-connect mode (GPU server connects out to client).
+/// Returns the ffmpeg exit code.
+#[cfg(feature = "fuse")]
+pub async fn run_fuse_job(
+    rx: &mut (impl AsyncReadExt + Unpin),
+    tx: &mut (impl AsyncWriteExt + Unpin),
+    ffmpeg: &str,
+    ffmpeg_args: &[String],
+    input_files: &[FileInfo],
+    job_dir: &PathBuf,
+    job_id: &str,
+    peer: &str,
+) -> Result<i32> {
+    let mount_dir = job_dir.join("mnt");
+    std::fs::create_dir_all(&mount_dir)?;
+
+    let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<FuseReadRequest>(32);
+
+    let fs = RrpFuse::new(input_files.to_vec(), req_tx);
+    let mount_path = mount_dir.clone();
+    let mount_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mount_ok2 = mount_ok.clone();
+    let fuse_handle = std::thread::spawn(move || {
+        let mut options = vec![
+            MountOption::RO,
+            MountOption::FSName("rrp".into()),
+            MountOption::CUSTOM(format!("max_read={}", CHUNK_SIZE)),
+        ];
+        #[cfg(target_os = "linux")]
+        options.push(MountOption::AllowOther);
+        mount_ok2.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Err(e) = fuser::mount2(fs, &mount_path, &options) {
+            mount_ok2.store(false, std::sync::atomic::Ordering::SeqCst);
+            error!("FUSE mount error: {}", e);
+        }
+    });
+
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if mount_dir.join(".").exists() && std::fs::read_dir(&mount_dir).map(|mut d| d.next().is_some()).unwrap_or(false) {
+            break;
+        }
+    }
+    if !mount_ok.load(std::sync::atomic::Ordering::SeqCst) {
+        let _ = write_tagged(tx, TAG_CONTROL, &ControlMsg::JobError("FUSE mount failed".into())).await;
+        bail!("FUSE mount failed");
+    }
+
+    let output_local = job_dir.join("output.mkv");
+    let orig_input = input_files.first().map(|f| f.original_path.as_str()).unwrap_or("");
+    let rw = rewrite_args(ffmpeg_args, input_files, &mount_dir, &output_local);
+    info!("ffmpeg {}", rw.join(" "));
+
+    // Use -progress to a file for reliable progress updates (pipe buffering is unreliable)
+    let progress_file = job_dir.join("ffmpeg_progress.txt");
+    let rw: Vec<String> = rw.iter().map(|a| {
+        if a == "-stats" { "-nostats".to_string() } else { a.clone() }
+    }).collect();
+    let mut rw = rw;
+    if !rw.iter().any(|a| a == "-progress") {
+        let out = rw.pop().unwrap_or_default();
+        rw.extend_from_slice(&["-progress".into(), progress_file.to_string_lossy().to_string()]);
+        rw.push(out);
+    }
+
+    let mut child = Command::new(ffmpeg)
+        .args(&rw)
+        .env("RRP_JOB_ID", job_id)
+        .env("RRP_CLIENT", peer)
+        .env("RRP_INPUT", orig_input)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    // Poll progress file every 500ms in a background task
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<ProgressMsg>(32);
+    let pf = progress_file.clone();
+    let progress_task = tokio::spawn(async move {
+        let mut last_frame: u64 = 0;
+        let start = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if let Ok(content) = tokio::fs::read_to_string(&pf).await {
+                let mut frame: u64 = 0;
+                let mut time_secs: f64 = 0.0;
+                let mut speed: f32 = 0.0;
+                let mut bitrate: f32 = 0.0;
+                let mut total_size: u64 = 0;
+                fn parse_val(line: &str, prefix_len: usize) -> Option<f64> {
+                    let v = line[prefix_len..].trim();
+                    if v == "N/A" { None } else { v.trim_end_matches('x').trim_end_matches("kbits/s").trim().parse().ok() }
+                }
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.starts_with("frame=") { frame = parse_val(line, 6).unwrap_or(0.0) as u64; }
+                    else if line.starts_with("out_time_us=") { if let Some(v) = parse_val(line, 12) { time_secs = v / 1_000_000.0; } }
+                    else if line.starts_with("out_time_ms=") { if let Some(v) = parse_val(line, 12) { time_secs = v / 1_000_000.0; } }
+                    else if line.starts_with("speed=") { if let Some(v) = parse_val(line, 6) { speed = v as f32; } }
+                    else if line.starts_with("bitrate=") { if let Some(v) = parse_val(line, 8) { bitrate = v as f32; } }
+                    else if line.starts_with("total_size=") { if let Some(v) = parse_val(line, 11) { total_size = v as u64; } }
+                }
+                // When CUDA hwaccel reports N/A for time/speed/bitrate, estimate
+                if time_secs == 0.0 && frame > 0 {
+                    let elapsed = start.elapsed().as_secs_f64();
+                    time_secs = frame as f64 / 24.0; // assume ~24fps source
+                    if elapsed > 0.0 { speed = time_secs as f32 / elapsed as f32; }
+                }
+                if bitrate == 0.0 && total_size > 0 && time_secs > 0.0 {
+                    bitrate = (total_size as f64 * 8.0 / time_secs / 1000.0) as f32;
+                }
+                if frame > last_frame {
+                    last_frame = frame;
+                    let _ = progress_tx.try_send(ProgressMsg { frame, time_secs, speed, bitrate_kbps: bitrate, output_size: total_size });
+                }
+            }
+        }
+    });
+
+    loop {
+        // Drain any pending progress and send to client
+        let mut sent = 0u32;
+        while let Ok(p) = progress_rx.try_recv() {
+            let _ = write_tagged(tx, TAG_PROGRESS, &p).await;
+            sent += 1;
+        }
+        if sent > 0 { let _ = tx.flush().await; }
+
+        tokio::select! {
+            Some(freq) = req_rx.recv() => {
+                let req = FileReadReq {
+                    file_idx: freq.file_idx,
+                    offset: freq.offset,
+                    length: freq.length,
+                };
+                if write_tagged(tx, TAG_FILE_READ_REQ, &req).await.is_err() {
+                    warn!("Failed to send read request to client");
+                    let _ = freq.resp_tx.send(Err(()));
+                    let _ = child.kill().await;
+                    break;
+                }
+                tx.flush().await?;
+
+                match read_tagged(rx).await {
+                    Ok((TAG_FILE_READ_RESP, payload)) => {
+                        match bincode::deserialize::<FileReadResp>(&payload) {
+                            Ok(resp) if !resp.error => { let _ = freq.resp_tx.send(Ok(resp.data)); }
+                            _ => { let _ = freq.resp_tx.send(Err(())); }
+                        }
+                    }
+                    Ok((TAG_CONTROL, payload)) => {
+                        if let Ok(ControlMsg::CancelJob) = bincode::deserialize(&payload) {
+                            warn!("Job cancelled by client");
+                            let _ = freq.resp_tx.send(Err(()));
+                            let _ = child.kill().await;
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        warn!("Client disconnected during FUSE read");
+                        let _ = freq.resp_tx.send(Err(()));
+                        let _ = child.kill().await;
+                        break;
+                    }
+                    _ => { let _ = freq.resp_tx.send(Err(())); }
+                }
+            }
+        }
+    }
+
+    progress_task.abort();
+
+    // Wait for ffmpeg to finish, kill if it doesn't exit within 10s
+    let exit_code = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+        Ok(Ok(s)) => s.code().unwrap_or(1),
+        _ => {
+            warn!("ffmpeg still running after loop exit — killing");
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            1
+        }
+    };
+
+    // Unmount FUSE (lazy unmount handles busy mounts)
+    fuse_unmount(&mount_dir);
+    let _ = fuse_handle.join();
+
+    // Send output back to client
+    if exit_code == 0 && output_local.exists() {
+        let meta = tokio::fs::metadata(&output_local).await?;
+        let total = meta.len();
+        info!("Sending output: {:.1} MB", total as f64 / 1_048_576.0);
+        write_tagged(tx, STREAM_OUTPUT, &total).await?;
+        let mut file = tokio::fs::File::open(&output_local).await?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            let n = file.read(&mut buf).await?;
+            if n == 0 { break; }
+            hasher.update(&buf[..n]);
+            tx.write_all(&buf[..n]).await?;
+        }
+        let hash: [u8; 32] = hasher.finalize().into();
+        tx.write_all(&hash).await?;
+        tx.flush().await?;
+        info!("Output sent");
+    }
+
+    Ok(exit_code)
 }
 
 fn rewrite_args(ffmpeg_args: &[String], input_files: &[FileInfo], input_dir: &PathBuf, output_local: &PathBuf) -> Vec<String> {
@@ -566,20 +646,58 @@ fn extract_time(s: &str) -> Option<f64> {
 }
 
 /// Detect available HEVC encoders by probing the ffmpeg binary
-fn detect_encoders(ffmpeg: &str) -> Vec<String> {
+pub fn detect_encoders(ffmpeg: &str) -> Vec<String> {
     let mut encoders = Vec::new();
-    if let Ok(output) = std::process::Command::new(ffmpeg)
-        .args(["-hide_banner", "-encoders"])
-        .output()
-    {
+    // List of encoders to test — hw encoders need actual GPU probe
+    let candidates = [
+        "hevc_nvenc", "hevc_videotoolbox", "hevc_amf", "hevc_qsv", "hevc_vaapi", "libx265",
+        "h264_nvenc", "h264_videotoolbox", "h264_amf", "h264_qsv", "h264_vaapi", "libx264",
+    ];
+    // First check what's compiled in
+    let compiled: Vec<String> = if let Ok(output) = std::process::Command::new(ffmpeg)
+        .args(["-hide_banner", "-encoders"]).output() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("hevc_nvenc") { encoders.push("nvenc".into()); }
-        if stdout.contains("hevc_videotoolbox") { encoders.push("videotoolbox".into()); }
-        if stdout.contains("hevc_amf") { encoders.push("amf".into()); }
-        if stdout.contains("hevc_qsv") { encoders.push("qsv".into()); }
-        if stdout.contains("hevc_vaapi") { encoders.push("vaapi".into()); }
-        if stdout.contains("libx265") { encoders.push("cpu".into()); }
+        candidates.iter().filter(|c| stdout.contains(*c)).map(|c| c.to_string()).collect()
+    } else { vec![] };
+    // Software encoders don't need hardware probing
+    for enc in &compiled {
+        if enc.starts_with("lib") {
+            encoders.push(enc.clone());
+            continue;
+        }
+        // Hardware encoder — try encoding 1 frame to verify GPU actually supports it
+        if probe_encoder(ffmpeg, enc, true) {
+            encoders.push(enc.clone());
+        } else if enc.contains("nvenc") && probe_encoder(ffmpeg, enc, false) {
+            // NVENC works without temporal-aq — mark as basic support
+            encoders.push(format!("{}/no-temporal-aq", enc));
+        }
     }
-    if encoders.is_empty() { encoders.push("cpu".into()); }
+    if encoders.is_empty() { encoders.push("libx265".into()); encoders.push("libx264".into()); }
     encoders
+}
+
+/// Test if a hardware encoder actually works with typical encoding flags.
+fn probe_encoder(ffmpeg: &str, encoder: &str, full_flags: bool) -> bool {
+    let mut args = vec![
+        "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=black:s=256x256:d=0.04:r=25",
+        "-frames:v", "1",
+        "-c:v", encoder,
+    ];
+    if encoder.contains("nvenc") {
+        args.extend_from_slice(&[
+            "-rc", "vbr", "-cq", "28", "-preset", "p4",
+            "-multipass", "qres", "-spatial-aq", "1",
+            "-aq-strength", "8",
+        ]);
+        if full_flags {
+            args.extend_from_slice(&["-temporal-aq", "1"]);
+        }
+    }
+    args.extend_from_slice(&["-f", "null", "-"]);
+    match std::process::Command::new(ffmpeg).args(&args).output() {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
 }
