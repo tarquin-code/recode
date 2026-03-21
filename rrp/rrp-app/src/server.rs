@@ -488,6 +488,10 @@ pub async fn run_fuse_job(
         info!("Output sent");
     }
 
+    // Send JobComplete so the listener knows the final exit code
+    let _ = write_tagged(tx, TAG_CONTROL, &ControlMsg::JobComplete { exit_code }).await;
+    let _ = tx.flush().await;
+
     Ok(exit_code)
 }
 

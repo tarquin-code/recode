@@ -774,7 +774,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="tab active" data-tab="scanner" onclick="switchTab('scanner')">Scanned <span class="tab-badge" id="badgeScanner" style="display:none">0</span></div>
                 <div class="tab" data-tab="queue" onclick="switchTab('queue')">Queue <span class="tab-badge" id="badgeQueue" style="display:none">0</span></div>
                 <div class="tab" data-tab="encoding" onclick="switchTab('encoding')">Encoding <span class="tab-badge warn" id="badgeEncoding" style="display:none">0</span></div>
-                <div class="tab" data-tab="history" onclick="switchTab('history')">History <span class="tab-badge ok" id="badgeHistory" style="display:none">0</span></div>
+                <div class="tab" data-tab="done" onclick="switchTab('done');renderHistory()">Done <span class="tab-badge ok" id="badgeDone" style="display:none">0</span></div>
+                <div class="tab" data-tab="failed" onclick="switchTab('failed');renderHistory()">Failed <span class="tab-badge" id="badgeFailed" style="display:none;background:var(--error);">0</span></div>
+                <div class="tab" data-tab="cancelled" onclick="switchTab('cancelled');renderHistory()">Cancelled <span class="tab-badge" id="badgeCancelled" style="display:none;background:var(--warning);">0</span></div>
+                <div class="tab" data-tab="skipped" onclick="switchTab('skipped');renderHistory()">Skipped <span class="tab-badge" id="badgeSkipped" style="display:none;background:var(--text-muted);">0</span></div>
                 <div class="tab" data-tab="stats" onclick="switchTab('stats');loadStats()">Stats</div>
                 <div style="flex:1"></div>
                 <div class="tab" onclick="document.getElementById('helpModal').classList.add('open')" title="Help" style="padding:4px 8px;line-height:1;display:flex;align-items:center;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
@@ -873,10 +876,17 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </div>
             </div>
 
-            <div class="tab-content" id="tab-history">
-                <div id="historyContent">
-                    <div class="empty-state"><div class="icon" id="emptyHistoryIcon"></div><h3>No encode history</h3><p>Completed encodes will appear here.</p></div>
-                </div>
+            <div class="tab-content" id="tab-done">
+                <div id="doneContent"></div>
+            </div>
+            <div class="tab-content" id="tab-failed">
+                <div id="failedContent"></div>
+            </div>
+            <div class="tab-content" id="tab-cancelled">
+                <div id="cancelledContent"></div>
+            </div>
+            <div class="tab-content" id="tab-skipped">
+                <div id="skippedContent"></div>
             </div>
 
             <div class="tab-content" id="tab-stats">
@@ -1850,7 +1860,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.18.8</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.19.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1884,7 +1894,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
-                            <div style="font-weight:600;color:var(--text-primary);">v2.18.8 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.19.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
                                 <li><strong>Safe updates</strong> &mdash; auto-updater no longer restarts services automatically. Shows a "Service restart required" banner with version number and one-click restart</li>
                                 <li><strong>Restart banner</strong> &mdash; yellow banner with "Restart Now" button when staged binaries detected. Full-screen spinner overlay during restart with auto-reload</li>
@@ -2696,7 +2706,13 @@ function handleMessage(msg) {
             refreshGpuTargets();
         }
         state.queueEnabled = msg.data.queue_enabled !== false;
-        renderQueue(); renderEncoding(); renderHistory(); updateBadges();
+        // Skip re-render of panels where user is typing in search (prevents focus loss)
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && activeEl.tagName === 'INPUT' && activeEl.type === 'text';
+        if (!isTyping || !activeEl.closest('#tab-queue')) renderQueue();
+        renderEncoding();
+        if (!isTyping || !activeEl.closest('#tab-done,#tab-failed,#tab-cancelled,#tab-skipped')) renderHistory();
+        updateBadges();
     } else if (msg.type === 'progress_update') {
         // Update matching active job, stamp receive time for interpolation
         const prog = msg.data.progress;
@@ -3564,7 +3580,14 @@ function renderQueue() {
     });
 
     html += jobPagerHtml('queue', queuePage, queuePageSize, totalFiles, 'goQueuePage', 'changeQueuePageSize');
+    const qSearchId = 'queueSearchInput';
+    const qHadFocus = document.activeElement && document.activeElement.id === qSearchId;
+    const qCursorPos = qHadFocus ? document.activeElement.selectionStart : 0;
     container.innerHTML = html;
+    if (qHadFocus) {
+        const el = document.getElementById(qSearchId);
+        if (el) { el.focus(); el.selectionStart = el.selectionEnd = qCursorPos; }
+    }
 }
 
 async function removeFromQueue(jobId) { await fetch(`/api/queue/${jobId}`, {method: 'DELETE'}); }
@@ -4233,7 +4256,7 @@ async function killTranscode(pid, btn) {
 /* =========================================================================
    History
    ========================================================================= */
-let historyFilter = 'all';
+let historyFilter = 'done';
 let historyPage = 1;
 let historyPageSize = 50;
 let historySearch = '';
@@ -4246,27 +4269,32 @@ function goHistoryPage(p) { historyPage = p; renderHistory(); }
 function changeHistoryPageSize(v) { historyPageSize = parseInt(v) || 50; historyPage = 1; renderHistory(); }
 
 function renderHistory() {
-    const container = document.getElementById('historyContent');
-    const badge = document.getElementById('badgeHistory');
-    const h = state.history;
-    if (!h.length) {
-        container.innerHTML = `<div class="empty-state"><div class="icon">${svgIcon('file-text', 48)}</div><h3>No encode history</h3><p>Completed encodes will appear here.</p></div>`;
-        badge.style.display = 'none'; return;
-    }
-    badge.style.display = 'inline'; badge.textContent = h.length;
-    const counts = { all: h.length, done: 0, failed: 0, skipped: 0, cancelled: 0 };
+    const h = state.history || [];
+    // Update tab badges
+    const counts = { done: 0, failed: 0, skipped: 0, cancelled: 0 };
     for (const j of h) { if (counts[j.status] !== undefined) counts[j.status]++; }
-    const filterBtn = (key, label, count) => `<button class="btn btn-sm${historyFilter === key ? ' active' : ''}" style="font-size:10px;padding:2px 8px;${historyFilter === key ? 'background:var(--accent);color:#fff;' : ''}" onclick="setHistoryFilter('${key}')">${label} ${count > 0 ? '<span style=\"opacity:0.7\">' + count + '</span>' : ''}</button>`;
-    let html = `<div class="toolbar"><div class="toolbar-left" style="display:flex;gap:4px;align-items:center;">
-        ${filterBtn('all', 'All', counts.all)}
-        ${filterBtn('done', 'Done', counts.done)}
-        ${filterBtn('failed', 'Failed', counts.failed)}
-        ${filterBtn('cancelled', 'Cancelled', counts.cancelled)}
-        ${filterBtn('skipped', 'Skipped', counts.skipped)}
-        </div>
+    for (const [key, id] of [['done','badgeDone'],['failed','badgeFailed'],['cancelled','badgeCancelled'],['skipped','badgeSkipped']]) {
+        const b = document.getElementById(id);
+        if (b) { b.textContent = counts[key]; b.style.display = counts[key] > 0 ? 'inline' : 'none'; }
+    }
+    // Render only the currently visible panel
+    const activeTab = document.querySelector('.tab-content.active');
+    const activeStatus = activeTab ? activeTab.id.replace('tab-', '') : historyFilter;
+    if (!['done','failed','cancelled','skipped'].includes(activeStatus)) return;
+    const container = document.getElementById(activeStatus + 'Content');
+    if (!container) return;
+    historyFilter = activeStatus;
+    const items = h.filter(j => j.status === activeStatus);
+    if (!items.length) {
+        const labels = { done: 'completed', failed: 'failed', cancelled: 'cancelled', skipped: 'skipped' };
+        container.innerHTML = `<div class="empty-state"><div class="icon">${svgIcon('file-text', 48)}</div><h3>No ${labels[activeStatus]} encodes</h3></div>`;
+        return;
+    }
+    const statusLabel = activeStatus.charAt(0).toUpperCase() + activeStatus.slice(1);
+    let html = `<div class="toolbar"><div class="toolbar-left" style="display:flex;gap:4px;align-items:center;"></div>
         <div class="toolbar-right" style="display:flex;gap:4px;">
-        ${(counts.failed + counts.cancelled) > 0 ? `<button class="btn btn-sm" onclick="retryAllFailed()" title="Re-queue all failed and cancelled jobs">${svgIcon('rotate-cw', 12)} Retry All</button>` : ''}
-        <button class="btn btn-sm" onclick="clearHistory()">Clear ${historyFilter === 'all' ? 'History' : historyFilter === 'failed' ? 'Failed' : historyFilter.charAt(0).toUpperCase() + historyFilter.slice(1)}</button></div></div>`;
+        ${(activeStatus === 'failed' || activeStatus === 'cancelled') ? `<button class="btn btn-sm" onclick="retryAllFailed()" title="Re-queue all ${activeStatus} jobs">${svgIcon('rotate-cw', 12)} Retry All</button>` : ''}
+        <button class="btn btn-sm" onclick="clearHistory('${activeStatus}')">Clear ${statusLabel}</button></div></div>`;
 
     // Filter bar + pager at top
     html += jobFilterBarHtml('history', historySearch, historySort, historyFilterTopN, historyFilterCodec, historyFilterHdr);
@@ -4421,10 +4449,18 @@ function renderHistory() {
         </div>`;
     }
     html += jobPagerHtml('history', historyPage, historyPageSize, totalFiles, 'goHistoryPage', 'changeHistoryPageSize');
+    // Preserve search input focus across re-renders
+    const searchId = 'historySearchInput';
+    const hadFocus = document.activeElement && document.activeElement.id === searchId;
+    const cursorPos = hadFocus ? document.activeElement.selectionStart : 0;
     container.innerHTML = html;
+    if (hadFocus) {
+        const el = document.getElementById(searchId);
+        if (el) { el.focus(); el.selectionStart = el.selectionEnd = cursorPos; }
+    }
 }
 
-async function clearHistory() { await fetch(`/api/queue/clear-history?filter=${historyFilter}`, {method: 'POST'}); }
+async function clearHistory(status) { await fetch(`/api/queue/clear-history?filter=${status || historyFilter}`, {method: 'POST'}); }
 
 async function retryJob(jobId) {
     const btn = document.getElementById(`retryBtn-${jobId}`);
@@ -4463,46 +4499,20 @@ function updateBadges() {
     const badge = document.getElementById('badgeEncoding');
     badge.style.display = total > 0 ? 'inline' : 'none';
     badge.textContent = total;
-    // History badge — cycle through statuses with counts
-    const hBadge = document.getElementById('badgeHistory');
+    // History tab badges — update counts on individual tabs
     const h = state.history || [];
     if (h.length > 0) {
-        hBadge.style.display = 'inline';
         const hCounts = { done: 0, failed: 0, cancelled: 0, skipped: 0 };
         for (const j of h) { if (hCounts[j.status] !== undefined) hCounts[j.status]++; }
-        const entries = [];
-        if (hCounts.done > 0) entries.push({ text: hCounts.done + ' done', cls: 'tab-badge ok' });
-        if (hCounts.failed > 0) entries.push({ text: hCounts.failed + ' failed', cls: 'tab-badge fail' });
-        if (hCounts.cancelled > 0) entries.push({ text: hCounts.cancelled + ' cancelled', cls: 'tab-badge warn' });
-        if (hCounts.skipped > 0) entries.push({ text: hCounts.skipped + ' skipped', cls: 'tab-badge' });
-        if (entries.length === 0) {
-            hBadge.style.display = 'none';
-            clearInterval(window._hBadgeCycleTimer);
-            window._hBadgeCycleEntries = null;
-        } else if (entries.length === 1) {
-            hBadge.textContent = entries[0].text;
-            hBadge.className = entries[0].cls;
-        } else {
-            // Cycle through entries
-            if (!window._hBadgeCycleEntries || JSON.stringify(window._hBadgeCycleEntries) !== JSON.stringify(entries)) {
-                window._hBadgeCycleEntries = entries;
-                window._hBadgeCycleIdx = 0;
-                clearInterval(window._hBadgeCycleTimer);
-                window._hBadgeCycleTimer = setInterval(() => {  // 5 second cycle
-                    window._hBadgeCycleIdx = (window._hBadgeCycleIdx + 1) % window._hBadgeCycleEntries.length;
-                    const e = window._hBadgeCycleEntries[window._hBadgeCycleIdx];
-                    hBadge.textContent = e.text;
-                    hBadge.className = e.cls;
-                }, 10000);
-            }
-            const e = entries[window._hBadgeCycleIdx || 0];
-            hBadge.textContent = e.text;
-            hBadge.className = e.cls;
+        for (const [key, id] of [['done','badgeDone'],['failed','badgeFailed'],['cancelled','badgeCancelled'],['skipped','badgeSkipped']]) {
+            const b = document.getElementById(id);
+            if (b) { b.textContent = hCounts[key]; b.style.display = hCounts[key] > 0 ? 'inline' : 'none'; }
         }
     } else {
-        hBadge.style.display = 'none';
-        clearInterval(window._hBadgeCycleTimer);
-        window._hBadgeCycleEntries = null;
+        for (const id of ['badgeDone','badgeFailed','badgeCancelled','badgeSkipped']) {
+            const b = document.getElementById(id);
+            if (b) b.style.display = 'none';
+        }
     }
 }
 
@@ -5043,20 +5053,11 @@ async function openSettings() {
         document.getElementById('setPreset').value = s.preset || 'auto';
         document.getElementById('setVideoCodec').value = s.video_codec || 'hevc';
         document.getElementById('setEncoder').value = s.encoder || 'gpu';
-        // Populate GPU target in default profile
+        // Populate GPU target in default profile — same format as sidebar
         const setTgtSel = document.getElementById('setGpuTarget');
         if (setTgtSel) {
             const gpuCnt = (state.system?.gpu_count) || 0;
-            setTgtSel.innerHTML = '<option value="auto">Auto (all local + remote)</option>';
-            if (gpuCnt > 0) {
-                if (gpuCnt > 1) setTgtSel.add(new Option('\u00A0\u00A0All Local', 'local'));
-                for (let i = 0; i < gpuCnt; i++) setTgtSel.add(new Option('\u00A0\u00A0\u00A0\u00A0GPU ' + i, 'gpu:' + i));
-            }
-            const remotes = (s.remote_gpu_servers || []).filter(srv => srv.enabled !== false);
-            if (remotes.length > 0) {
-                setTgtSel.add(new Option('\u00A0\u00A0All Remote', 'remote'));
-                remotes.forEach((srv) => { const origIdx = (s.remote_gpu_servers || []).indexOf(srv); setTgtSel.add(new Option('\u00A0\u00A0\u00A0\u00A0' + (srv.name || srv.address), 'remote:' + origIdx)); });
-            }
+            populateGpuTargets(setTgtSel, gpuCnt);
             if (s.gpu_target) setTgtSel.value = s.gpu_target;
         }
         const setCqVal = s.cq || 24;
@@ -5774,7 +5775,7 @@ applyStoredTheme();
 document.getElementById('emptyScanIcon').innerHTML = svgIcon('search', 48);
 document.getElementById('emptyQueueIcon').innerHTML = svgIcon('clipboard', 48);
 document.getElementById('emptyEncodeIcon').innerHTML = svgIcon('settings', 48);
-document.getElementById('emptyHistoryIcon').innerHTML = svgIcon('file-text', 48);
+// History icons set dynamically in renderHistory()
 document.getElementById('emptyStatsIcon').innerHTML = svgIcon('bar-chart', 48);
 
 /* =========================================================================
