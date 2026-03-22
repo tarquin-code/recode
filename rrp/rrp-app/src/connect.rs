@@ -178,7 +178,7 @@ async fn connect_and_run(
     }
 
     // Channel for spawned jobs to notify completion
-    let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<(String, i32)>(16);
+    let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<(String, i32, String)>(16);
 
     let mut heartbeat_interval = tokio::time::interval(
         std::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS)
@@ -268,16 +268,22 @@ async fn connect_and_run(
                                     limits[assigned_gpu as usize].0 = limits[assigned_gpu as usize].0.saturating_sub(1);
                                 }
                             }
+                            // Read stderr from job dir
+                            let stderr = std::fs::read_to_string(
+                                PathBuf::from(&td).join(&job_id).join("ffmpeg_stderr.log")
+                            ).unwrap_or_default();
+                            // Truncate to last 2000 chars
+                            let stderr = if stderr.len() > 2000 { stderr[stderr.len()-2000..].to_string() } else { stderr };
                             drop(permit);
-                            let _ = done.send((job_id, exit_code)).await;
+                            let _ = done.send((job_id, exit_code, stderr)).await;
                         });
                     }
                     _ => {}
                 }
             }
-            Some((job_id, exit_code)) = done_rx.recv() => {
+            Some((job_id, exit_code, stderr)) = done_rx.recv() => {
                 // Notify client that job is done
-                write_msg(&mut tx, &ReverseControlMsg::JobFinished { job_id, exit_code }).await?;
+                write_msg(&mut tx, &ReverseControlMsg::JobFinished { job_id, exit_code, stderr }).await?;
                 tx.flush().await?;
             }
         }

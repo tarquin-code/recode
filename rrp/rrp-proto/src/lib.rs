@@ -185,7 +185,7 @@ pub enum ReverseControlMsg {
     JobAccepted { job_id: String },
     JobReject { job_id: String, reason: String },
     /// GPU server → Client: job finished notification
-    JobFinished { job_id: String, exit_code: i32 },
+    JobFinished { job_id: String, exit_code: i32, #[serde(default)] stderr: String },
 }
 
 /// Sent on a new data connection to identify which job it belongs to

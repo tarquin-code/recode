@@ -344,8 +344,11 @@ async fn handle_control(
                                 gpu.last_heartbeat = std::time::Instant::now();
                             }
                         }
-                        ReverseControlMsg::JobFinished { job_id, exit_code } => {
+                        ReverseControlMsg::JobFinished { job_id, exit_code, stderr } => {
                             info!("GPU '{}' finished job {} (exit {})", name, job_id, exit_code);
+                            // Write result with stderr for Python server
+                            let result_path = format!("/tmp/recode/rrp/listener-jobs/{}.result", job_id);
+                            let _ = std::fs::write(&result_path, serde_json::json!({"exit_code": exit_code, "stderr": stderr}).to_string());
                             if let Some(gpu) = state.gpus.write().await.get_mut(&conn_id) {
                                 gpu.active_jobs = gpu.active_jobs.saturating_sub(1);
                             }
@@ -506,9 +509,11 @@ async fn handle_data(
         }
     }
 
-    // Write result file for Python server
+    // Write result file for Python server (fallback — control channel may have already written it with stderr)
     let result_path = format!("/tmp/recode/rrp/listener-jobs/{}.result", dc.job_id);
-    let _ = std::fs::write(&result_path, serde_json::json!({"exit_code": exit_code}).to_string());
+    if !std::path::Path::new(&result_path).exists() {
+        let _ = std::fs::write(&result_path, serde_json::json!({"exit_code": exit_code}).to_string());
+    }
 
     info!("Data connection for job {} complete (exit {})", dc.job_id, exit_code);
     Ok(())

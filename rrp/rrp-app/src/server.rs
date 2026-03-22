@@ -353,13 +353,16 @@ pub async fn run_fuse_job(
         rw.push(out);
     }
 
+    // Redirect stderr to file for error capture
+    let stderr_path = job_dir.join("ffmpeg_stderr.log");
+    let stderr_file = std::fs::File::create(&stderr_path)?;
     let mut child = Command::new(ffmpeg)
         .args(&rw)
         .env("RRP_JOB_ID", job_id)
         .env("RRP_CLIENT", peer)
         .env("RRP_INPUT", orig_input)
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::from(stderr_file))
         .spawn()?;
 
     // Poll progress file every 500ms in a background task
