@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.19.6"
+VERSION = "2.19.7"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -4420,11 +4420,17 @@ async def start_remote_client_listener():
     rrp_bin = os.path.join(BIN_DIR, "recode-remote")
     if os.path.isfile(rrp_bin):
         rrp_tmp = os.path.join(app_settings["tmp_dir"], "rrp")
-        os.makedirs(rrp_tmp, exist_ok=True)
+        try:
+            os.makedirs(rrp_tmp, exist_ok=True)
+        except PermissionError:
+            log.warning(f"Cannot create {rrp_tmp} — remote listener disabled")
+            return
         status_file = os.path.join(rrp_tmp, "listener-status.json")
-        # Ensure status file exists and is writable by the listener process
-        with open(status_file, "w") as f:
-            f.write('{"enabled":true,"running":false,"gpus":[]}')
+        try:
+            with open(status_file, "w") as f:
+                f.write('{"enabled":true,"running":false,"gpus":[]}')
+        except PermissionError:
+            pass
         rrp_log = open(os.path.join(BASE_DIR, "rrp-client-listener.log"), "a")
         _remote_client_proc = await asyncio.create_subprocess_exec(
             rrp_bin, "listen", "--port", str(port), "--secret", secret,
@@ -4458,9 +4464,15 @@ async def start_remote_connectors():
     if not os.path.isfile(rrp_bin):
         return
     servers = app_settings.get("remote_gpu_servers", [])
+    if not servers:
+        return
     ffmpeg_bin = os.path.join(BIN_DIR, "ffmpeg")
     rrp_tmp = os.path.join(app_settings["tmp_dir"], "rrp")
-    os.makedirs(rrp_tmp, exist_ok=True)
+    try:
+        os.makedirs(rrp_tmp, exist_ok=True)
+    except PermissionError:
+        log.warning(f"Cannot create {rrp_tmp} — remote connectors disabled")
+        return
     hostname = os.uname().nodename
     for i, srv in enumerate(servers):
         if srv.get("enabled", True) is False:

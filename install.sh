@@ -501,18 +501,12 @@ if systemctl is-active "${SERVICE_NAME}" &>/dev/null; then
         warn "Service failed to restart — check: journalctl -u ${SERVICE_NAME} -e"
     fi
 else
-    read -p "Start Recode service now? [Y/n]: " START_NOW
-    START_NOW=${START_NOW:-Y}
-    if [[ "$START_NOW" =~ ^[Yy] ]]; then
-        systemctl start "${SERVICE_NAME}"
-        sleep 2
-        if systemctl is-active "${SERVICE_NAME}" &>/dev/null; then
-            log "Service started successfully"
-        else
-            warn "Service failed to start — check: journalctl -u ${SERVICE_NAME} -e"
-        fi
+    systemctl start "${SERVICE_NAME}"
+    sleep 2
+    if systemctl is-active "${SERVICE_NAME}" &>/dev/null; then
+        log "Service started successfully"
     else
-        info "Service enabled but not started. Run: systemctl start ${SERVICE_NAME}"
+        warn "Service failed to start — check: journalctl -u ${SERVICE_NAME} -e"
     fi
 fi
 
