@@ -323,7 +323,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
     .toolbar-left, .toolbar-right { justify-content: center; flex-wrap: wrap; }
     .table-wrapper { font-size: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .file-name { max-width: 200px; }
-    .modal { max-width: 95vw; max-height: 90vh; margin: 8px; }
+    .modal { max-width: 95vw; max-height: 95vh; margin: 8px; }
     .modal-overlay { padding: 8px; }
     .form-row { grid-template-columns: 1fr; }
     .stats-overview { grid-template-columns: repeat(2, 1fr); }
@@ -402,7 +402,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
 /* Modal overlay */
 .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 200; align-items: center; justify-content: center; }
 .modal-overlay.open { display: flex; }
-.modal { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 600px; max-width: 90vw; max-height: 80vh; display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 600px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .modal-header h2 { font-size: 16px; }
 .modal-close { background: none; border: none; color: var(--text-secondary); font-size: 20px; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
@@ -457,7 +457,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .help-section.active { display: block; }
 
 /* Settings modal layout */
-.settings-layout { display: flex; gap: 0; height: 70vh; }
+.settings-layout { display: flex; gap: 0; height: 80vh; }
 .settings-nav { width: 200px; min-width: 200px; border-right: 1px solid var(--border); padding: 8px 0; display: flex; flex-direction: column; }
 .settings-nav-item { display: flex; align-items: center; gap: 8px; padding: 10px 16px; font-size: 13px; color: var(--text-secondary); cursor: pointer; border-left: 3px solid transparent; transition: all var(--transition); }
 .settings-nav-item:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -568,7 +568,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <span style="color:var(--warning);font-weight:600;">Service restart required</span>
             <span style="color:var(--text-muted);" id="restartBannerText">A new version has been installed. Restart to apply.</span>
         </div>
-        <button class="btn btn-sm" style="font-size:10px;padding:3px 10px;background:transparent;border:1px solid var(--warning);color:var(--warning);" onclick="restartService(this)">Restart</button>
+        <button class="btn btn-sm" style="font-size:11px;padding:2px 8px;" onclick="restartService(this)">Restart</button>
     </div>
 
     <div class="layout">
@@ -780,6 +780,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="tab" data-tab="skipped" onclick="switchTab('skipped');renderHistory()">Skipped <span class="tab-badge" id="badgeSkipped" style="display:none;background:var(--text-muted);">0</span></div>
                 <div class="tab" data-tab="stats" onclick="switchTab('stats');loadStats()">Stats</div>
                 <div style="flex:1"></div>
+                <div class="tab" onclick="openLogs()" title="Logs" style="padding:4px 8px;line-height:1;display:flex;align-items:center;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>
                 <div class="tab" onclick="document.getElementById('helpModal').classList.add('open')" title="Help" style="padding:4px 8px;line-height:1;display:flex;align-items:center;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
                 <div class="tab" onclick="openSettings()" title="Settings" style="padding:4px 8px;line-height:1;display:flex;align-items:center;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
             </div>
@@ -1860,7 +1861,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.20.2</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1894,7 +1895,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
-                            <div style="font-weight:600;color:var(--text-primary);">v2.20.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.21.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
                                 <li><strong>Per-GPU max jobs</strong> &mdash; configure max concurrent encodes per GPU in Settings. Replaces the global Concurrent Encodes setting with fine-grained per-GPU control</li>
                                 <li><strong>Redesigned GPU Config</strong> &mdash; Local GPUs section with power toggle, VRAM display, and max jobs dropdown per GPU. Remote Clients redesigned to match</li>
@@ -1909,9 +1910,17 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <li><strong>Restart safety</strong> &mdash; restart button warns when active encodes are running, requires confirmation click</li>
                                 <li><strong>Fast service restart</strong> &mdash; TimeoutStopSec=10, KillMode=mixed for quick service restarts instead of 90s default</li>
                                 <li><strong>scale_cuda</strong> &mdash; GPU-accelerated scaling when resizing with CUDA hwaccel (4K&rarr;1080p uses GPU for decode, scale, and encode)</li>
+                                <li><strong>System Logs viewer</strong> &mdash; new Logs modal (file icon in sidebar) with Server, ffmpeg, Listener, and Connector tabs. Auto-refresh every 3s with auto-scroll. Color-coded by severity and per-job colors for ffmpeg logs</li>
+                                <li><strong>Stats charts</strong> &mdash; daily encode and space saved bar charts in the Stats tab (last 30 days)</li>
+                                <li><strong>History totals</strong> &mdash; summary bar on Done/Failed/Cancelled/Skipped lists showing total files, original size, encoded size, space saved, and encode time</li>
+                                <li><strong>Find Duplicates inline</strong> &mdash; shows "No duplicates found" on the button instead of a popup when none found</li>
+                                <li><strong>GC fix</strong> &mdash; garbage collector no longer uses pgrep (command truncation killed active jobs). Now tracks active job IDs in a HashSet. Runs in dedicated OS thread to avoid blocking FUSE handlers</li>
+                                <li><strong>Stalled job detection</strong> &mdash; detects when listener process dies and immediately fails orphaned remote jobs for auto-retry</li>
+                                <li><strong>Interrupted job recovery</strong> &mdash; on restart, interrupted remote jobs are re-queued with clean settings (no stale encoder=remote)</li>
                                 <li><strong>Remote ffmpeg stderr</strong> &mdash; failed remote encodes now show the actual ffmpeg error in the job debug log</li>
                                 <li><strong>Failed retry to back of queue</strong> &mdash; auto-retried jobs go to the back of the queue instead of jumping to the front</li>
-                                <li><strong>Setup wizard simplified</strong> &mdash; removed GPU Config step from setup wizard (configure in Settings after setup)</li>
+                                <li><strong>4K remote fallthrough</strong> &mdash; when no local GPU can handle 4K, jobs fall through to remote instead of being skipped</li>
+                                <li><strong>Setup wizard simplified</strong> &mdash; removed GPU Config step (configure in Settings after setup)</li>
                             </ul>
                         </div>
                         <div>
@@ -2265,6 +2274,43 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </p>
             </div>
         </div>
+        </div>
+    </div>
+</div>
+
+<!-- Logs Modal -->
+<div class="modal-overlay" id="logsModal">
+    <div class="modal settings-modal" style="max-width:1300px;width:95vw;height:80vh;">
+        <div class="modal-header">
+            <h2>System Logs</h2>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer;"><input type="checkbox" id="logAutoScroll" checked onchange="_logAutoScroll=this.checked"> Auto-scroll</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer;"><input type="checkbox" id="logAutoRefresh" checked onchange="toggleLogAutoRefresh(this.checked)"> Auto-refresh</label>
+                <button class="btn btn-sm" onclick="loadLogs()" style="font-size:11px;">Refresh</button>
+                <button class="modal-close" onclick="closeLogsModal()">&times;</button>
+            </div>
+        </div>
+        <div class="settings-layout" style="flex:1;min-height:0;">
+            <nav class="settings-nav">
+                <div class="settings-nav-item active" onclick="switchLogTab('server',this)">Server</div>
+                <div class="settings-nav-item" onclick="switchLogTab('ffmpeg',this)">ffmpeg</div>
+                <div class="settings-nav-item" onclick="switchLogTab('listener',this)">Listener</div>
+                <div class="settings-nav-item" onclick="switchLogTab('connectors',this)">Connectors</div>
+            </nav>
+            <div id="logScrollContainer" style="flex:1;overflow:auto;padding:16px;min-height:0;">
+                <div id="logTab-server" style="display:block;">
+                    <pre id="logServer" style="font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
+                </div>
+                <div id="logTab-ffmpeg" style="display:none;">
+                    <pre id="logFfmpeg" style="font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
+                </div>
+                <div id="logTab-listener" style="display:none;">
+                    <pre id="logListener" style="font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
+                </div>
+                <div id="logTab-connectors" style="display:none;">
+                    <pre id="logConnectors" style="font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -4348,6 +4394,27 @@ function renderHistory() {
     let statusFiltered = historyFilter === 'all' ? [...h] : h.filter(j => j.status === historyFilter);
     let filtered = filterJobList(statusFiltered, historySearch, historyFilterCodec, historyFilterHdr, historyFilterTopN);
 
+    // Totals summary
+    let totalOrigBytes = 0, totalNewBytes = 0, totalTime = 0;
+    for (const j of filtered) {
+        const r = j.result || {};
+        const fi = j.file_info || {};
+        totalOrigBytes += r.orig_bytes || fi.size_bytes || 0;
+        totalNewBytes += r.new_bytes || 0;
+        if (j.started_at && j.finished_at) totalTime += j.finished_at - j.started_at;
+    }
+    const fmtSz = b => { if (b >= 1e12) return (b/1e12).toFixed(2) + ' TB'; if (b >= 1e9) return (b/1e9).toFixed(1) + ' GB'; if (b >= 1e6) return (b/1e6).toFixed(0) + ' MB'; return (b/1e3).toFixed(0) + ' KB'; };
+    const fmtTime = t => { const h = Math.floor(t/3600); const m = Math.floor((t%3600)/60); return h > 0 ? `${h}h ${m}m` : `${m}m`; };
+    const savedBytes = totalOrigBytes - totalNewBytes;
+    const savedPct = totalOrigBytes > 0 && totalNewBytes > 0 ? ((savedBytes / totalOrigBytes) * 100).toFixed(1) : 0;
+    html += `<div style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--text-muted);">
+        <span><strong style="color:var(--text-primary);">${filtered.length}</strong> files</span>
+        <span>Original: <strong style="color:var(--text-primary);">${fmtSz(totalOrigBytes)}</strong></span>
+        ${totalNewBytes > 0 ? `<span>Encoded: <strong style="color:var(--cyan);">${fmtSz(totalNewBytes)}</strong></span>
+        <span>Saved: <strong style="color:var(--success);">${fmtSz(savedBytes)}</strong> (${savedPct}%)</span>` : ''}
+        ${totalTime > 0 ? `<span>Time: <strong style="color:var(--text-primary);">${fmtTime(totalTime)}</strong></span>` : ''}
+    </div>`;
+
     // Sort
     if (historySort === 'newest') filtered.reverse();
     else if (historySort === 'oldest') { /* already chronological */ }
@@ -5904,10 +5971,93 @@ document.getElementById('emptyStatsIcon').innerHTML = svgIcon('bar-chart', 48);
 /* =========================================================================
    Encode Statistics Dashboard
    ========================================================================= */
+// =========================================================================
+// Logs Modal
+// =========================================================================
+let _logAutoScroll = true;
+let _logRefreshInterval = null;
+function openLogs() {
+    document.getElementById('logsModal').classList.add('open');
+    loadLogs();
+    toggleLogAutoRefresh(document.getElementById('logAutoRefresh')?.checked ?? true);
+}
+function closeLogsModal() {
+    document.getElementById('logsModal').classList.remove('open');
+    if (_logRefreshInterval) { clearInterval(_logRefreshInterval); _logRefreshInterval = null; }
+}
+function toggleLogAutoRefresh(on) {
+    if (_logRefreshInterval) { clearInterval(_logRefreshInterval); _logRefreshInterval = null; }
+    if (on && document.getElementById('logsModal').classList.contains('open')) {
+        _logRefreshInterval = setInterval(loadLogs, 3000);
+    }
+}
+function switchLogTab(tab, el) {
+    document.querySelectorAll('#logsModal .settings-nav-item').forEach(n => n.classList.remove('active'));
+    if (el) el.classList.add('active');
+    ['server','ffmpeg','listener','connectors'].forEach(t => {
+        document.getElementById('logTab-' + t).style.display = t === tab ? 'block' : 'none';
+    });
+}
+const _logJobColors = {};
+const _logPalette = ['#6e9ecf','#9a7ebd','#5fa8a8','#b88a5e','#6aad6a','#b87e9a','#7a9ab5','#a08ab8','#7ea8bf','#b89a6e'];
+let _logColorIdx = 0;
+function _getJobColor(name) {
+    if (!name) return '';
+    if (!_logJobColors[name]) { _logJobColors[name] = _logPalette[_logColorIdx % _logPalette.length]; _logColorIdx++; }
+    return _logJobColors[name];
+}
+function _colorLog(line, useJobColor) {
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    let clean = line.replace(/\x1b\[[0-9;]*m/g, '');
+    let html = esc(clean);
+    if (/\bERROR\b|error/i.test(clean)) return `<span style="color:var(--error);">${html}</span>`;
+    if (/\bWARN\b|warn/i.test(clean)) return `<span style="color:var(--warning);">${html}</span>`;
+    if (/\bINFO\b/i.test(clean) && /GPU connector|Dispatched|Assigned GPU|Compiled encoders/.test(clean)) return `<span style="color:var(--success);">${html}</span>`;
+    if (useJobColor) {
+        const m = clean.match(/^\[([^\]]+)\]/);
+        if (m) {
+            const col = _getJobColor(m[1]);
+            return `<span style="color:${col};">${html}</span>`;
+        }
+    }
+    return html;
+}
+async function loadLogs() {
+    try {
+        const res = await fetch('/api/logs?lines=300');
+        const data = await res.json();
+        const scrollBox = document.getElementById('logScrollContainer');
+        // Server log
+        const serverEl = document.getElementById('logServer');
+        serverEl.innerHTML = (data.server || []).map(e => _colorLog(e.msg || '')).join('\n') || '<span style="color:var(--text-muted);">No server logs</span>';
+        // ffmpeg log — color by job name
+        const ffmpegEl = document.getElementById('logFfmpeg');
+        ffmpegEl.innerHTML = (data.ffmpeg || []).map(l => _colorLog(l, true)).join('\n') || '<span style="color:var(--text-muted);">No ffmpeg logs</span>';
+        // Listener log
+        const listenerEl = document.getElementById('logListener');
+        listenerEl.innerHTML = (data.listener || []).map(l => _colorLog(l)).join('\n') || '<span style="color:var(--text-muted);">No listener logs</span>';
+        // Connector logs
+        const connEl = document.getElementById('logConnectors');
+        const conns = data.connectors || [];
+        if (conns.length === 0) {
+            connEl.innerHTML = '<span style="color:var(--text-muted);">No connector logs</span>';
+        } else {
+            connEl.innerHTML = conns.map(c =>
+                `<div style="font-weight:600;color:var(--accent);margin:8px 0 4px 0;">Connector ${c.index}</div>` +
+                c.lines.map(l => _colorLog(l)).join('\n')
+            ).join('\n');
+        }
+        if (_logAutoScroll && scrollBox) scrollBox.scrollTop = scrollBox.scrollHeight;
+    } catch(e) {
+        document.getElementById('logServer').textContent = 'Failed to load logs: ' + e;
+    }
+}
+
 async function loadStats() {
     try {
-        const res = await fetch('/api/stats');
-        const s = await res.json();
+        const [statsRes, histRes] = await Promise.all([fetch('/api/stats'), fetch('/api/stats/history')]);
+        const s = await statsRes.json();
+        const h = await histRes.json();
         const container = document.getElementById('statsContent');
         container.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
@@ -5923,10 +6073,84 @@ async function loadStats() {
                 <div class="stats-card"><div class="sc-value" style="color:var(--cyan);">${s.total_new_size}</div><div class="sc-label">Total Output Size</div></div>
                 <div class="stats-card"><div class="sc-value" style="color:var(--purple);">${s.avg_savings_pct}%</div><div class="sc-label">Avg Compression</div></div>
                 <div class="stats-card"><div class="sc-value" style="color:var(--orange);">${s.total_encode_time_human}</div><div class="sc-label">Total Encode Time</div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px;">
+                <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;">
+                    <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:12px;">Daily Encodes</div>
+                    <canvas id="chartEncodes" height="180" style="width:100%;"></canvas>
+                </div>
+                <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;">
+                    <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:12px;">Daily Space Saved</div>
+                    <canvas id="chartSaved" height="180" style="width:100%;"></canvas>
+                </div>
             </div>`;
+        renderStatsCharts(h.days || []);
     } catch(e) {
         document.getElementById('statsContent').innerHTML = `<div class="empty-state"><div class="icon">${svgIcon('bar-chart', 48)}</div><h3>Failed to load stats</h3></div>`;
     }
+}
+function renderStatsCharts(days) {
+    if (!days.length) return;
+    _drawBarChart('chartEncodes', days, d => d.done, d => d.failed, 'var(--accent)', 'var(--error)', v => v.toString(), true);
+    _drawBarChart('chartSaved', days, d => d.saved_bytes, null, 'var(--success)', null, v => {
+        if (v >= 1e12) return (v/1e12).toFixed(1) + ' TB';
+        if (v >= 1e9) return (v/1e9).toFixed(1) + ' GB';
+        if (v >= 1e6) return (v/1e6).toFixed(0) + ' MB';
+        return (v/1e3).toFixed(0) + ' KB';
+    }, false);
+}
+function _drawBarChart(canvasId, days, valFn, val2Fn, color, color2, fmtY, stacked) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const w = rect.width, h = rect.height;
+    const pad = {t: 10, r: 10, b: 30, l: 50};
+    const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+    const vals = days.map(d => valFn(d) + (stacked && val2Fn ? val2Fn(d) : 0));
+    const maxVal = Math.max(...vals, 1);
+    const barW = Math.max(2, (cw / days.length) - 2);
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+        const y = pad.t + ch - (ch * i / 4);
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(fmtY(maxVal * i / 4), pad.l - 6, y + 3);
+    }
+    // Bars
+    const style = getComputedStyle(document.documentElement);
+    const resolve = c => { const m = c.match(/var\((--[^)]+)\)/); return m ? style.getPropertyValue(m[1]).trim() : c; };
+    const c1 = resolve(color);
+    const c2 = color2 ? resolve(color2) : null;
+    days.forEach((d, i) => {
+        const x = pad.l + (i * (cw / days.length)) + 1;
+        const v1 = valFn(d);
+        const v2 = val2Fn ? val2Fn(d) : 0;
+        const h1 = (v1 / maxVal) * ch;
+        const h2 = stacked ? (v2 / maxVal) * ch : 0;
+        ctx.fillStyle = c1;
+        ctx.fillRect(x, pad.t + ch - h1 - h2, barW, h1);
+        if (stacked && c2 && v2 > 0) {
+            ctx.fillStyle = c2;
+            ctx.fillRect(x, pad.t + ch - h2, barW, h2);
+        }
+        // Date label (every few bars)
+        if (days.length <= 10 || i % Math.ceil(days.length / 8) === 0) {
+            ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            ctx.font = '9px sans-serif';
+            ctx.textAlign = 'center';
+            const lbl = d.date ? d.date.slice(5) : '';
+            ctx.fillText(lbl, x + barW / 2, h - pad.b + 14);
+        }
+    });
 }
 
 async function resetStats() {
@@ -6066,16 +6290,23 @@ let _dupFiles = []; // stored paths for deletion, indexed by data-fid
 let _dupScanPath = '';
 
 async function showDuplicates() {
+    const btn = event?.target || document.querySelector('[onclick*="showDuplicates"]');
     const libSel = document.getElementById('plexLibrary');
     let path = document.getElementById('scanPath').value.trim();
     if (libSel.value && libSel.value !== '__custom__') path = libSel.value;
     if (!path) { alert('Select a library first'); return; }
     _dupScanPath = path;
+    const origText = btn?.textContent;
+    if (btn) { btn.textContent = 'Scanning...'; btn.disabled = true; }
     try {
         const res = await fetch('/api/scan/duplicates?path=' + encodeURIComponent(path));
         const d = await res.json();
-        if (d.error) { alert(d.error); return; }
-        if (d.count === 0) { alert('No duplicate files found.'); return; }
+        if (d.error) { if (btn) { btn.textContent = origText; btn.disabled = false; } alert(d.error); return; }
+        if (d.count === 0) {
+            if (btn) { btn.textContent = 'No duplicates found'; btn.style.color = 'var(--success)'; setTimeout(() => { btn.textContent = origText; btn.style.color = ''; btn.disabled = false; }, 2000); }
+            return;
+        }
+        if (btn) { btn.textContent = origText; btn.disabled = false; }
 
         _dupFiles = [];
         let html = `<div style="margin-bottom:6px;font-size:13px;color:var(--text-secondary);">${d.count} duplicate pairs found. Total original size: <strong style="color:var(--success);">${d.total_wasted_size}</strong></div>

@@ -21,33 +21,23 @@ use tracing::{error, info, warn};
 const TTL: Duration = Duration::from_secs(3600);
 
 /// Removes the job directory on drop — guarantees cleanup on cancel, disconnect, or error.
-/// Order: kill ffmpeg → wait → unmount FUSE → wait → delete files
+/// Note: ffmpeg should already be killed/waited by run_fuse_job before this runs.
+/// This is a safety net for unexpected drops.
 pub struct CleanupGuard(pub PathBuf);
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         if !self.0.exists() { return; }
-        let dir_name = self.0.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
 
-        // Step 1: Kill any ffmpeg using this job dir
-        if !dir_name.is_empty() {
-            let _ = std::process::Command::new("pkill")
-                .args(["-9", "-f", &format!("ffmpeg.*{}", dir_name)])
-                .output();
-            // Wait for ffmpeg to release GPU/file handles
-            std::thread::sleep(std::time::Duration::from_secs(3));
-        }
-
-        // Step 2: Unmount FUSE
+        // Unmount FUSE first (ffmpeg should already be dead at this point)
         #[cfg(feature = "fuse")]
         {
             let mnt = self.0.join("mnt");
             if mnt.exists() {
                 fuse_unmount(&mnt);
-                std::thread::sleep(std::time::Duration::from_secs(2));
             }
         }
 
-        // Step 3: Delete all files
+        // Delete all files
         if let Err(e) = std::fs::remove_dir_all(&self.0) {
             eprintln!("Cleanup failed for {:?}: {}", self.0, e);
         }

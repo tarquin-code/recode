@@ -70,9 +70,17 @@ async fn main() -> anyhow::Result<()> {
     // Note: do NOT use signal(SIGCHLD, SIG_IGN) — it breaks std::process::Command::output()
     // Zombie cleanup is handled by the GC task in connect.rs instead
 
+    fn init_tracing() {
+        use tracing_subscriber::fmt::time::ChronoLocal;
+        tracing_subscriber::fmt()
+            .with_timer(ChronoLocal::new("%d-%m-%Y %H:%M:%S".to_string()))
+            .with_ansi(false)
+            .init();
+    }
+
     match Cli::parse().command {
         Commands::Server { port, secret, ffmpeg, tmp_dir, max_jobs } => {
-            tracing_subscriber::fmt::init();
+            init_tracing();
             server::run(port, secret, ffmpeg, tmp_dir, max_jobs).await
         }
         Commands::Client { args } => {
@@ -82,11 +90,11 @@ async fn main() -> anyhow::Result<()> {
             client::run_ping().await
         }
         Commands::Listen { port, secret, status_file } => {
-            tracing_subscriber::fmt::init();
+            init_tracing();
             listener::run(port, secret, status_file).await
         }
         Commands::Connect { address, secret, name, ffmpeg, tmp_dir, max_jobs, status_file } => {
-            tracing_subscriber::fmt::init();
+            init_tracing();
             connect::run(address, secret, name, ffmpeg, tmp_dir, max_jobs, status_file).await
         }
     }

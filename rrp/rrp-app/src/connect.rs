@@ -63,9 +63,11 @@ pub async fn run(
 ) -> Result<()> {
     std::fs::create_dir_all(&tmp_dir)?;
     let active_jobs = Arc::new(AtomicU32::new(0));
+    // Track active job IDs for GC — GC only cleans dirs NOT in this set
+    let active_job_ids: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 
     // Start garbage collector for orphaned job dirs
-    spawn_gc(tmp_dir.clone());
+    spawn_gc(tmp_dir.clone(), active_job_ids.clone());
 
     let status_path = PathBuf::from(&status_file);
     if let Some(parent) = status_path.parent() {
@@ -113,7 +115,7 @@ pub async fn run(
         match connect_and_run(
             &address, &secret, &name, &ffmpeg, &tmp_dir,
             &sem, &active_jobs, &encoders, effective_max, &status_path,
-            gpu_count, &gpu_limits,
+            gpu_count, &gpu_limits, &active_job_ids,
         ).await {
             Ok(()) => {
                 info!("Disconnected from {}", address);
@@ -147,6 +149,7 @@ async fn connect_and_run(
     sem: &Arc<tokio::sync::Semaphore>, active_jobs: &Arc<AtomicU32>,
     encoders: &[String], max_jobs: usize, status_path: &PathBuf,
     gpu_count: usize, gpu_limits: &Arc<Mutex<Vec<(u32, u32)>>>,
+    active_job_ids: &Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 ) -> Result<()> {
     let mut stream = TcpStream::connect(address).await.context("connect failed")?;
     stream.set_nodelay(true)?;
@@ -219,6 +222,10 @@ async fn connect_and_run(
                         let enc = encoders.to_vec();
                         let gc = gpu_count;
                         let gl = gpu_limits.clone();
+                        let aj: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = active_job_ids.clone();
+
+                        // Register job as active (GC won't touch it)
+                        aj.lock().unwrap().insert(job_id.clone());
 
                         // Assign GPU: pick least-loaded GPU that's under its per-GPU limit
                         let assigned_gpu = {
@@ -261,6 +268,8 @@ async fn connect_and_run(
                                 }
                             };
                             active.fetch_sub(1, Ordering::Relaxed);
+                            // Remove from active set (GC can now clean up)
+                            aj.lock().unwrap().remove(&job_id);
                             // Decrement GPU load
                             {
                                 let mut limits = gl.lock().await;
@@ -352,25 +361,27 @@ fn assign_gpu(mut args: Vec<String>, gpu: u32) -> Vec<String> {
     args
 }
 
-/// Garbage collector — periodically cleans up orphaned job dirs, stale FUSE mounts, and large temp files.
-/// Runs every 60 seconds. Only cleans dirs with no running ffmpeg process.
-fn spawn_gc(tmp_dir: String) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+/// Garbage collector — periodically cleans up orphaned job dirs.
+/// Uses the active_job_ids set to determine what's still running — never uses pgrep.
+/// Runs every 60 seconds. Only cleans dirs NOT in the active set.
+fn spawn_gc(tmp_dir: String, active_job_ids: Arc<std::sync::Mutex<std::collections::HashSet<String>>>) {
+    // Run GC in a dedicated OS thread to avoid blocking the tokio runtime
+    std::thread::spawn(move || {
         loop {
-            interval.tick().await;
+            std::thread::sleep(std::time::Duration::from_secs(60));
             let rrp_dir = PathBuf::from(&tmp_dir);
             let entries = match std::fs::read_dir(&rrp_dir) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
-            // Get list of active job IDs from running ffmpeg processes
-            let active_pids = std::process::Command::new("pgrep")
-                .args(["-f", "ffmpeg.*output.mkv"])
-                .output()
-                .ok()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
+            // Get snapshot of active job IDs
+            let active: std::collections::HashSet<String> = {
+                // Use try_lock to avoid blocking if the mutex is held
+                match active_job_ids.try_lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(_) => continue, // skip this cycle if locked
+                }
+            };
 
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -382,29 +393,18 @@ fn spawn_gc(tmp_dir: String) {
                 // Skip non-job dirs (status files, etc.)
                 if dir_name.len() < 8 { continue; }
 
-                // Check if any ffmpeg is using this job dir
-                let job_active = std::process::Command::new("pgrep")
-                    .args(["-f", &format!("ffmpeg.*{}", dir_name)])
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
+                // If this job is in the active set, don't touch it
+                if active.contains(&dir_name) { continue; }
 
-                if job_active { continue; }
-
-                // Orphaned dir — kill ffmpeg, unmount FUSE, remove files
-                // Step 1: Kill any ffmpeg for this job
-                let _ = std::process::Command::new("pkill")
-                    .args(["-9", "-f", &format!("ffmpeg.*{}", dir_name)])
-                    .output();
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                // Step 2: Unmount FUSE
+                // Orphaned dir — clean up
+                // Step 1: Unmount FUSE if present
                 let mnt = path.join("mnt");
                 if mnt.exists() {
                     #[cfg(feature = "fuse")]
                     crate::server::fuse_unmount(&mnt);
                     std::thread::sleep(std::time::Duration::from_secs(2));
                 }
-                // Step 3: Delete files
+                // Step 2: Delete files
                 match std::fs::remove_dir_all(&path) {
                     Ok(_) => info!("GC: cleaned orphaned job dir {}", dir_name),
                     Err(e) => warn!("GC: failed to remove {}: {}", dir_name, e),

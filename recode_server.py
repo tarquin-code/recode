@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.20.2"
+VERSION = "2.21.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -181,6 +181,22 @@ PLEX_PREFS_FILE = "/var/lib/plexmediaserver/Library/Application Support/Plex Med
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 log = logging.getLogger("recode")
+
+# Ring buffer for in-memory log capture (last 500 entries)
+class _LogBuffer(logging.Handler):
+    def __init__(self, maxlen=500):
+        super().__init__()
+        from collections import deque
+        self.buffer = deque(maxlen=maxlen)
+    def emit(self, record):
+        self.buffer.append({
+            "ts": record.created,
+            "level": record.levelname,
+            "msg": self.format(record),
+        })
+_log_buffer = _LogBuffer()
+_log_buffer.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s", datefmt="%d-%m-%Y %H:%M:%S"))
+logging.getLogger().addHandler(_log_buffer)
 
 def read_plex_token():
     """Read Plex token from Plex Preferences.xml."""
@@ -1491,10 +1507,18 @@ class EncodeQueue:
             if isinstance(interrupted, dict):
                 interrupted = [interrupted]
             for job_data in interrupted:
+                s = job_data["settings"]
+                # Clear remote assignment so auto-scheduling re-evaluates
+                for k in ("_remote_server_idx", "_remote_gpu_name", "_remote_encoder_type"):
+                    s.pop(k, None)
+                if s.get("encoder") == "remote":
+                    s["encoder"] = "gpu"
+                if s.get("gpu_target") == "remote":
+                    s["gpu_target"] = "auto"
                 job = EncodeJob(
                     id=job_data["id"],
                     file_info=job_data["file_info"],
-                    settings=job_data["settings"],
+                    settings=s,
                 )
                 self.jobs[job.id] = job
                 self.queue_order.insert(0, job.id)  # front of queue
@@ -1819,6 +1843,16 @@ def _init_stats_table():
             savings_pct_count INTEGER DEFAULT 0
         )""")
         conn.execute("INSERT OR IGNORE INTO encode_stats (id) VALUES (1)")
+        # Per-day encode history for charts
+        conn.execute("""CREATE TABLE IF NOT EXISTS encode_daily (
+            date TEXT PRIMARY KEY,
+            done INTEGER DEFAULT 0,
+            failed INTEGER DEFAULT 0,
+            orig_bytes INTEGER DEFAULT 0,
+            new_bytes INTEGER DEFAULT 0,
+            saved_bytes INTEGER DEFAULT 0,
+            encode_time REAL DEFAULT 0
+        )""")
         conn.commit()
     finally:
         conn.close()
@@ -1886,6 +1920,17 @@ def _record_encode_stat(status: str, result: dict, started_at: float, finished_a
             conn.execute("UPDATE encode_stats SET failed = failed + 1 WHERE id = 1")
         elif status in ("skipped", "cancelled"):
             conn.execute("UPDATE encode_stats SET skipped = skipped + 1 WHERE id = 1")
+        # Record daily history
+        import datetime
+        today = datetime.date.today().isoformat()
+        conn.execute("INSERT OR IGNORE INTO encode_daily (date) VALUES (?)", (today,))
+        if status == "done":
+            conn.execute("""UPDATE encode_daily SET done = done + 1,
+                orig_bytes = orig_bytes + ?, new_bytes = new_bytes + ?,
+                saved_bytes = saved_bytes + ?, encode_time = encode_time + ?
+                WHERE date = ?""", (ob, nb, saved, elapsed, today))
+        elif status == "failed":
+            conn.execute("UPDATE encode_daily SET failed = failed + 1 WHERE date = ?", (today,))
         conn.commit()
     except Exception as e:
         log.warning(f"Failed to record encode stat: {e}")
@@ -2091,10 +2136,9 @@ async def encode_worker(worker_id: int):
                 if can_run:
                     next_job = candidate
                     break
-                # No GPU can handle this job (e.g. 4K on 2GB GPU) — skip and try next
-                continue
+                # No local GPU can handle this resolution — fall through to remote check
 
-            # Auto mode — could go local or remote, but only if under limits
+            # Auto mode — could go local or remote
             if job_target == "auto":
                 # Check if remote GPUs are available
                 try:
@@ -2569,8 +2613,17 @@ async def encode_worker(worker_id: int):
             import re as _re
             exit_code = 1
             error_msg = ""
+            _listener_pid = _remote_client_proc.pid if _remote_client_proc else None
             while True:
                 await asyncio.sleep(1)
+                # Check if listener died/restarted — all remote jobs are dead
+                if _remote_client_proc is None or _remote_client_proc.returncode is not None or (_listener_pid and _remote_client_proc.pid != _listener_pid):
+                    log.warning(f"[{job.id}] Listener process died — remote encode lost")
+                    exit_code = 1
+                    error_msg = "Listener restarted — remote encode lost"
+                    for f in (job_file, progress_file, result_file):
+                        if os.path.exists(f): os.remove(f)
+                    break
                 # Check for cancellation
                 if job.status == JobStatus.CANCELLED:
                     exit_code = -1
@@ -5787,6 +5840,59 @@ def _parse_transcode_cmd(cmd: str) -> dict:
 # =============================================================================
 # Encode Statistics
 # =============================================================================
+
+@app.get("/api/logs")
+async def get_logs(lines: int = 200):
+    """Return recent log entries from server, listener, remote connectors, and ffmpeg."""
+    result = {}
+    # ffmpeg logs (active + recent history)
+    ffmpeg_logs = []
+    for jid, job_lines in list(encode_queue.ffmpeg_logs.items()):
+        fi = encode_queue.jobs[jid].file_info if jid in encode_queue.jobs else {}
+        fname = fi.get("filename", jid)
+        for line in job_lines[-20:]:
+            ffmpeg_logs.append(f"[{fname[:40]}] {line}")
+    # Also include recent history job logs
+    for h in encode_queue.history[-10:]:
+        for line in (h.get("log") or [])[-10:]:
+            fname = h.get("file_info", {}).get("filename", h.get("id", "?"))
+            ffmpeg_logs.append(f"[{fname[:40]}] {line}")
+    result["ffmpeg"] = ffmpeg_logs[-lines:]
+    # Server logs (in-memory ring buffer)
+    result["server"] = list(_log_buffer.buffer)[-lines:]
+    # Listener log
+    try:
+        with open(os.path.join(BASE_DIR, "rrp-client-listener.log")) as f:
+            raw = f.readlines()[-lines:]
+        result["listener"] = [l.rstrip() for l in raw]
+    except Exception:
+        result["listener"] = []
+    # Remote connector logs
+    connectors = []
+    for i in range(10):
+        path = os.path.join(BASE_DIR, f"rrp-connect-{i}.log")
+        if not os.path.isfile(path):
+            break
+        try:
+            with open(path) as f:
+                raw = f.readlines()[-lines:]
+            connectors.append({"index": i, "lines": [l.rstrip() for l in raw]})
+        except Exception:
+            pass
+    result["connectors"] = connectors
+    return result
+
+@app.get("/api/stats/history")
+async def get_stats_history():
+    """Return daily encode history for charts (last 30 days)."""
+    conn = get_cache_db()
+    try:
+        rows = conn.execute("SELECT date, done, failed, orig_bytes, new_bytes, saved_bytes, encode_time FROM encode_daily ORDER BY date DESC LIMIT 30").fetchall()
+        return {"days": [dict(r) for r in reversed(rows)]}
+    except Exception:
+        return {"days": []}
+    finally:
+        conn.close()
 
 @app.get("/api/stats")
 async def get_encode_stats():

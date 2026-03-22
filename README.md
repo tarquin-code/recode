@@ -2,7 +2,7 @@
 
 **GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.20.2-blue)
+![Version](https://img.shields.io/badge/version-2.21.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -91,6 +91,8 @@
 - **Mobile Responsive** — Adapts to desktop, tablet, and mobile screens
 - **Settings Modal** — All settings in one place, save without closing, unsaved indicator
 - **System Transcodes** — View all ffmpeg/Plex processes, remote GPU jobs on servers
+- **System Logs** — Live log viewer with Server, ffmpeg, Listener, and Connector tabs
+- **Stats Charts** — Daily encode count and space saved bar charts (last 30 days)
 - **Find Duplicates** — Detect original + encoded file pairs
 - **Space Savings** — Total potential savings for scanned libraries
 - **Scan Cache** — Instant re-scans with local metadata cache
