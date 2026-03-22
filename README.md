@@ -2,7 +2,7 @@
 
 **GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.19.8-blue)
+![Version](https://img.shields.io/badge/version-2.20.1-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -34,7 +34,7 @@
 ### Multi-GPU
 - **Auto Detection** — Automatically detects all NVIDIA GPUs
 - **Auto Load-Balance** — Distributes across all local GPUs and remote servers equally
-- **VRAM-Based Concurrency** — 1 encode per 2 GB VRAM, configurable
+- **Per-GPU Max Jobs** — configurable max concurrent encodes per GPU, auto-calculated from VRAM
 - **VRAM-Aware Assignment** — GPUs with ≤2GB VRAM excluded from 4K jobs (prevents CUDA OOM)
 - **Idle GPU Utilization** — Jobs can use idle GPUs even when max concurrent limit is reached
 - **GPU Selection** — Auto, All Local, All Remote, specific GPU, or specific server
@@ -97,7 +97,7 @@
 - **Stats Tab** — Aggregate stats: files encoded, space saved, compression ratio
 
 ### Updates & Deployment
-- **Compiled Binary** — No Python, venv, or pip required on target
+- **Python + venv** — Runs directly from Python with automatic venv setup
 - **Auto-Updates** — Daily GitHub check, one-click update with backup and live log
 - **Setup Wizard** — System detection, GPU config, Plex integration, GPU Server Mode
 - **Bundled Tools** — ffmpeg, ffprobe, recode-remote, dovi_tool, mediainfo, mkvmerge

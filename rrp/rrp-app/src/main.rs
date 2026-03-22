@@ -67,6 +67,9 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Note: do NOT use signal(SIGCHLD, SIG_IGN) — it breaks std::process::Command::output()
+    // Zombie cleanup is handled by the GC task in connect.rs instead
+
     match Cli::parse().command {
         Commands::Server { port, secret, ffmpeg, tmp_dir, max_jobs } => {
             tracing_subscriber::fmt::init();

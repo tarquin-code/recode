@@ -1067,7 +1067,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <ul>
                     <li><strong>Compiled Binary</strong> &mdash; No Python, venv, or pip required on target</li>
                     <li><strong>Auto-Updates</strong> &mdash; Daily GitHub check, one-click update with backup and live log</li>
-                    <li><strong>Setup Wizard</strong> &mdash; System detection, GPU config, Plex integration, GPU Server Mode</li>
+                    <li><strong>Setup Wizard</strong> &mdash; System detection, GPU config, Plex integration, Remote Server &amp; Clients</li>
                     <li><strong>Bundled Tools</strong> &mdash; ffmpeg, recode-remote, dovi_tool, mediainfo, mkvmerge</li>
                     <li><strong>Multi-Distro</strong> &mdash; Ubuntu, Debian, Fedora, RHEL, Alma, Rocky, openSUSE, Arch, Manjaro</li>
                     <li><strong>Per-Distro NVIDIA</strong> &mdash; Separate driver install handlers per distribution</li>
@@ -1420,7 +1420,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         </div>
                     </div>
                 </div>
-                <p>The Concurrent Encodes dropdown in Settings automatically adjusts its maximum based on total GPU capacity. For example, 4&times; 4 GB GPUs = max 8 concurrent encodes.</p>
+                <p>Each GPU has a configurable <strong>Max Jobs</strong> limit in Settings &rarr; GPU Config. By default this is auto-calculated from VRAM (1 per 2 GB). You can override it per GPU. Total concurrent local encodes = sum of all enabled GPU limits.</p>
 
                 <h4>GPU Assignment</h4>
                 <div class="example-box">
@@ -1455,8 +1455,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>GPU OOM Handling</h4>
                 <p>If an encode runs out of GPU memory, it's automatically re-queued at the back of the queue (up to 3 retries). The job will try again when GPU memory is available.</p>
 
-                <h4>Changing Concurrency</h4>
-                <p>If you lower the Concurrent Encodes setting while jobs are running, excess encodes are immediately stopped and re-queued at the front of the queue. The oldest running jobs are kept; the newest are stopped first.</p>
+                <h4>Changing GPU Limits</h4>
+                <p>If you lower a GPU's Max Jobs while encodes are running, excess jobs on that GPU are stopped and re-queued at the front of the queue. Disabling a GPU re-queues all its active jobs.</p>
 
                 <h4>System Monitoring</h4>
                 <p>The header bar shows live CPU/RAM/GPU utilization. The Encoding tab displays per-GPU graphs with:</p>
@@ -1860,7 +1860,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.19.8</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.20.1</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1894,25 +1894,32 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.20.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Per-GPU max jobs</strong> &mdash; configure max concurrent encodes per GPU in Settings. Replaces the global Concurrent Encodes setting with fine-grained per-GPU control</li>
+                                <li><strong>Redesigned GPU Config</strong> &mdash; Local GPUs section with power toggle, VRAM display, and max jobs dropdown per GPU. Remote Clients redesigned to match</li>
+                                <li><strong>No more compiled binary</strong> &mdash; runs directly from Python, eliminating LD_LIBRARY_PATH conflicts that prevented GPU encoder detection on remote servers</li>
+                                <li><strong>GPU encoder detection fix</strong> &mdash; remote GPU servers now reliably detect hevc_nvenc/h264_nvenc. Re-detects on each reconnect with lock-in (no regression)</li>
+                                <li><strong>Tesla M6 temporal-aq fix</strong> &mdash; encoder probe detects unsupported flags, auto-strips -temporal-aq on Maxwell GPUs. Shows as hevc_nvenc/no-temporal-aq</li>
+                                <li><strong>Least-loaded GPU assignment</strong> &mdash; remote GPU servers distribute jobs across physical GPUs by load, not round-robin. Reads per-GPU limits from settings.json</li>
+                                <li><strong>Auto-retry failed jobs</strong> &mdash; failed encodes automatically retry up to 3 times before going to the failed list. Clears remote assignment on retry so auto mode re-evaluates</li>
+                                <li><strong>FUSE cleanup fix</strong> &mdash; kill ffmpeg first, wait 3s, unmount FUSE, wait 2s, then delete files. Prevents zombie processes and stuck D-state ffmpeg</li>
+                                <li><strong>AutoUnmount</strong> &mdash; FUSE mounts use AutoUnmount flag, automatically unmount when the process dies</li>
+                                <li><strong>Garbage collector</strong> &mdash; periodic cleanup of orphaned job dirs, stale FUSE mounts, and temp files on remote GPU servers (every 60s)</li>
+                                <li><strong>Restart safety</strong> &mdash; restart button warns when active encodes are running, requires confirmation click</li>
+                                <li><strong>Fast service restart</strong> &mdash; TimeoutStopSec=10, KillMode=mixed for quick service restarts instead of 90s default</li>
+                                <li><strong>scale_cuda</strong> &mdash; GPU-accelerated scaling when resizing with CUDA hwaccel (4K&rarr;1080p uses GPU for decode, scale, and encode)</li>
+                            </ul>
+                        </div>
+                        <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.19.8 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
                                 <li><strong>GPU Config</strong> &mdash; enable/disable individual GPUs in Settings. Disabled GPUs shown as red dots in Target dropdowns</li>
                                 <li><strong>Multi-GPU remote servers</strong> &mdash; GPU servers with multiple GPUs use all of them via round-robin assignment</li>
-                                <li><strong>Smart queue scheduling</strong> &mdash; smaller jobs jump the queue when only a low-VRAM GPU is idle (e.g. 1080p jobs process on 2GB GPU while 4K jobs wait for capable GPUs)</li>
-                                <li><strong>Restart banner auto-detect</strong> &mdash; polls every 30 seconds, banner appears automatically when new binaries are staged without page refresh</li>
-                                <li><strong>Remote post-processing</strong> &mdash; delete_original and discard_larger now work for remote GPU encodes</li>
-                                <li><strong>Encoded size display</strong> &mdash; remote encodes show proper file size, savings percentage, and bitrate in history (was N/A)</li>
-                                <li><strong>Independent history tabs</strong> &mdash; Done, Failed, Cancelled, Skipped each have their own tab with badge, content panel, search, and clear button</li>
-                                <li><strong>Search focus fix</strong> &mdash; typing in search no longer loses focus on websocket updates</li>
-                                <li><strong>Safe updates</strong> &mdash; auto-updater no longer restarts services automatically. Shows a "Service restart required" banner with version number and one-click restart</li>
-                                <li><strong>Restart banner</strong> &mdash; yellow banner with "Restart Now" button when staged binaries detected. Full-screen spinner overlay during restart with auto-reload</li>
-                                <li><strong>Staged binary deployment</strong> &mdash; new binaries deploy as .new files, swapped by systemd ExecStartPre on restart. Running processes never interrupted</li>
-                                <li><strong>Concurrent encode limit</strong> &mdash; max_concurrent_encodes now strictly enforced. Previously idle GPUs bypassed the limit</li>
-                                <li><strong>Profile GPU targets</strong> &mdash; library profile GPU Target dropdown shows connected remote GPUs with same format as sidebar (indents, green dots, encoder type)</li>
-                                <li><strong>ffmpeg exit detection</strong> &mdash; fixed remote encode stalling at 99% when ffmpeg finishes but FUSE loop didn't detect the exit</li>
-                                <li><strong>Remote job queueing</strong> &mdash; jobs wait in queue when no remote GPUs available instead of failing immediately</li>
-                                <li><strong>Cancel fix</strong> &mdash; cancelled remote jobs create single history entry (was duplicating as cancelled + failed)</li>
-                                <li><strong>Bitrate auto-scale</strong> &mdash; display auto-scales between b/s, Kb/s, Mb/s, Gb/s with estimation from output size when ffmpeg reports N/A</li>
+                                <li><strong>Smart queue scheduling</strong> &mdash; smaller jobs jump the queue when only a low-VRAM GPU is idle</li>
+                                <li><strong>Independent history tabs</strong> &mdash; Done, Failed, Cancelled, Skipped each with own tab, badge, search, and clear</li>
+                                <li><strong>Staged binary deployment</strong> &mdash; new files deploy as .new, swapped by systemd ExecStartPre on restart</li>
+                                <li><strong>Bitrate auto-scale</strong> &mdash; display auto-scales between b/s, Kb/s, Mb/s, Gb/s</li>
                             </ul>
                         </div>
                         <div>
@@ -2490,10 +2497,11 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <div class="set-section-title">GPU Config</div>
                     <div class="set-section-desc">Configure local and remote GPUs for hardware-accelerated encoding.</div>
 
-                    <!-- Active GPUs -->
+                    <!-- Local GPUs -->
                     <div style="margin-bottom:20px;" id="gpuToggleSection">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Active GPUs</div>
-                        <div id="gpuToggleList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Local GPUs</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Enable or disable GPUs and set the maximum concurrent encode jobs per GPU.</div>
+                        <div id="gpuToggleList"></div>
                     </div>
 
                     <!-- Remote Server (listener — accept GPU server connections) -->
@@ -2537,12 +2545,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <!-- Encoding -->
                     <div style="margin-bottom:20px;">
                         <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Encoding</div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-                            <div class="form-group" style="margin:0;">
-                                <label>Concurrent Encodes</label>
-                                <select id="setMaxConcurrent"><option value="1">1 (sequential)</option></select>
-                                <span class="set-desc" id="setConcurrentDesc">Files encoded in parallel</span>
-                            </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <div class="form-group" style="margin:0;">
                                 <label>Temp Directory</label>
                                 <input type="text" id="setTmpDir">
@@ -5130,19 +5133,33 @@ async function openSettings() {
         // General
         document.getElementById('setAllowedPaths').value = (s.allowed_paths || ['/mnt']).join(', ');
         document.getElementById('setTmpDir').value = s.tmp_dir || '/var/lib/plex/tmp';
-        document.getElementById('setMaxConcurrent').value = s.max_concurrent_encodes || 1;
+        // max_concurrent_encodes removed — per-GPU max_jobs used instead
         document.getElementById('setAutoStartQueue').checked = !!s.auto_start_queue;
         // GPU toggles
         const gpuToggleList = document.getElementById('gpuToggleList');
         const gpuInfo = s.gpu_info || state.system?.gpu_info || [];
         const disabledGpus = s.disabled_gpus || [];
         if (gpuInfo.length > 0) {
+            const gpuMaxJobs = s.gpu_max_jobs || {};
             gpuToggleList.innerHTML = gpuInfo.map(g => {
                 const disabled = disabledGpus.includes(g.index);
-                const vram = g.vram_mb > 2048 ? (g.vram_mb/1024).toFixed(0) + 'GB' : g.vram_mb + 'MB';
-                return `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-tertiary);border:1px solid ${disabled ? 'var(--error)' : 'var(--border)'};border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
-                    <label class="set-chk" style="margin:0;"><input type="checkbox" ${disabled ? '' : 'checked'} onchange="toggleGpu(${g.index}, !this.checked)"></label>
-                    <span style="font-size:12px;"><strong>GPU ${g.index}</strong> ${escHtml(g.name)} (${vram})</span>
+                const vram = g.vram_mb >= 1024 ? (g.vram_mb/1024).toFixed(1).replace(/\.0$/,'') + ' GB' : g.vram_mb + ' MB';
+                const autoMax = g.max_jobs || 1;
+                const userMax = gpuMaxJobs[String(g.index)];
+                const currentMax = userMax !== undefined ? userMax : autoMax;
+                const maxOpts = Array.from({length: 8}, (_,i) => i+1).map(n =>
+                    `<option value="${n}" ${n === currentMax ? 'selected' : ''}>${n}</option>`
+                ).join('');
+                return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.4;' : ''}">
+                    <button class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="toggleGpu(${g.index}, ${!disabled});loadSettings();">${svgIcon('power', 14)}</button>
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-size:12px;font-weight:600;">GPU ${g.index} <span style="font-weight:400;color:var(--text-muted);">${escHtml(g.name)}</span></div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${vram} VRAM</div>
+                    </div>
+                    <div style="flex-shrink:0;">
+                        <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Max Jobs</div>
+                        <select style="font-size:12px;width:auto;min-width:55px;" onchange="setGpuMaxJobs(${g.index}, parseInt(this.value))" ${disabled ? 'disabled' : ''}>${maxOpts}</select>
+                    </div>
                 </div>`;
             }).join('');
             document.getElementById('gpuToggleSection').style.display = '';
@@ -5331,17 +5348,31 @@ function renderRemoteClients() {
     clients.forEach((c, i) => {
         const disabled = c.enabled === false;
         const statusId = 'rc-status-' + i;
-        const lbl = i === 0 ? (f) => `<label style="display:block;font-size:12px;color:var(--text-secondary);font-weight:500;margin-bottom:4px;">${f}</label>` : () => '';
         const mj = c.max_jobs || 1;
-        html += `<div style="display:grid;grid-template-columns:1fr 1.5fr 1fr 60px auto;gap:6px 8px;align-items:end;margin-bottom:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
-            <div>${lbl('Name')}<input type="text" value="${escHtml(c.name || '')}" placeholder="Client name" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].name=this.value"></div>
-            <div>${lbl('Address')}<input type="text" value="${escHtml(c.address || '')}" placeholder="client.example.com:9879" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].address=this.value"></div>
-            <div>${lbl('Secret')}<input type="text" value="${escHtml(c.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].secret=this.value"></div>
-            <div>${lbl('Jobs')}<input type="number" value="${mj}" min="1" max="4" style="width:100%;text-align:center;-moz-appearance:textfield;" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].max_jobs=Math.min(4,Math.max(1,parseInt(this.value)||1));this.value=window._remoteClients[${i}].max_jobs"></div>
-            <div style="display:flex;gap:6px;align-items:center;align-self:end;">
-                <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="height:34px;padding:0 12px;display:inline-flex;align-items:center;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;cursor:pointer;" onclick="window._remoteClients[${i}].enabled=${disabled};renderRemoteClients();setTimeout(()=>checkRemoteClients(),300);">${svgIcon('power', 14)}</button>
-                <button class="btn btn-danger btn-sm" style="height:33px;padding:0 12px;display:inline-flex;align-items:center;" onclick="window._remoteClients.splice(${i},1);renderRemoteClients();">Remove</button>
+        const maxOpts = Array.from({length: 8}, (_,n) => n+1).map(n =>
+            `<option value="${n}" ${n === mj ? 'selected' : ''}>${n}</option>`
+        ).join('');
+        html += `<div style="display:flex;align-items:flex-end;gap:10px;margin-bottom:6px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.4;' : ''}">
+            <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;margin-bottom:1px;" onclick="window._remoteClients[${i}].enabled=${disabled};renderRemoteClients();setTimeout(()=>checkRemoteClients(),300);">${svgIcon('power', 14)}</button>
+            <div style="flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:4px 10px;">
+                <div style="flex:1;min-width:100px;">
+                    <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Name</div>
+                    <input type="text" value="${escHtml(c.name || '')}" placeholder="Client name" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].name=this.value">
+                </div>
+                <div style="flex:2;min-width:160px;">
+                    <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Address</div>
+                    <input type="text" value="${escHtml(c.address || '')}" placeholder="client.example.com:9879" style="font-family:var(--font-mono);" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].address=this.value">
+                </div>
+                <div style="flex:1;min-width:100px;">
+                    <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Secret</div>
+                    <input type="text" value="${escHtml(c.secret || '')}" placeholder="Shared secret" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].secret=this.value">
+                </div>
             </div>
+            <div style="flex-shrink:0;">
+                <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Max Jobs</div>
+                <select style="font-size:12px;width:auto;min-width:55px;" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].max_jobs=parseInt(this.value)">${maxOpts}</select>
+            </div>
+            <button class="btn btn-danger btn-sm" title="Remove" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;font-size:16px;margin-bottom:1px;" onclick="window._remoteClients.splice(${i},1);renderRemoteClients();">&times;</button>
         </div>`;
     });
     container.innerHTML = html;
@@ -5444,9 +5475,14 @@ function toggleGpu(index, disabled) {
     let list = (state.settings?.disabled_gpus || []).slice();
     if (disabled && !list.includes(index)) list.push(index);
     if (!disabled) list = list.filter(i => i !== index);
-    // Save immediately
     fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({disabled_gpus: list}) });
     if (state.settings) state.settings.disabled_gpus = list;
+}
+function setGpuMaxJobs(index, maxJobs) {
+    let jobs = Object.assign({}, state.settings?.gpu_max_jobs || {});
+    jobs[String(index)] = maxJobs;
+    fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({gpu_max_jobs: jobs}) });
+    if (state.settings) state.settings.gpu_max_jobs = jobs;
 }
 
 function onSettingsPresetChange() {
@@ -5599,6 +5635,16 @@ async function applyUpdate(btn) {
 }
 
 async function restartService(btn) {
+    // Check for active encodes and warn
+    const activeCount = (state.active || []).length;
+    if (activeCount > 0 && !btn.dataset.confirmed) {
+        btn.textContent = `${activeCount} active job${activeCount > 1 ? 's' : ''} will be killed! Click to confirm`;
+        btn.style.color = '#ff4444';
+        btn.style.borderColor = '#ff4444';
+        btn.dataset.confirmed = 'true';
+        setTimeout(() => { btn.textContent = 'Restart'; btn.style.color = ''; btn.style.borderColor = ''; delete btn.dataset.confirmed; }, 5000);
+        return;
+    }
     btn.disabled = true;
     btn.textContent = 'Restarting...';
     const status = document.getElementById('restartStatus');
@@ -5673,7 +5719,7 @@ async function saveSettings() {
         // General
         allowed_paths: document.getElementById('setAllowedPaths').value.split(',').map(s => s.trim()).filter(Boolean),
         tmp_dir: document.getElementById('setTmpDir').value || '/var/lib/plex/tmp',
-        max_concurrent_encodes: parseInt(document.getElementById('setMaxConcurrent').value) || 1,
+        gpu_max_jobs: state.settings?.gpu_max_jobs || {},
         auto_start_queue: document.getElementById('setAutoStartQueue').checked,
         cpu_threads: parseInt(document.getElementById('setCpuThreads').value) || 0,
         disabled_gpus: state.settings?.disabled_gpus || [],

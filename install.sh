@@ -250,39 +250,30 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────
-# Install Python packages (skip if compiled binary is bundled)
+# Install Python packages
 # ─────────────────────────────────────────────────────────────────
-# Check early if we have a compiled binary in the source package
-SCRIPT_DIR_CHECK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -x "${SCRIPT_DIR_CHECK}/bin/recode" ]]; then
-    log "Compiled binary found — skipping Python venv setup"
-    VENV_DIR="${APP_DIR}/venv"
-    mkdir -p "$APP_DIR"
-    # Still need PYTHON_BIN for the service file fallback path
-    PYTHON_BIN="${VENV_DIR}/bin/python3"
+log "Installing Python packages..."
+VENV_DIR="${APP_DIR}/venv"
+mkdir -p "$APP_DIR"
+
+# Always use a virtual environment — most reliable across all distros
+if [[ -d "${VENV_DIR}" && -x "${VENV_DIR}/bin/python3" ]]; then
+    log "Existing virtual environment found"
 else
-    log "Installing Python packages..."
-    VENV_DIR="${APP_DIR}/venv"
-    mkdir -p "$APP_DIR"
-
-    # Always use a virtual environment — most reliable across all distros
-    if [[ -d "${VENV_DIR}" && -x "${VENV_DIR}/bin/python3" ]]; then
-        log "Existing virtual environment found"
-    else
-        log "Creating Python virtual environment at ${VENV_DIR}..."
-        $PYTHON_BIN -m venv "$VENV_DIR" || err "Failed to create virtual environment. Install python3-venv."
-    fi
-    PYTHON_BIN="${VENV_DIR}/bin/python3"
-    "${VENV_DIR}/bin/pip" install --quiet --upgrade pip 2>/dev/null || true
-    "${VENV_DIR}/bin/pip" install --quiet fastapi uvicorn psutil requests pydantic python-multipart websockets \
-        || err "Failed to install Python packages in virtual environment"
-    chown -R "${RUN_USER}:${RUN_GROUP}" "$VENV_DIR"
-
-    # Verify imports
-    $PYTHON_BIN -c "import fastapi, uvicorn, psutil, requests, pydantic" \
-        || err "Failed to verify Python packages"
-    log "Python packages installed (venv: ${VENV_DIR})"
+    log "Creating Python virtual environment at ${VENV_DIR}..."
+    $PYTHON_BIN -m venv "$VENV_DIR" || err "Failed to create virtual environment. Install python3-venv."
 fi
+PYTHON_BIN="${VENV_DIR}/bin/python3"
+"${VENV_DIR}/bin/pip" install --quiet --upgrade pip 2>/dev/null || true
+"${VENV_DIR}/bin/pip" install --quiet \
+    fastapi uvicorn[standard] psutil requests pydantic python-multipart websockets aiofiles nvitop \
+    || err "Failed to install Python packages in virtual environment"
+chown -R "${RUN_USER}:${RUN_GROUP}" "$VENV_DIR"
+
+# Verify imports
+$PYTHON_BIN -c "import fastapi, uvicorn, psutil, requests, pydantic" \
+    || err "Failed to verify Python packages"
+log "Python packages installed (venv: ${VENV_DIR})"
 
 # ─────────────────────────────────────────────────────────────────
 # Check for NVIDIA GPU (optional)
@@ -411,14 +402,8 @@ log "Sudoers configured for tool installs"
 # ─────────────────────────────────────────────────────────────────
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-# Determine how to start the server — prefer compiled binary, fall back to Python
-if [[ -x "${APP_DIR}/bin/recode" ]]; then
-    EXEC_START="${APP_DIR}/bin/recode"
-    log "Using compiled binary: ${EXEC_START}"
-else
-    EXEC_START="${PYTHON_BIN} ${APP_DIR}/recode_server.py"
-    log "Using Python: ${EXEC_START}"
-fi
+EXEC_START="${PYTHON_BIN} ${APP_DIR}/recode_server.py"
+log "Using Python: ${EXEC_START}"
 
 cat > "$SERVICE_FILE" << EOF
 [Unit]
@@ -431,9 +416,13 @@ User=${RUN_USER}
 Group=${RUN_GROUP}
 WorkingDirectory=${APP_DIR}
 ExecStart=${EXEC_START}
+ExecStopPost=-/usr/bin/pkill -9 -f "recode-remote listen"
+TimeoutStopSec=10
+KillMode=mixed
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+ExecStartPre=-${APP_DIR}/bin/swap-staged.sh
 ExecStartPre=-/bin/rm -f ${APP_DIR}/.restart-flag
 
 [Install]
