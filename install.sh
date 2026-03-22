@@ -52,10 +52,15 @@ info() { echo -e "${CYAN}[i]${NC} $1"; }
 [[ $EUID -ne 0 ]] && err "This installer must be run as root (use sudo)"
 
 echo ""
-echo -e "${BOLD}╔══════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║     ${CYAN}Plex Re-Encoder Installer${NC}${BOLD}        ║${NC}"
-echo -e "${BOLD}║            ${CYAN}v${APP_VERSION}${NC}${BOLD}                    ║${NC}"
-echo -e "${BOLD}╚══════════════════════════════════════╝${NC}"
+_VER="v${APP_VERSION}"
+_TITLE="Plex Re-Encoder Installer"
+_W=38
+_tp=$(( (_W - ${#_TITLE}) / 2 )); _ts=$(( _W - ${#_TITLE} - _tp ))
+_vp=$(( (_W - ${#_VER}) / 2 )); _vs=$(( _W - ${#_VER} - _vp ))
+echo -e "${BOLD}╔$(printf '═%.0s' $(seq 1 $_W))╗${NC}"
+echo -e "${BOLD}║$(printf ' %.0s' $(seq 1 $_tp))${CYAN}${_TITLE}${NC}${BOLD}$(printf ' %.0s' $(seq 1 $_ts))║${NC}"
+echo -e "${BOLD}║$(printf ' %.0s' $(seq 1 $_vp))${CYAN}${_VER}${NC}${BOLD}$(printf ' %.0s' $(seq 1 $_vs))║${NC}"
+echo -e "${BOLD}╚$(printf '═%.0s' $(seq 1 $_W))╝${NC}"
 echo ""
 
 # Detect package manager
@@ -517,9 +522,11 @@ LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 [[ -z "$LOCAL_IP" ]] && LOCAL_IP="your-server-ip"
 
 echo ""
-echo -e "${BOLD}╔══════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║     ${GREEN}Installation Complete!${NC}${BOLD}            ║${NC}"
-echo -e "${BOLD}╚══════════════════════════════════════╝${NC}"
+_CT="Installation Complete!"
+_cp=$(( (_W - ${#_CT}) / 2 )); _cs=$(( _W - ${#_CT} - _cp ))
+echo -e "${BOLD}╔$(printf '═%.0s' $(seq 1 $_W))╗${NC}"
+echo -e "${BOLD}║$(printf ' %.0s' $(seq 1 $_cp))${GREEN}${_CT}${NC}${BOLD}$(printf ' %.0s' $(seq 1 $_cs))║${NC}"
+echo -e "${BOLD}╚$(printf '═%.0s' $(seq 1 $_W))╝${NC}"
 echo ""
 echo -e "  ${BOLD}Web UI:${NC}      http://${LOCAL_IP}:${PORT}"
 echo -e "  ${BOLD}Service:${NC}     systemctl {start|stop|restart} ${SERVICE_NAME}"
