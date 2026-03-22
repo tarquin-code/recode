@@ -21,27 +21,42 @@ use tracing::{error, info, warn};
 const TTL: Duration = Duration::from_secs(3600);
 
 /// Removes the job directory on drop — guarantees cleanup on cancel, disconnect, or error.
+/// Order: kill ffmpeg → wait → unmount FUSE → wait → delete files
 pub struct CleanupGuard(pub PathBuf);
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
-        if self.0.exists() {
-            #[cfg(feature = "fuse")]
-            {
-                let mnt = self.0.join("mnt");
-                if mnt.exists() {
-                    fuse_unmount(&mnt);
-                }
+        if !self.0.exists() { return; }
+        let dir_name = self.0.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+
+        // Step 1: Kill any ffmpeg using this job dir
+        if !dir_name.is_empty() {
+            let _ = std::process::Command::new("pkill")
+                .args(["-9", "-f", &format!("ffmpeg.*{}", dir_name)])
+                .output();
+            // Wait for ffmpeg to release GPU/file handles
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+
+        // Step 2: Unmount FUSE
+        #[cfg(feature = "fuse")]
+        {
+            let mnt = self.0.join("mnt");
+            if mnt.exists() {
+                fuse_unmount(&mnt);
+                std::thread::sleep(std::time::Duration::from_secs(2));
             }
-            if let Err(e) = std::fs::remove_dir_all(&self.0) {
-                eprintln!("Cleanup failed for {:?}: {}", self.0, e);
-            }
+        }
+
+        // Step 3: Delete all files
+        if let Err(e) = std::fs::remove_dir_all(&self.0) {
+            eprintln!("Cleanup failed for {:?}: {}", self.0, e);
         }
     }
 }
 
 #[cfg(feature = "fuse")]
 /// Platform-specific FUSE unmount — uses lazy unmount to handle busy mounts
-fn fuse_unmount(path: &std::path::Path) {
+pub fn fuse_unmount(path: &std::path::Path) {
     let path_str = path.to_string_lossy();
     #[cfg(target_os = "linux")]
     {
@@ -298,6 +313,7 @@ pub async fn run_fuse_job(
         let mut options = vec![
             MountOption::RO,
             MountOption::FSName("rrp".into()),
+            MountOption::AutoUnmount,
             MountOption::CUSTOM(format!("max_read={}", CHUNK_SIZE)),
         ];
         #[cfg(target_os = "linux")]
@@ -452,18 +468,26 @@ pub async fn run_fuse_job(
 
     progress_task.abort();
 
-    // Wait for ffmpeg to finish, kill if it doesn't exit within 10s
-    let exit_code = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+    // Step 1: Kill ffmpeg first, wait for it to exit
+    let exit_code = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
         Ok(Ok(s)) => s.code().unwrap_or(1),
         _ => {
-            warn!("ffmpeg still running after loop exit — killing");
+            warn!("ffmpeg still running — killing");
             let _ = child.kill().await;
-            let _ = child.wait().await;
-            1
+            // Wait up to 3 seconds for ffmpeg to fully exit and release GPU/file handles
+            match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
+                Ok(Ok(s)) => s.code().unwrap_or(1),
+                _ => {
+                    warn!("ffmpeg did not exit after kill — force waiting");
+                    let _ = child.wait().await;
+                    1
+                }
+            }
         }
     };
 
-    // Unmount FUSE (lazy unmount handles busy mounts)
+    // Step 2: Unmount FUSE (ffmpeg is dead, safe to unmount)
+    tokio::time::sleep(Duration::from_secs(1)).await;
     fuse_unmount(&mount_dir);
     let _ = fuse_handle.join();
 
@@ -667,11 +691,25 @@ pub fn detect_encoders(ffmpeg: &str) -> Vec<String> {
         "h264_nvenc", "h264_videotoolbox", "h264_amf", "h264_qsv", "h264_vaapi", "libx264",
     ];
     // First check what's compiled in
-    let compiled: Vec<String> = if let Ok(output) = std::process::Command::new(ffmpeg)
+    let compiled: Vec<String> = match std::process::Command::new(ffmpeg)
         .args(["-hide_banner", "-encoders"]).output() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        candidates.iter().filter(|c| stdout.contains(*c)).map(|c| c.to_string()).collect()
-    } else { vec![] };
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let found: Vec<String> = candidates.iter().filter(|c| stdout.contains(*c)).map(|c| c.to_string()).collect();
+                tracing::info!("Compiled encoders found: {:?}", found);
+                found
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("ffmpeg -encoders exit {:?}: {}", output.status.code(), stderr.chars().take(200).collect::<String>());
+                vec![]
+            }
+        }
+        Err(e) => {
+            tracing::warn!("ffmpeg -encoders spawn failed: {} (path={})", e, ffmpeg);
+            vec![]
+        }
+    };
     // Software encoders don't need hardware probing
     for enc in &compiled {
         if enc.starts_with("lib") {
@@ -710,7 +748,17 @@ fn probe_encoder(ffmpeg: &str, encoder: &str, full_flags: bool) -> bool {
     }
     args.extend_from_slice(&["-f", "null", "-"]);
     match std::process::Command::new(ffmpeg).args(&args).output() {
-        Ok(output) => output.status.success(),
-        Err(_) => false,
+        Ok(output) => {
+            let ok = output.status.success();
+            if !ok {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("Probe {} (full={}) failed: exit={:?} stderr={}", encoder, full_flags, output.status.code(), stderr.chars().take(200).collect::<String>());
+            }
+            ok
+        },
+        Err(e) => {
+            tracing::warn!("Probe {} spawn failed: {}", encoder, e);
+            false
+        },
     }
 }

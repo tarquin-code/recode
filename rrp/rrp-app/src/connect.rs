@@ -5,19 +5,55 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tracing::{info, warn, error};
+
+/// Read per-GPU max jobs from settings.json. Falls back to 1 per GPU.
+fn read_gpu_max_jobs(gpu_count: usize) -> Vec<usize> {
+    let settings_path = std::path::Path::new("/opt/Recode/settings.json");
+    let mut per_gpu = vec![1usize; gpu_count];
+    if let Ok(data) = std::fs::read_to_string(settings_path) {
+        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&data) {
+            // Read disabled_gpus
+            let disabled: Vec<usize> = settings.get("disabled_gpus")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            // Read gpu_max_jobs
+            if let Some(max_jobs_map) = settings.get("gpu_max_jobs").and_then(|v| v.as_object()) {
+                for (k, v) in max_jobs_map {
+                    if let (Ok(idx), Some(val)) = (k.parse::<usize>(), v.as_u64()) {
+                        if idx < per_gpu.len() {
+                            per_gpu[idx] = val as usize;
+                        }
+                    }
+                }
+            }
+            // Disabled GPUs get 0
+            for idx in disabled {
+                if idx < per_gpu.len() {
+                    per_gpu[idx] = 0;
+                }
+            }
+        }
+    }
+    per_gpu
+}
 
 /// Detect number of GPUs via nvidia-smi
 fn detect_gpu_count() -> usize {
-    match std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=index", "--format=csv,noheader"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).lines().count()
+    // Try multiple paths — PATH may be minimal when spawned by service
+    for bin in &["nvidia-smi", "/usr/bin/nvidia-smi", "/usr/local/bin/nvidia-smi"] {
+        if let Ok(output) = std::process::Command::new(bin)
+            .args(["--query-gpu=index", "--format=csv,noheader"])
+            .output()
+        {
+            if output.status.success() {
+                let count = String::from_utf8_lossy(&output.stdout).lines().count();
+                if count > 0 { return count; }
+            }
         }
-        _ => 1,
     }
+    1
 }
 
 pub async fn run(
@@ -26,13 +62,10 @@ pub async fn run(
     status_file: String,
 ) -> Result<()> {
     std::fs::create_dir_all(&tmp_dir)?;
-    let sem = Arc::new(tokio::sync::Semaphore::new(max_jobs));
     let active_jobs = Arc::new(AtomicU32::new(0));
-    let encoders = crate::server::detect_encoders(&ffmpeg);
-    let gpu_count = detect_gpu_count();
-    let next_gpu = Arc::new(AtomicU32::new(0));
 
-    info!("GPU connector: {} encoders={:?} max_jobs={} gpus={}", name, encoders, max_jobs, gpu_count);
+    // Start garbage collector for orphaned job dirs
+    spawn_gc(tmp_dir.clone());
 
     let status_path = PathBuf::from(&status_file);
     if let Some(parent) = status_path.parent() {
@@ -41,13 +74,46 @@ pub async fn run(
     write_status(&status_path, false, 0);
 
     let mut backoff = 1u64;
+    let mut encoders: Vec<String> = Vec::new();
+    let mut gpu_count: usize = 1;
+    let mut gpu_max_jobs_vec: Vec<usize> = vec![1];
+    let sem = Arc::new(tokio::sync::Semaphore::new(max_jobs));
+    let gpu_limits: Arc<Mutex<Vec<(u32, u32)>>> = Arc::new(Mutex::new(vec![(0, 1)]));
+
     loop {
+        // Re-detect GPUs and encoders on each connection attempt (driver may become ready after boot)
+        // Once hardware encoders are found, keep them permanently
+        let already_has_hw = encoders.iter().any(|e| e.contains("nvenc") || e.contains("videotoolbox") || e.contains("vaapi") || e.contains("qsv"));
+        if !already_has_hw {
+            let new_encoders = crate::server::detect_encoders(&ffmpeg);
+            let has_hw = new_encoders.iter().any(|e| e.contains("nvenc") || e.contains("videotoolbox") || e.contains("vaapi") || e.contains("qsv"));
+            if has_hw || encoders.is_empty() {
+                encoders = new_encoders;
+            }
+        }
+        let new_gpu_count = if gpu_count <= 1 { detect_gpu_count() } else { gpu_count };
+        if new_gpu_count > gpu_count || gpu_count <= 1 {
+            gpu_count = new_gpu_count;
+            gpu_max_jobs_vec = read_gpu_max_jobs(gpu_count);
+            let total: usize = gpu_max_jobs_vec.iter().sum();
+            let effective = if total > 0 { total } else { max_jobs };
+            // Resize semaphore by adding permits if needed
+            if effective > sem.available_permits() + active_jobs.load(Ordering::Relaxed) as usize {
+                sem.add_permits(effective - sem.available_permits() - active_jobs.load(Ordering::Relaxed) as usize);
+            }
+            let mut lim = gpu_limits.lock().await;
+            *lim = gpu_max_jobs_vec.iter().map(|&m| (0u32, m as u32)).collect();
+            drop(lim);
+            info!("GPU connector: {} encoders={:?} max_jobs={} gpus={} per_gpu={:?}", name, encoders, effective, gpu_count, gpu_max_jobs_vec);
+        }
+        let effective_max: usize = gpu_max_jobs_vec.iter().sum::<usize>().max(max_jobs.min(1));
+
         info!("Connecting to client at {}...", address);
         write_status(&status_path, false, active_jobs.load(Ordering::Relaxed));
         match connect_and_run(
             &address, &secret, &name, &ffmpeg, &tmp_dir,
-            &sem, &active_jobs, &encoders, max_jobs, &status_path,
-            gpu_count, &next_gpu,
+            &sem, &active_jobs, &encoders, effective_max, &status_path,
+            gpu_count, &gpu_limits,
         ).await {
             Ok(()) => {
                 info!("Disconnected from {}", address);
@@ -80,7 +146,7 @@ async fn connect_and_run(
     address: &str, secret: &str, name: &str, ffmpeg: &str, tmp_dir: &str,
     sem: &Arc<tokio::sync::Semaphore>, active_jobs: &Arc<AtomicU32>,
     encoders: &[String], max_jobs: usize, status_path: &PathBuf,
-    gpu_count: usize, next_gpu: &Arc<AtomicU32>,
+    gpu_count: usize, gpu_limits: &Arc<Mutex<Vec<(u32, u32)>>>,
 ) -> Result<()> {
     let mut stream = TcpStream::connect(address).await.context("connect failed")?;
     stream.set_nodelay(true)?;
@@ -151,9 +217,29 @@ async fn connect_and_run(
                         let active = active_jobs.clone();
                         let done = done_tx.clone();
                         let enc = encoders.to_vec();
-                        // Assign GPU round-robin
-                        let assigned_gpu = next_gpu.fetch_add(1, Ordering::Relaxed) % gpu_count as u32;
                         let gc = gpu_count;
+                        let gl = gpu_limits.clone();
+
+                        // Assign GPU: pick least-loaded GPU that's under its per-GPU limit
+                        let assigned_gpu = {
+                            let mut limits = gl.lock().await;
+                            let mut best: Option<(usize, u32)> = None;
+                            for (i, &(load, max)) in limits.iter().enumerate() {
+                                if max == 0 { continue; } // disabled
+                                if load >= max { continue; } // at capacity
+                                match best {
+                                    None => best = Some((i, load)),
+                                    Some((_, best_load)) if load < best_load => best = Some((i, load)),
+                                    _ => {}
+                                }
+                            }
+                            let gpu = best.map(|(i, _)| i).unwrap_or(0) as u32;
+                            if (gpu as usize) < limits.len() {
+                                limits[gpu as usize].0 += 1;
+                            }
+                            info!("Assigned GPU {} (limits: {:?})", gpu, limits.iter().map(|(l,m)| format!("{}/{}", l, m)).collect::<Vec<_>>());
+                            gpu
+                        };
 
                         tokio::spawn(async move {
                             // Strip unsupported flags based on GPU capabilities
@@ -175,6 +261,13 @@ async fn connect_and_run(
                                 }
                             };
                             active.fetch_sub(1, Ordering::Relaxed);
+                            // Decrement GPU load
+                            {
+                                let mut limits = gl.lock().await;
+                                if (assigned_gpu as usize) < limits.len() {
+                                    limits[assigned_gpu as usize].0 = limits[assigned_gpu as usize].0.saturating_sub(1);
+                                }
+                            }
                             drop(permit);
                             let _ = done.send((job_id, exit_code)).await;
                         });
@@ -232,23 +325,87 @@ fn assign_gpu(mut args: Vec<String>, gpu: u32) -> Vec<String> {
             i += 1;
         }
     }
-    // Add flags if not present
+    // Add -hwaccel_device after -hwaccel if present
     if !found_hwaccel_device {
-        // Insert -hwaccel_device after -hwaccel if present
         if let Some(pos) = args.iter().position(|a| a == "-hwaccel") {
             args.insert(pos + 2, gpu_str.clone());
             args.insert(pos + 2, "-hwaccel_device".to_string());
         }
     }
+    // Add -gpu after -c:v <encoder> — works for hevc_nvenc, h264_nvenc, etc.
     if !found_gpu {
-        // Insert -gpu before the encoder flag (-c:v)
         if let Some(pos) = args.iter().position(|a| a == "-c:v") {
-            args.insert(pos + 2, gpu_str.clone());
-            args.insert(pos + 2, "-gpu".to_string());
+            // Check if the encoder is GPU-based (nvenc)
+            if pos + 1 < args.len() && args[pos + 1].contains("nvenc") {
+                args.insert(pos + 2, gpu_str.clone());
+                args.insert(pos + 2, "-gpu".to_string());
+            }
         }
     }
-    info!("Assigned GPU {} for this job", gpu);
+    info!("Assigned GPU {}: -gpu={} -hwaccel_device={}", gpu, found_gpu || args.iter().any(|a| a == "-gpu"), found_hwaccel_device || args.iter().any(|a| a == "-hwaccel_device"));
     args
+}
+
+/// Garbage collector — periodically cleans up orphaned job dirs, stale FUSE mounts, and large temp files.
+/// Runs every 60 seconds. Only cleans dirs with no running ffmpeg process.
+fn spawn_gc(tmp_dir: String) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let rrp_dir = PathBuf::from(&tmp_dir);
+            let entries = match std::fs::read_dir(&rrp_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            // Get list of active job IDs from running ffmpeg processes
+            let active_pids = std::process::Command::new("pgrep")
+                .args(["-f", "ffmpeg.*output.mkv"])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() { continue; }
+                let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+                // Skip non-job dirs (status files, etc.)
+                if dir_name.len() < 8 { continue; }
+
+                // Check if any ffmpeg is using this job dir
+                let job_active = std::process::Command::new("pgrep")
+                    .args(["-f", &format!("ffmpeg.*{}", dir_name)])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                if job_active { continue; }
+
+                // Orphaned dir — kill ffmpeg, unmount FUSE, remove files
+                // Step 1: Kill any ffmpeg for this job
+                let _ = std::process::Command::new("pkill")
+                    .args(["-9", "-f", &format!("ffmpeg.*{}", dir_name)])
+                    .output();
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                // Step 2: Unmount FUSE
+                let mnt = path.join("mnt");
+                if mnt.exists() {
+                    #[cfg(feature = "fuse")]
+                    crate::server::fuse_unmount(&mnt);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+                // Step 3: Delete files
+                match std::fs::remove_dir_all(&path) {
+                    Ok(_) => info!("GC: cleaned orphaned job dir {}", dir_name),
+                    Err(e) => warn!("GC: failed to remove {}: {}", dir_name, e),
+                }
+            }
+        }
+    });
 }
 
 async fn execute_job(

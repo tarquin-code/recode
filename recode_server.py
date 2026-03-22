@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.19.8"
+VERSION = "2.20.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -287,6 +287,8 @@ APP_DEFAULTS = {
     "ffmpeg_server_secret": "",
     # Disabled GPUs — list of GPU indices to exclude from encoding
     "disabled_gpus": [],
+    # Per-GPU max concurrent jobs — {"0": 1, "1": 2} — if not set, auto-calculated from VRAM
+    "gpu_max_jobs": {},
     # Remote Clients (reverse-connect) — GPU servers behind NAT connect to us
     "remote_client_enabled": False,
     "remote_client_port": 9879,
@@ -1334,24 +1336,17 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
                     if c == "-vf":
                         vf_idx = i
                         break
-                scale_filter = f"scale={tgt_w}:{tgt_h}:flags=lanczos"
-                # CUDA hwaccel can't do software scale — strip it so ffmpeg uses software decode + GPU encode
-                cuda_args_to_strip = {"-hwaccel", "cuda", "-hwaccel_output_format", "-hwaccel_device", "-extra_hw_frames", "16"}
-                cmd = [c for i, c in enumerate(cmd) if not (
-                    c in cuda_args_to_strip
-                    or (i > 0 and cmd[i-1] in ("-hwaccel", "-hwaccel_output_format", "-hwaccel_device", "-extra_hw_frames"))
-                )]
-                # Re-find vf index after stripping
-                vf_idx = None
-                for i, c in enumerate(cmd):
-                    if c == "-vf":
-                        vf_idx = i
-                        break
+                # Use scale_cuda for GPU-accelerated scaling when CUDA hwaccel is active
+                has_cuda_hwaccel = "-hwaccel" in cmd and "cuda" in cmd
+                if has_cuda_hwaccel:
+                    scale_filter = f"scale_cuda={tgt_w}:{tgt_h}:interp_algo=lanczos"
+                else:
+                    scale_filter = f"scale={tgt_w}:{tgt_h}:flags=lanczos"
                 if vf_idx is not None:
                     cmd[vf_idx + 1] = cmd[vf_idx + 1] + "," + scale_filter
                 else:
                     cmd += ["-vf", scale_filter]
-                log.info(f"Resize: CUDA hwaccel disabled for software scaling")
+                log.info(f"Resize: {'scale_cuda (GPU)' if has_cuda_hwaccel else 'software scale'}")
                 direction = "downscale" if (tgt_w * tgt_h) < (src_w * src_h) else "upscale"
                 log.info(f"Resize: {src_w}x{src_h} → {tgt_w}x{tgt_h} ({direction})")
 
@@ -1428,26 +1423,32 @@ class EncodeQueue:
         self._load_state()
 
     def get_gpu_loads(self) -> dict:
-        """Return active encode count per GPU (includes claimed but not yet started jobs)."""
+        """Return active encode count per LOCAL GPU (excludes remote jobs)."""
         gpu_loads = {i: 0 for i in range(GPU_COUNT)}
         for jid, j in self.active_jobs.items():
             if not j.paused:
                 gpu_id = self.job_gpus.get(jid, 0)
-                gpu_loads[gpu_id] = gpu_loads.get(gpu_id, 0) + 1
+                if gpu_id >= 0:  # skip remote jobs (gpu_id=-1)
+                    gpu_loads[gpu_id] = gpu_loads.get(gpu_id, 0) + 1
         return gpu_loads
 
     @staticmethod
     def gpu_max_encodes(gpu_idx: int, is_4k: bool = False) -> int:
-        """Max concurrent encodes for a GPU based on its VRAM.
-        4K HEVC decode+encode needs ~1.7GB but CUDA allocates extra buffers;
-        GPUs with <=2GB consistently OOM on 4K content."""
+        """Max concurrent encodes for a GPU.
+        Uses user-set per-GPU limit if configured, otherwise auto-calculates from VRAM.
+        4K jobs excluded from GPUs with <=2GB VRAM."""
         info = per_gpu_info.get(gpu_idx, {})
         mem_total_mb = info.get("mem_total", 0)
+        if is_4k and mem_total_mb > 0 and mem_total_mb <= 2048:
+            return 0  # 2GB GPUs OOM on 4K HEVC decode+encode
+        # Check user-set per-GPU limit
+        gpu_max_jobs = app_settings.get("gpu_max_jobs", {})
+        user_limit = gpu_max_jobs.get(str(gpu_idx))
+        if user_limit is not None:
+            return int(user_limit)
+        # Auto-calculate from VRAM: ~1.5 GB per encode, 1 per 2GB, minimum 1
         if mem_total_mb <= 0:
             return 1
-        if is_4k and mem_total_mb <= 2048:
-            return 0  # 2GB GPUs OOM on 4K HEVC decode+encode
-        # ~1.5 GB per encode — allow 1 per 2GB, minimum 1
         return max(1, mem_total_mb // 2048)
 
     def get_least_loaded_gpu(self, is_4k: bool = False):
@@ -1457,6 +1458,8 @@ class EncodeQueue:
         disabled = set(app_settings.get("disabled_gpus", []))
         available = {}
         for g, load in gpu_loads.items():
+            if g < 0:  # skip remote pseudo-GPU
+                continue
             if g in disabled:
                 continue
             max_enc = self.gpu_max_encodes(g, is_4k=is_4k)
@@ -1788,6 +1791,7 @@ stats_history = {
 per_gpu_stats: dict[int, dict[str, deque]] = {}
 per_gpu_info: dict[int, dict] = {}  # name, mem_used, mem_total per GPU (updated each poll)
 _seed_gpu_info()
+
 for _gi in range(max(GPU_COUNT, 1)):
     per_gpu_stats[_gi] = {
         "util": deque(maxlen=MAX_STATS_POINTS),
@@ -2042,15 +2046,13 @@ async def encode_worker(worker_id: int):
         disabled_gpus = set(app_settings.get("disabled_gpus", []))
         if GPU_COUNT > 0:
             gpu_loads = encode_queue.get_gpu_loads()
-            max_concurrent = app_settings.get("max_concurrent_encodes", 1)
-            local_count = sum(1 for j in encode_queue.active_jobs.values()
-                              if not j.paused and j.settings.get("_remote_server_idx", -1) < 0)
-            if local_count < max_concurrent:
-                for g in range(GPU_COUNT):
-                    if g in disabled_gpus:
-                        continue
-                    if gpu_loads.get(g, 0) < encode_queue.gpu_max_encodes(g):
-                        available_gpus.add(g)
+            # Build available_gpus purely from per-GPU VRAM capacity
+            # (don't gate on max_concurrent — that's enforced at assignment time)
+            for g in range(GPU_COUNT):
+                if g in disabled_gpus:
+                    continue
+                if gpu_loads.get(g, 0) < encode_queue.gpu_max_encodes(g):
+                    available_gpus.add(g)
 
         for jid in list(encode_queue.queue_order):
             if jid not in encode_queue.jobs or encode_queue.jobs[jid].status != JobStatus.QUEUED:
@@ -2116,11 +2118,11 @@ async def encode_worker(worker_id: int):
             # gpu_target values: "auto", "local", "remote", "gpu:N", "remote:N"
             encoder = next_job.settings.get("encoder", "gpu")
             gpu_target = next_job.settings.get("gpu_target", "auto")
-            # Backward compat: encoder="remote" → gpu with remote target
+            # Normalize: encoder="remote" → gpu with auto target (let scheduler decide)
             if encoder == "remote":
                 encoder = "gpu"
-                if not gpu_target.startswith("remote"):
-                    gpu_target = "remote"
+                if gpu_target == "auto" or not gpu_target.startswith("remote"):
+                    gpu_target = "auto"
             is_cpu_job = encoder == "cpu" or next_job.settings.get("use_cpu", False)
             _job_is_4k = next_job.file_info.get("width", 0) >= 3800
 
@@ -2238,25 +2240,15 @@ async def encode_worker(worker_id: int):
                         continue
                 # else stays cpu (gpu_id = -1)
             else:
-                # "auto" — fill local GPUs up to max_concurrent, plus remote servers independently
-                max_concurrent = app_settings.get("max_concurrent_encodes", 1)
-                local_count = sum(1 for j in encode_queue.active_jobs.values()
-                                  if not j.paused and j.settings.get("_remote_server_idx", -1) < 0)
-                remote_loads = {}
-                for j in encode_queue.active_jobs.values():
-                    ri = j.settings.get("_remote_server_idx", -1)
-                    if ri >= 0 and not j.paused:
-                        remote_loads[ri] = remote_loads.get(ri, 0) + 1
-
-                # Try local GPU first (if under concurrent limit)
-                if GPU_COUNT > 0 and local_count < max_concurrent:
+                # "auto" — per-GPU limits control local capacity, plus remote servers independently
+                if GPU_COUNT > 0:
                     candidate_gpu = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
                     if candidate_gpu is not None:
                         gpu_id = candidate_gpu
                     else:
-                        gpu_id = -1  # will try remote below
+                        gpu_id = -1  # all local GPUs at per-GPU capacity, try remote
                 else:
-                    gpu_id = -1  # at limit, try remote
+                    gpu_id = -1  # no local GPUs, try remote
 
                 # If no local slot, try remote (check listener connected GPUs first)
                 if gpu_id == -1 and not is_cpu_job:
@@ -2296,6 +2288,11 @@ async def encode_worker(worker_id: int):
                         continue
 
             next_job.settings["_remote_server_idx"] = remote_server_idx
+            if remote_server_idx < 0:
+                next_job.settings.pop("_remote_gpu_name", None)
+                next_job.settings.pop("_remote_encoder_type", None)
+                if next_job.settings.get("encoder") == "remote":
+                    next_job.settings["encoder"] = "gpu"
             # Store the detected encoder type for this remote server
             if remote_server_idx >= 0:
                 srv_list = app_settings.get("remote_gpu_servers", [])
@@ -2306,6 +2303,8 @@ async def encode_worker(worker_id: int):
             next_job.started_at = time.time()
             encode_queue.active_jobs[next_job.id] = next_job
             encode_queue.job_gpus[next_job.id] = gpu_id
+            _rname = next_job.settings.get("_remote_gpu_name", "")
+            log.info(f"[{next_job.id}] Dispatched: gpu_id={gpu_id} remote={_rname} target={gpu_target} 4K={_job_is_4k}")
             encode_queue._claiming = False
 
         job = next_job
@@ -2333,13 +2332,45 @@ async def encode_worker(worker_id: int):
 
         await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
-        def _finish_job(status=None, error=None):
-            """Helper to clean up a finished job."""
+        def _finish_job(status=None, error=None, no_retry=False):
+            """Helper to clean up a finished job. Failed jobs auto-retry up to 3 times."""
             if status:
                 job.status = status
             if error:
                 job.error = error
             job.finished_at = time.time()
+
+            # Auto-retry failed jobs (up to 3 attempts) unless no_retry is set
+            max_retries = 3
+            retries = job.settings.get("_retry_count", 0)
+            if job.status == JobStatus.FAILED and not no_retry and retries < max_retries:
+                log.info(f"[{job.id}] Auto-retry {retries + 1}/{max_retries}: {error}")
+                # Clean up current attempt
+                encode_queue.active_jobs.pop(job.id, None)
+                encode_queue.ffmpeg_procs.pop(job.id, None)
+                encode_queue.ffmpeg_logs.pop(job.id, None)
+                encode_queue._proc_ended_at.pop(job.id, None)
+                encode_queue.job_gpus.pop(job.id, None)
+                # Reset job for retry — clear remote assignment
+                job.status = JobStatus.QUEUED
+                job.started_at = None
+                job.finished_at = None
+                job.progress = None
+                job.error = None
+                job.settings["_retry_count"] = retries + 1
+                for k in ("_remote_server_idx", "_remote_gpu_name", "_remote_encoder_type"):
+                    job.settings.pop(k, None)
+                if job.settings.get("encoder") == "remote":
+                    job.settings["encoder"] = "gpu"
+                if job.settings.get("gpu_target", "auto") == "remote":
+                    job.settings["gpu_target"] = "auto"
+                # Put at front of queue
+                encode_queue.queue_order = [j for j in encode_queue.queue_order if j != job.id]
+                encode_queue.queue_order.insert(0, job.id)
+                encode_queue.running = len(encode_queue.active_jobs) > 0
+                encode_queue._save_state()
+                return
+
             encode_queue.queue_order = [j for j in encode_queue.queue_order if j != job.id]
             log_lines = encode_queue.ffmpeg_logs.get(job.id, [])[-100:]
             encode_queue.history.append({
@@ -2360,7 +2391,7 @@ async def encode_worker(worker_id: int):
         # Check source file still exists
         if not os.path.exists(info.get("path", "")):
             log.warning(f"[{job.id}] Source file no longer exists: {info.get('path')}")
-            _finish_job(JobStatus.FAILED, "Source file no longer exists")
+            _finish_job(JobStatus.FAILED, "Source file no longer exists", no_retry=True)
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
             continue
 
@@ -2384,7 +2415,7 @@ async def encode_worker(worker_id: int):
             err_msg = f"Permission denied: cannot write to {', '.join(perm_errors)}"
             log.error(f"[{job.id}] {err_msg}")
             encode_queue.ffmpeg_logs.setdefault(job.id, []).append(err_msg)
-            _finish_job(JobStatus.FAILED, "Permission denied")
+            _finish_job(JobStatus.FAILED, "Permission denied", no_retry=True)
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
             continue
 
@@ -4432,10 +4463,12 @@ async def start_remote_client_listener():
         except PermissionError:
             pass
         rrp_log = open(os.path.join(BASE_DIR, "rrp-client-listener.log"), "a")
+        listen_env = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}
         _remote_client_proc = await asyncio.create_subprocess_exec(
             rrp_bin, "listen", "--port", str(port), "--secret", secret,
             "--status-file", status_file,
             stdout=rrp_log, stderr=rrp_log,
+            env=listen_env,
         )
         log.info(f"Remote client listener started on port {port} (PID {_remote_client_proc.pid})")
     else:
@@ -4488,6 +4521,8 @@ async def start_remote_connectors():
             addr = f"{addr}:9879"
         status_file = os.path.join(rrp_tmp, f"connect-status-{i}.json")
         rrp_log = open(os.path.join(BASE_DIR, f"rrp-connect-{i}.log"), "a")
+        # Clear LD_LIBRARY_PATH to avoid PyInstaller bundle overriding system NVIDIA libs
+        connect_env = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}
         proc = await asyncio.create_subprocess_exec(
             rrp_bin, "connect",
             "--address", addr,
@@ -4498,6 +4533,7 @@ async def start_remote_connectors():
             "--max-jobs", str(max_jobs),
             "--status-file", status_file,
             stdout=rrp_log, stderr=rrp_log,
+            env=connect_env,
         )
         _remote_connect_procs[i] = proc
         log.info(f"Remote connector {i} started: {name} -> {addr} (PID {proc.pid})")
@@ -4845,7 +4881,7 @@ async def system_check():
         results["gpu"] = False
 
     # GPU info for settings UI
-    results["gpu_info"] = [{"index": g, "name": per_gpu_info.get(g, {}).get("name", f"GPU {g}"), "vram_mb": per_gpu_info.get(g, {}).get("mem_total", 0)} for g in range(GPU_COUNT)]
+    results["gpu_info"] = [{"index": g, "name": per_gpu_info.get(g, {}).get("name", f"GPU {g}"), "vram_mb": per_gpu_info.get(g, {}).get("mem_total", 0), "max_jobs": encode_queue.gpu_max_encodes(g)} for g in range(GPU_COUNT)]
 
     # Check hevc_nvenc and h264_nvenc
     try:
@@ -4863,13 +4899,21 @@ async def system_check():
 
     results["cpu_count"] = os.cpu_count() or 1
 
-    # Check if staged .new binaries exist (waiting for restart to swap)
+    # Check if staged .new files exist (waiting for restart to swap)
     restart_needed = False
+    # Check binaries
     for binary in ("recode-remote", "recode"):
         staged = os.path.join(BIN_DIR, f"{binary}.new")
         if os.path.isfile(staged):
             restart_needed = True
             break
+    # Check server code and static files
+    if not restart_needed:
+        for path in (os.path.join(BASE_DIR, "recode_server.py.new"),
+                     os.path.join(BASE_DIR, "static", "index.html.new")):
+            if os.path.isfile(path):
+                restart_needed = True
+                break
     results["restart_needed"] = restart_needed
 
     return results
@@ -5387,7 +5431,13 @@ async def queue_retry(job_id: str):
             fi = job.get("file_info", {})
             if not os.path.exists(fi.get("path", "")):
                 return {"ok": False, "error": "Source file no longer exists"}
-            s = {k: v for k, v in job.get("settings", {}).items() if k not in ("use_cpu", "_oom_retries")}
+            # Strip remote assignment and retry flags so auto-scheduling re-evaluates
+            _retry_strip = {"use_cpu", "_oom_retries", "_remote_server_idx", "_remote_gpu_name", "_remote_encoder_type"}
+            s = {k: v for k, v in job.get("settings", {}).items() if k not in _retry_strip}
+            if s.get("encoder") == "remote":
+                s["encoder"] = "gpu"
+            if s.get("gpu_target", "auto") == "remote":
+                s["gpu_target"] = "auto"
             new_job = encode_queue.add(fi, s)
             if not new_job:
                 return {"ok": False, "error": "File is already queued or encoding"}
@@ -6137,17 +6187,24 @@ async def update_settings(new_settings: dict):
     WEBHOOK_DEFAULTS.update(build_default_profile())
     save_settings(app_settings)
 
-    # If max_concurrent_encodes was lowered, requeue excess LOCAL active encodes
-    if "max_concurrent_encodes" in new_settings:
-        max_enc = app_settings.get("max_concurrent_encodes", 1)
+    # If gpu_max_jobs changed, requeue excess jobs on GPUs over their new limit
+    if "gpu_max_jobs" in new_settings or "disabled_gpus" in new_settings:
+        gpu_loads = encode_queue.get_gpu_loads()
+        disabled = set(app_settings.get("disabled_gpus", []))
+        to_requeue = []
         active = [(jid, j) for jid, j in encode_queue.active_jobs.items()
                   if not j.paused and j.settings.get("_remote_server_idx", -1) < 0]
-        if len(active) > max_enc:
-            # Requeue the most recently started jobs (keep the oldest running)
-            active.sort(key=lambda x: x[1].started_at or 0)
-            to_requeue = active[max_enc:]
+        active.sort(key=lambda x: x[1].started_at or 0)
+        # Find GPUs over their limit or disabled
+        for jid, j in reversed(active):
+            gid = encode_queue.job_gpus.get(jid, 0)
+            if gid in disabled or gpu_loads.get(gid, 0) > encode_queue.gpu_max_encodes(gid):
+                to_requeue.append((jid, j))
+                gpu_loads[gid] = gpu_loads.get(gid, 0) - 1
+        if to_requeue:
             for jid, job in to_requeue:
-                log.info(f"[{jid}] Re-queuing — concurrent limit reduced to {max_enc}")
+                gid = encode_queue.job_gpus.get(jid, 0)
+                log.info(f"[{jid}] Re-queuing — GPU {gid} over limit or disabled")
                 # Kill ffmpeg process
                 proc = encode_queue.ffmpeg_procs.get(jid)
                 if proc:

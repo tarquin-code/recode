@@ -208,24 +208,38 @@ select:disabled, input:disabled { opacity: 0.4; cursor: not-allowed; }
         </div>
     </div>
 
-    <!-- Step 6: GPU Server Mode -->
+    <!-- Step 6: GPU Config -->
     <div class="card" id="step6">
-        <h2><span class="num">6</span> GPU Server Mode</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Share this machine's GPU with other Recode instances over the network. Local encoding is not affected.</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div class="form-group" style="margin:0;">
-                <label>Port</label>
-                <input type="text" id="sFfmpegServerPort" value="9878" placeholder="9878">
+        <h2><span class="num">6</span> GPU Config</h2>
+
+        <!-- Remote Server -->
+        <div style="margin-bottom:16px;">
+            <h3 style="font-size:13px;color:var(--text);margin:0 0 4px 0;">Remote Server</h3>
+            <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">Accept connections from remote GPU servers. Give GPU servers your address and the secret below.</p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div class="form-group" style="margin:0;">
+                    <label>Port</label>
+                    <input type="text" id="sRemoteServerPort" value="9879" placeholder="9879">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label>Shared Secret</label>
+                    <input type="text" id="sRemoteServerSecret" placeholder="Secret for GPU servers to authenticate">
+                </div>
             </div>
-            <div class="form-group" style="margin:0;">
-                <label>Shared Secret</label>
-                <input type="text" id="sFfmpegServerSecret" placeholder="Auth secret for clients">
+            <div style="margin-top:6px;">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;"><input type="checkbox" id="sRemoteServerEnabled"> Enable Remote Server</label>
             </div>
         </div>
-        <div style="margin-top:8px;">
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;"><input type="checkbox" id="sFfmpegServerEnabled"> Enable GPU Server</label>
+
+        <!-- Remote Clients -->
+        <div style="border-top:1px solid var(--border);padding-top:12px;">
+            <h3 style="font-size:13px;color:var(--text);margin:0 0 4px 0;">Remote Clients</h3>
+            <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">Connect this machine's GPU to remote Recode clients. Add the client's address and shared secret.</p>
+            <div id="sRemoteClientsList"></div>
+            <button class="btn" style="font-size:11px;margin-top:6px;" onclick="addSetupRemoteClient()">+ Add Client</button>
         </div>
-        <div style="font-size:11px;color:var(--muted);margin-top:8px;">Other Recode instances can add this server as a remote GPU target using the IP address and the shared secret above.</div>
+
+        <div style="font-size:11px;color:var(--muted);margin-top:12px;">Remote Server: GPU servers connect to you. Remote Clients: this machine connects out as a GPU worker. You can use both or either.</div>
     </div>
 
     <div class="actions" style="justify-content:space-between;">
@@ -855,6 +869,27 @@ async function rebootServer(btn) {
     }, 3000);
 }
 
+// Remote Clients management for setup wizard
+window._setupRemoteClients = [];
+function addSetupRemoteClient() {
+    window._setupRemoteClients.push({name: '', address: '', secret: '', enabled: true, max_jobs: 1});
+    renderSetupRemoteClients();
+}
+function renderSetupRemoteClients() {
+    const container = document.getElementById('sRemoteClientsList');
+    if (!container) return;
+    const clients = window._setupRemoteClients;
+    if (!clients.length) { container.innerHTML = '<div style="font-size:11px;color:var(--muted);">No remote clients configured.</div>'; return; }
+    container.innerHTML = clients.map((c, i) => `<div style="display:grid;grid-template-columns:1fr 1.5fr 1fr 50px 30px;gap:6px;margin-bottom:4px;align-items:end;">
+        ${i === 0 ? '<label style="font-size:11px;">Name</label><label style="font-size:11px;">Address</label><label style="font-size:11px;">Secret</label><label style="font-size:11px;">Jobs</label><label></label>' : ''}
+        <input type="text" value="${c.name||''}" placeholder="Name" onchange="window._setupRemoteClients[${i}].name=this.value">
+        <input type="text" value="${c.address||''}" placeholder="client:9879" style="font-family:monospace;" onchange="window._setupRemoteClients[${i}].address=this.value">
+        <input type="text" value="${c.secret||''}" placeholder="Secret" onchange="window._setupRemoteClients[${i}].secret=this.value">
+        <input type="number" value="${c.max_jobs||1}" min="1" max="4" style="text-align:center;" onchange="window._setupRemoteClients[${i}].max_jobs=parseInt(this.value)||1">
+        <button class="btn" style="padding:4px 6px;font-size:10px;background:var(--error);color:#fff;" onclick="window._setupRemoteClients.splice(${i},1);renderSetupRemoteClients();">&times;</button>
+    </div>`).join('');
+}
+
 function showPage1() {
     document.getElementById('setupPage1').style.display = 'block';
     document.getElementById('setupPage2').style.display = 'none';
@@ -1017,9 +1052,10 @@ async function saveSetup() {
         discard_larger: document.getElementById('sDiscardLarger').checked,
         delete_original: document.getElementById('sDeleteOriginal').checked,
         english_only: document.getElementById('sEnglishOnly').checked,
-        ffmpeg_server_enabled: document.getElementById('sFfmpegServerEnabled').checked,
-        ffmpeg_server_port: parseInt(document.getElementById('sFfmpegServerPort').value) || 5050,
-        ffmpeg_server_secret: document.getElementById('sFfmpegServerSecret').value,
+        remote_client_enabled: document.getElementById('sRemoteServerEnabled').checked,
+        remote_client_port: parseInt(document.getElementById('sRemoteServerPort').value) || 9879,
+        remote_client_secret: document.getElementById('sRemoteServerSecret').value.trim(),
+        remote_gpu_servers: window._setupRemoteClients || [],
     };
 
     try {
