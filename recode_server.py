@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.20.1"
+VERSION = "2.20.2"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -2062,13 +2062,21 @@ async def encode_worker(worker_id: int):
             job_encoder = candidate.settings.get("encoder", "gpu")
             job_target = candidate.settings.get("gpu_target", "auto")
 
+            # Normalize: encoder=remote → gpu with auto target
+            if job_encoder == "remote":
+                job_encoder = "gpu"
+                candidate.settings["encoder"] = "gpu"
+            if job_target == "remote" and not candidate.settings.get("_remote_gpu_name"):
+                job_target = "auto"
+                candidate.settings["gpu_target"] = "auto"
+
             # CPU jobs can always run
             if job_encoder == "cpu" or candidate.settings.get("use_cpu", False):
                 next_job = candidate
                 break
 
-            # Remote-only jobs — check if remote GPUs are available
-            if job_encoder == "remote" or (job_target and job_target.startswith("remote")):
+            # Specific remote target — check if remote GPUs are available
+            if job_target and job_target.startswith("remote:"):
                 next_job = candidate
                 break
 
@@ -2366,7 +2374,7 @@ async def encode_worker(worker_id: int):
                     job.settings["gpu_target"] = "auto"
                 # Put at front of queue
                 encode_queue.queue_order = [j for j in encode_queue.queue_order if j != job.id]
-                encode_queue.queue_order.insert(0, job.id)
+                encode_queue.queue_order.append(job.id)  # back of queue
                 encode_queue.running = len(encode_queue.active_jobs) > 0
                 encode_queue._save_state()
                 return
@@ -2608,6 +2616,15 @@ async def encode_worker(worker_id: int):
                             result = json.load(_f)
                         exit_code = result.get("exit_code", 1)
                         error_msg = result.get("error", "")
+                        # Capture remote stderr into job log for GUI display
+                        stderr_text = result.get("stderr", "")
+                        if stderr_text:
+                            for line in stderr_text.strip().splitlines()[-20:]:
+                                encode_queue.ffmpeg_logs.setdefault(job.id, []).append(line)
+                        if exit_code != 0:
+                            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Remote exit code: {exit_code}")
+                            if error_msg:
+                                encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Error: {error_msg}")
                     except Exception as e:
                         exit_code = 1
                         error_msg = f"Failed to read result: {e}"

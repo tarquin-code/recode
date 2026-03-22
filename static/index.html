@@ -1860,7 +1860,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.20.1</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.20.2</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1894,7 +1894,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
-                            <div style="font-weight:600;color:var(--text-primary);">v2.20.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.20.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
                                 <li><strong>Per-GPU max jobs</strong> &mdash; configure max concurrent encodes per GPU in Settings. Replaces the global Concurrent Encodes setting with fine-grained per-GPU control</li>
                                 <li><strong>Redesigned GPU Config</strong> &mdash; Local GPUs section with power toggle, VRAM display, and max jobs dropdown per GPU. Remote Clients redesigned to match</li>
@@ -1909,6 +1909,9 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <li><strong>Restart safety</strong> &mdash; restart button warns when active encodes are running, requires confirmation click</li>
                                 <li><strong>Fast service restart</strong> &mdash; TimeoutStopSec=10, KillMode=mixed for quick service restarts instead of 90s default</li>
                                 <li><strong>scale_cuda</strong> &mdash; GPU-accelerated scaling when resizing with CUDA hwaccel (4K&rarr;1080p uses GPU for decode, scale, and encode)</li>
+                                <li><strong>Remote ffmpeg stderr</strong> &mdash; failed remote encodes now show the actual ffmpeg error in the job debug log</li>
+                                <li><strong>Failed retry to back of queue</strong> &mdash; auto-retried jobs go to the back of the queue instead of jumping to the front</li>
+                                <li><strong>Setup wizard simplified</strong> &mdash; removed GPU Config step from setup wizard (configure in Settings after setup)</li>
                             </ul>
                         </div>
                         <div>
