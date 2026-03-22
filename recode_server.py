@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.19.4"
+VERSION = "2.19.6"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -285,6 +285,8 @@ APP_DEFAULTS = {
     "ffmpeg_server_enabled": False,
     "ffmpeg_server_port": 9878,
     "ffmpeg_server_secret": "",
+    # Disabled GPUs — list of GPU indices to exclude from encoding
+    "disabled_gpus": [],
     # Remote Clients (reverse-connect) — GPU servers behind NAT connect to us
     "remote_client_enabled": False,
     "remote_client_port": 9879,
@@ -1450,10 +1452,13 @@ class EncodeQueue:
 
     def get_least_loaded_gpu(self, is_4k: bool = False):
         """Return the GPU index with the fewest active encodes, or None if all at max.
-        Skips GPUs that cannot handle the job's resolution."""
+        Skips GPUs that cannot handle the job's resolution and disabled GPUs."""
         gpu_loads = self.get_gpu_loads()
+        disabled = set(app_settings.get("disabled_gpus", []))
         available = {}
         for g, load in gpu_loads.items():
+            if g in disabled:
+                continue
             max_enc = self.gpu_max_encodes(g, is_4k=is_4k)
             if max_enc > 0 and load < max_enc:
                 available[g] = load
@@ -2034,6 +2039,7 @@ async def encode_worker(worker_id: int):
         # Smaller jobs can jump the queue if a capable GPU is idle.
         next_job = None
         available_gpus = set()
+        disabled_gpus = set(app_settings.get("disabled_gpus", []))
         if GPU_COUNT > 0:
             gpu_loads = encode_queue.get_gpu_loads()
             max_concurrent = app_settings.get("max_concurrent_encodes", 1)
@@ -2041,6 +2047,8 @@ async def encode_worker(worker_id: int):
                               if not j.paused and j.settings.get("_remote_server_idx", -1) < 0)
             if local_count < max_concurrent:
                 for g in range(GPU_COUNT):
+                    if g in disabled_gpus:
+                        continue
                     if gpu_loads.get(g, 0) < encode_queue.gpu_max_encodes(g):
                         available_gpus.add(g)
 
@@ -2076,14 +2084,27 @@ async def encode_worker(worker_id: int):
                 # No GPU can handle this job (e.g. 4K on 2GB GPU) — skip and try next
                 continue
 
-            # Auto mode — could go local or remote
+            # Auto mode — could go local or remote, but only if under limits
             if job_target == "auto":
-                next_job = candidate
-                break
+                # Check if remote GPUs are available
+                try:
+                    _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+                    with open(_lsf) as _f:
+                        _auto_gpus = [g for g in json.load(_f).get("gpus", []) if g.get("online")]
+                    if _auto_gpus:
+                        next_job = candidate
+                        break
+                except Exception:
+                    pass
+                # No remote either — only pick if under local concurrent limit
+                if available_gpus:
+                    next_job = candidate
+                    break
+                # At limit, no remote — skip, let it wait
+                continue
 
-            # No available GPUs at all — take first job and let it wait
-            next_job = candidate
-            break
+            # No available GPUs — skip, let it wait
+            continue
 
         if not next_job:
             encode_queue.running = len(encode_queue.active_jobs) > 0
@@ -4810,6 +4831,9 @@ async def system_check():
                     break
     except Exception:
         results["gpu"] = False
+
+    # GPU info for settings UI
+    results["gpu_info"] = [{"index": g, "name": per_gpu_info.get(g, {}).get("name", f"GPU {g}"), "vram_mb": per_gpu_info.get(g, {}).get("mem_total", 0)} for g in range(GPU_COUNT)]
 
     # Check hevc_nvenc and h264_nvenc
     try:

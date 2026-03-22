@@ -1860,7 +1860,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.19.4</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.19.6</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1894,8 +1894,9 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
-                            <div style="font-weight:600;color:var(--text-primary);">v2.19.4 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.19.6 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>GPU Config</strong> &mdash; enable/disable individual GPUs in Settings. Disabled GPUs shown as red dots in Target dropdowns</li>
                                 <li><strong>Multi-GPU remote servers</strong> &mdash; GPU servers with multiple GPUs use all of them via round-robin assignment</li>
                                 <li><strong>Smart queue scheduling</strong> &mdash; smaller jobs jump the queue when only a low-VRAM GPU is idle (e.g. 1080p jobs process on 2GB GPU while 4K jobs wait for capable GPUs)</li>
                                 <li><strong>Restart banner auto-detect</strong> &mdash; polls every 30 seconds, banner appears automatically when new binaries are staged without page refresh</li>
@@ -2270,7 +2271,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="settings-nav-item active" onclick="switchSettingsTab('profiles',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span> Profiles</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('schedule',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span> Schedule</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('watch',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span> Folder Watch</div>
-                <div class="settings-nav-item" onclick="switchSettingsTab('remote-gpu',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span> Remote GPU</div>
+                <div class="settings-nav-item" onclick="switchSettingsTab('remote-gpu',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span> GPU Config</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('general',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> General</div>
             </nav>
             <div class="settings-panel">
@@ -2484,10 +2485,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     </div>
                 </div>
 
-                <!-- Remote GPU -->
+                <!-- GPU Config -->
                 <div class="set-section" id="setTab-remote-gpu">
-                    <div class="set-section-title">Remote GPU</div>
-                    <div class="set-section-desc">Use remote GPU servers for hardware-accelerated encoding. GPU servers connect out to this machine &mdash; no port forwarding needed on the GPU side.</div>
+                    <div class="set-section-title">GPU Config</div>
+                    <div class="set-section-desc">Configure local and remote GPUs for hardware-accelerated encoding.</div>
+
+                    <!-- Active GPUs -->
+                    <div style="margin-bottom:20px;" id="gpuToggleSection">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Active GPUs</div>
+                        <div id="gpuToggleList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+                    </div>
 
                     <!-- Remote Server (listener — accept GPU server connections) -->
                     <div style="margin-top:16px;">
@@ -2748,8 +2755,16 @@ function handleMessage(msg) {
 function updateGpuServerStatus() {
     // Update Remote Server header indicator
     fetch('/api/remote-clients/status').then(r => r.json()).then(d => {
-        // Cache connected GPUs for getHwLabel()
+        // Cache connected GPUs and refresh all GPU target dropdowns
+        const prevCount = (state._connectedGpus || []).length;
         state._connectedGpus = (d.gpus || []).filter(g => g.online);
+        // Rebuild dropdowns if GPU count changed
+        if (state._connectedGpus.length !== prevCount) {
+            const gpuCnt = state.system?.gpu ? (state.system.gpu_count || 0) : 0;
+            document.querySelectorAll('#selGpuTarget, #setGpuTarget, [id^="lp-gputarget-"]').forEach(sel => {
+                populateGpuTargets(sel, gpuCnt);
+            });
+        }
         // Show server address for easy copying
         const addrEl = document.getElementById('remoteServerAddress');
         if (addrEl) {
@@ -5117,6 +5132,23 @@ async function openSettings() {
         document.getElementById('setTmpDir').value = s.tmp_dir || '/var/lib/plex/tmp';
         document.getElementById('setMaxConcurrent').value = s.max_concurrent_encodes || 1;
         document.getElementById('setAutoStartQueue').checked = !!s.auto_start_queue;
+        // GPU toggles
+        const gpuToggleList = document.getElementById('gpuToggleList');
+        const gpuInfo = s.gpu_info || state.system?.gpu_info || [];
+        const disabledGpus = s.disabled_gpus || [];
+        if (gpuInfo.length > 0) {
+            gpuToggleList.innerHTML = gpuInfo.map(g => {
+                const disabled = disabledGpus.includes(g.index);
+                const vram = g.vram_mb > 2048 ? (g.vram_mb/1024).toFixed(0) + 'GB' : g.vram_mb + 'MB';
+                return `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-tertiary);border:1px solid ${disabled ? 'var(--error)' : 'var(--border)'};border-radius:6px;${disabled ? 'opacity:0.5;' : ''}">
+                    <label class="set-chk" style="margin:0;"><input type="checkbox" ${disabled ? '' : 'checked'} onchange="toggleGpu(${g.index}, !this.checked)"></label>
+                    <span style="font-size:12px;"><strong>GPU ${g.index}</strong> ${escHtml(g.name)} (${vram})</span>
+                </div>`;
+            }).join('');
+            document.getElementById('gpuToggleSection').style.display = '';
+        } else {
+            document.getElementById('gpuToggleSection').style.display = 'none';
+        }
         const cpuThreads = s.cpu_threads || 0;
         const cpuSlider = document.getElementById('setCpuThreads');
         const cpuCount = (state.system && state.system.cpu_count) || 32;
@@ -5252,13 +5284,21 @@ async function loadAboutSystemInfo() {
 // GPU target population using cached connected GPU state
 function populateGpuTargets(sel, localGpuCount) {
     const savedVal = sel.value;
+    const disabled = state.settings?.disabled_gpus || [];
     sel.innerHTML = '<option value="auto">Auto (all local + remote)</option>';
     // Local GPUs
     if (localGpuCount > 0) {
         if (localGpuCount > 1) { const o = new Option('\u00A0\u00A0All Local GPUs', 'local'); sel.add(o); }
-        for (let i = 0; i < localGpuCount; i++) { const o = new Option('\u00A0\u00A0\u00A0\u00A0GPU ' + i, 'gpu:' + i); sel.add(o); }
+        for (let i = 0; i < localGpuCount; i++) {
+            const isDisabled = disabled.includes(i);
+            const dot = isDisabled ? '\uD83D\uDD34' : '\uD83D\uDFE2';
+            const label = '\u00A0\u00A0\u00A0\u00A0' + dot + ' GPU ' + i + (isDisabled ? ' (disabled)' : '');
+            const opt = new Option(label, 'gpu:' + i);
+            if (isDisabled) { opt.disabled = true; }
+            sel.add(opt);
+        }
     }
-    // Connected GPUs from Remote Server listener (cached by updateGpuServerStatus)
+    // Connected GPUs from Remote Server listener
     const connectedGpus = state._connectedGpus || [];
     if (connectedGpus.length > 0) {
         sel.add(new Option('\u00A0\u00A0All Remote GPUs', 'remote'));
@@ -5398,6 +5438,15 @@ async function checkConnectedGpus() {
     } catch(e) {
         statusEl.innerHTML = '<span style="font-size:11px;color:var(--error);">Error checking status</span>';
     }
+}
+
+function toggleGpu(index, disabled) {
+    let list = (state.settings?.disabled_gpus || []).slice();
+    if (disabled && !list.includes(index)) list.push(index);
+    if (!disabled) list = list.filter(i => i !== index);
+    // Save immediately
+    fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({disabled_gpus: list}) });
+    if (state.settings) state.settings.disabled_gpus = list;
 }
 
 function onSettingsPresetChange() {
@@ -5627,6 +5676,7 @@ async function saveSettings() {
         max_concurrent_encodes: parseInt(document.getElementById('setMaxConcurrent').value) || 1,
         auto_start_queue: document.getElementById('setAutoStartQueue').checked,
         cpu_threads: parseInt(document.getElementById('setCpuThreads').value) || 0,
+        disabled_gpus: state.settings?.disabled_gpus || [],
         // Schedule
         schedule_enabled: document.getElementById('setScheduleEnabled').checked,
         schedule_start: document.getElementById('setScheduleStart').value || '00:00',
