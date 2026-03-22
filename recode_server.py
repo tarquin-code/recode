@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.19.1"
+VERSION = "2.19.2"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -2537,7 +2537,6 @@ async def encode_worker(worker_id: int):
                     _finish_job(JobStatus.SKIPPED, "Encoded file is larger than original")
                 else:
                     try:
-                        import shutil
                         shutil.move(tmp_output, output_file)
                         log.info(f"[{job.id}] Remote encode complete: {output_file} ({new_bytes/1e9:.2f} GB)")
                         saved_pct = round((1 - new_bytes / orig_bytes) * 100) if orig_bytes > 0 else 0
