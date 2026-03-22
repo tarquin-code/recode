@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.19.2"
+VERSION = "2.19.4"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -2030,11 +2030,60 @@ async def encode_worker(worker_id: int):
             await asyncio.sleep(0.1 + worker_id * 0.05)
             continue
         encode_queue._claiming = True
+        # Find the next job that can run on an available GPU.
+        # Smaller jobs can jump the queue if a capable GPU is idle.
         next_job = None
+        available_gpus = set()
+        if GPU_COUNT > 0:
+            gpu_loads = encode_queue.get_gpu_loads()
+            max_concurrent = app_settings.get("max_concurrent_encodes", 1)
+            local_count = sum(1 for j in encode_queue.active_jobs.values()
+                              if not j.paused and j.settings.get("_remote_server_idx", -1) < 0)
+            if local_count < max_concurrent:
+                for g in range(GPU_COUNT):
+                    if gpu_loads.get(g, 0) < encode_queue.gpu_max_encodes(g):
+                        available_gpus.add(g)
+
         for jid in list(encode_queue.queue_order):
-            if jid in encode_queue.jobs and encode_queue.jobs[jid].status == JobStatus.QUEUED:
-                next_job = encode_queue.jobs[jid]
+            if jid not in encode_queue.jobs or encode_queue.jobs[jid].status != JobStatus.QUEUED:
+                continue
+            candidate = encode_queue.jobs[jid]
+            job_is_4k = candidate.file_info.get("width", 0) >= 3800
+            job_encoder = candidate.settings.get("encoder", "gpu")
+            job_target = candidate.settings.get("gpu_target", "auto")
+
+            # CPU jobs can always run
+            if job_encoder == "cpu" or candidate.settings.get("use_cpu", False):
+                next_job = candidate
                 break
+
+            # Remote-only jobs — check if remote GPUs are available
+            if job_encoder == "remote" or (job_target and job_target.startswith("remote")):
+                next_job = candidate
+                break
+
+            # Local GPU jobs — check if any available GPU can handle this job
+            if available_gpus:
+                # Check if at least one available GPU can handle this resolution
+                can_run = False
+                for g in available_gpus:
+                    if encode_queue.gpu_max_encodes(g, is_4k=job_is_4k) > 0:
+                        can_run = True
+                        break
+                if can_run:
+                    next_job = candidate
+                    break
+                # No GPU can handle this job (e.g. 4K on 2GB GPU) — skip and try next
+                continue
+
+            # Auto mode — could go local or remote
+            if job_target == "auto":
+                next_job = candidate
+                break
+
+            # No available GPUs at all — take first job and let it wait
+            next_job = candidate
+            break
 
         if not next_job:
             encode_queue.running = len(encode_queue.active_jobs) > 0

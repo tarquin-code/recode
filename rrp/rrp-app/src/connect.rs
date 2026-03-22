@@ -7,6 +7,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{info, warn, error};
 
+/// Detect number of GPUs via nvidia-smi
+fn detect_gpu_count() -> usize {
+    match std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=index", "--format=csv,noheader"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).lines().count()
+        }
+        _ => 1,
+    }
+}
+
 pub async fn run(
     address: String, secret: String, name: String,
     ffmpeg: String, tmp_dir: String, max_jobs: usize,
@@ -16,8 +29,10 @@ pub async fn run(
     let sem = Arc::new(tokio::sync::Semaphore::new(max_jobs));
     let active_jobs = Arc::new(AtomicU32::new(0));
     let encoders = crate::server::detect_encoders(&ffmpeg);
+    let gpu_count = detect_gpu_count();
+    let next_gpu = Arc::new(AtomicU32::new(0));
 
-    info!("GPU connector: {} encoders={:?} max_jobs={}", name, encoders, max_jobs);
+    info!("GPU connector: {} encoders={:?} max_jobs={} gpus={}", name, encoders, max_jobs, gpu_count);
 
     let status_path = PathBuf::from(&status_file);
     if let Some(parent) = status_path.parent() {
@@ -32,6 +47,7 @@ pub async fn run(
         match connect_and_run(
             &address, &secret, &name, &ffmpeg, &tmp_dir,
             &sem, &active_jobs, &encoders, max_jobs, &status_path,
+            gpu_count, &next_gpu,
         ).await {
             Ok(()) => {
                 info!("Disconnected from {}", address);
@@ -64,6 +80,7 @@ async fn connect_and_run(
     address: &str, secret: &str, name: &str, ffmpeg: &str, tmp_dir: &str,
     sem: &Arc<tokio::sync::Semaphore>, active_jobs: &Arc<AtomicU32>,
     encoders: &[String], max_jobs: usize, status_path: &PathBuf,
+    gpu_count: usize, next_gpu: &Arc<AtomicU32>,
 ) -> Result<()> {
     let mut stream = TcpStream::connect(address).await.context("connect failed")?;
     stream.set_nodelay(true)?;
@@ -134,10 +151,19 @@ async fn connect_and_run(
                         let active = active_jobs.clone();
                         let done = done_tx.clone();
                         let enc = encoders.to_vec();
+                        // Assign GPU round-robin
+                        let assigned_gpu = next_gpu.fetch_add(1, Ordering::Relaxed) % gpu_count as u32;
+                        let gc = gpu_count;
 
                         tokio::spawn(async move {
                             // Strip unsupported flags based on GPU capabilities
                             let ffmpeg_args = strip_unsupported_flags(ffmpeg_args, &enc);
+                            // Assign GPU: rewrite -gpu and -hwaccel_device flags
+                            let ffmpeg_args = if gc > 1 {
+                                assign_gpu(ffmpeg_args, assigned_gpu)
+                            } else {
+                                ffmpeg_args
+                            };
                             let exit_code = match execute_job(
                                 &addr, &sec, &ff, &td,
                                 &job_id, ffmpeg_args, input_files, &output_path, connect_port,
@@ -184,6 +210,44 @@ fn strip_unsupported_flags(mut args: Vec<String>, encoders: &[String]) -> Vec<St
         }
         args = filtered;
     }
+    args
+}
+
+/// Rewrite ffmpeg args to use a specific GPU index
+fn assign_gpu(mut args: Vec<String>, gpu: u32) -> Vec<String> {
+    let gpu_str = gpu.to_string();
+    let mut i = 0;
+    let mut found_gpu = false;
+    let mut found_hwaccel_device = false;
+    while i < args.len() {
+        if args[i] == "-gpu" && i + 1 < args.len() {
+            args[i + 1] = gpu_str.clone();
+            found_gpu = true;
+            i += 2;
+        } else if args[i] == "-hwaccel_device" && i + 1 < args.len() {
+            args[i + 1] = gpu_str.clone();
+            found_hwaccel_device = true;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    // Add flags if not present
+    if !found_hwaccel_device {
+        // Insert -hwaccel_device after -hwaccel if present
+        if let Some(pos) = args.iter().position(|a| a == "-hwaccel") {
+            args.insert(pos + 2, gpu_str.clone());
+            args.insert(pos + 2, "-hwaccel_device".to_string());
+        }
+    }
+    if !found_gpu {
+        // Insert -gpu before the encoder flag (-c:v)
+        if let Some(pos) = args.iter().position(|a| a == "-c:v") {
+            args.insert(pos + 2, gpu_str.clone());
+            args.insert(pos + 2, "-gpu".to_string());
+        }
+    }
+    info!("Assigned GPU {} for this job", gpu);
     args
 }
 
