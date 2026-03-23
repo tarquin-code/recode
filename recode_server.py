@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.21.0"
+VERSION = "2.21.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -116,6 +116,8 @@ def build_encode_tag(video_codec: str, info: dict, dv_mode: str = "skip", resize
 
     if dv_mode == "encode_dv" and (is_dv or hdr_type == "HDR10"):
         hdr_tag = "DV-P8"
+    elif dv_mode == "keep" and is_dv:
+        hdr_tag = "DV"
     elif dv_mode == "hdr10" and is_dv:
         hdr_tag = "HDR10"
     elif hdr_type == "HDR10":
@@ -264,7 +266,7 @@ APP_DEFAULTS = {
     "video_codec": "hevc",
     "skip_4k": False,
     "hdr_only": False,
-    "dv_mode": "skip",  # "skip", "hdr10" (convert to HDR10), "encode_dv" (DV→P8.4 + HDR10→DV P8.4)
+    "dv_mode": "skip",  # "skip", "keep" (preserve DV metadata), "hdr10" (convert to HDR10), "encode_dv" (DV→P8.4)
     "discard_larger": False,
     "delete_original": False,
     "tmp_dir": "/var/lib/plex/tmp",
@@ -1086,32 +1088,41 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
 
     # Hardware acceleration for GPU only
     dovi_p5 = info.get("dovi_profile") == 5
-    # Check if libplacebo is available
-    _has_libplacebo = False
-    try:
-        _lp_check = subprocess.run([FFMPEG, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=5)
-        _has_libplacebo = "libplacebo" in _lp_check.stdout
-    except Exception:
-        pass
 
     is_remote = settings.get("_remote_server_idx", -1) >= 0
     remote_encoder_type = settings.get("_remote_encoder_type", "nvenc")
     is_videotoolbox = is_remote and remote_encoder_type == "videotoolbox"
+
+    # Get target server's Vulkan capability from reported capabilities
+    _target_has_vulkan = _has_libplacebo  # local default
+    if is_remote:
+        remote_gpu_name = settings.get("_remote_gpu_name", "")
+        try:
+            _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+            with open(_lsf) as _f:
+                for _rg in json.load(_f).get("gpus", []):
+                    if _rg.get("name") == remote_gpu_name:
+                        for _rc in _rg.get("gpu_capabilities", []):
+                            if "vulkan_libplacebo" in _rc:
+                                _target_has_vulkan = _rc["vulkan_libplacebo"]
+                                break
+                        break
+        except Exception:
+            pass
+
     if not use_cpu:
         pix_fmt = info.get("pix_fmt", "unknown")
         cuda_safe_fmts = ("yuv420p", "nv12", "p010le", "yuv420p10le")
         gpu_id = str(settings.get("gpu_id", 0))
+        if is_remote or gpu_id == "-1":
+            gpu_id = "0"  # remote assign_gpu rewrites device IDs
         if is_remote and is_videotoolbox:
             # VideoToolbox — no hwaccel flags needed (Apple handles decode internally)
             pass
-        elif is_remote:
-            # Remote NVENC GPU — add hwaccel without specifying device
-            if pix_fmt in cuda_safe_fmts:
-                cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16"]
-            # Skip Vulkan/libplacebo for remote — the server handles DV conversion locally
-        elif dovi_p5 and dv_mode != "skip" and _has_libplacebo:
-            # DV Profile 5 — use libplacebo (Vulkan) for IPTPQc2 → BT.2020+PQ color conversion
-            log.info(f"DV Profile 5 — using libplacebo (Vulkan) color conversion + GPU encode (GPU {gpu_id})")
+        elif dovi_p5 and dv_mode not in ("skip", "keep") and _target_has_vulkan:
+            # DV Profile 5 — Vulkan/libplacebo for color conversion + NVENC encode
+            # No CUDA hwaccel — Vulkan and CUDA compete for GPU resources at 4K
+            log.info(f"DV Profile 5 — Vulkan libplacebo + GPU encode (GPU {gpu_id})")
             cmd += ["-init_hw_device", f"vulkan=vk:{gpu_id}", "-filter_hw_device", "vk"]
         elif pix_fmt in cuda_safe_fmts:
             cmd += ["-hwaccel", "cuda", "-hwaccel_device", gpu_id, "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16"]
@@ -1295,8 +1306,8 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
     # HDR / DV metadata (HEVC only — H.264 does not support HDR/DV)
     hdr_type = info.get("hdr_type", "SDR")
     if not is_h264:
-        if dovi_p5 and dv_mode != "skip":
-            if _has_libplacebo:
+        if dovi_p5 and dv_mode not in ("skip", "keep"):
+            if _target_has_vulkan:
                 # DV Profile 5: libplacebo converts IPTPQc2 → BT.2020+PQ (proper color conversion)
                 cmd += [
                     "-vf", "hwupload,libplacebo=colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084:format=yuv420p10le,hwdownload,format=yuv420p10le",
@@ -1308,6 +1319,14 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
             elif dv_mode == "hdr10":
                 # No libplacebo — strip DV NALs and set HDR10 metadata, let ffmpeg handle color
                 log.warning(f"DV P5 without libplacebo — stripping DV, color may not be accurate")
+                # Strip CUDA hwaccel — pix_fmt p010le conflicts with hwaccel_output_format cuda
+                cuda_flags = {"-hwaccel", "-hwaccel_output_format", "-hwaccel_device", "-extra_hw_frames"}
+                cmd = [c for i, c in enumerate(cmd) if not (
+                    c in cuda_flags
+                    or c == "cuda"
+                    or (c == "16" and i > 0 and cmd[i-1] == "-extra_hw_frames")
+                    or (i > 0 and cmd[i-1] in cuda_flags)
+                )]
                 cmd += [
                     "-pix_fmt", "p010le",
                     "-color_primaries", "bt2020", "-color_trc", "smpte2084",
@@ -1315,9 +1334,30 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
                     "-bsf:v", "filter_units=remove_types=62",
                 ]
             else:
-                # encode_dv mode requires libplacebo for proper P5→P8 conversion
-                raise RuntimeError("DV Profile 5 → P8.4 requires libplacebo (Vulkan). Rebuild ffmpeg with GPU support, or use 'Convert to HDR10' mode.")
-        elif hdr_type.startswith("Dolby Vision") and dv_mode != "skip":
+                # encode_dv mode requires libplacebo for proper P5→P8 conversion — fall back to HDR10
+                log.warning(f"DV P5 encode_dv without Vulkan — falling back to HDR10 conversion")
+                # Strip CUDA hwaccel — pix_fmt p010le conflicts with hwaccel_output_format cuda
+                cuda_flags = {"-hwaccel", "-hwaccel_output_format", "-hwaccel_device", "-extra_hw_frames"}
+                cmd = [c for i, c in enumerate(cmd) if not (
+                    c in cuda_flags
+                    or c == "cuda"
+                    or (c == "16" and i > 0 and cmd[i-1] == "-extra_hw_frames")
+                    or (i > 0 and cmd[i-1] in cuda_flags)
+                )]
+                cmd += [
+                    "-pix_fmt", "p010le",
+                    "-color_primaries", "bt2020", "-color_trc", "smpte2084",
+                    "-colorspace", "bt2020nc", "-color_range", "tv",
+                    "-bsf:v", "filter_units=remove_types=62",
+                ]
+        elif hdr_type.startswith("Dolby Vision") and dv_mode == "keep":
+            # Keep original DV: preserve RPU NAL units, just set color metadata
+            log.info(f"DV Keep Original — preserving DV metadata through re-encode")
+            cmd += [
+                "-color_primaries", "bt2020", "-color_trc", "smpte2084",
+                "-colorspace", "bt2020nc",
+            ]
+        elif hdr_type.startswith("Dolby Vision") and dv_mode not in ("skip", "keep"):
             # DV P7/P8: strip DV NALs during encode, preserve HDR10 color metadata
             # encode_dv mode adds RPU extraction/injection post-process
             cmd += [
@@ -1352,12 +1392,25 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
                     if c == "-vf":
                         vf_idx = i
                         break
-                # Use scale_cuda for GPU-accelerated scaling when CUDA hwaccel is active
+                # Strip CUDA hwaccel for resize — scale_cuda fails on some pixel formats
+                # Software decode + scale + GPU encode is reliable across all formats
                 has_cuda_hwaccel = "-hwaccel" in cmd and "cuda" in cmd
                 if has_cuda_hwaccel:
-                    scale_filter = f"scale_cuda={tgt_w}:{tgt_h}:interp_algo=lanczos"
-                else:
-                    scale_filter = f"scale={tgt_w}:{tgt_h}:flags=lanczos"
+                    cuda_flags = {"-hwaccel", "-hwaccel_output_format", "-hwaccel_device", "-extra_hw_frames"}
+                    cmd = [c for i, c in enumerate(cmd) if not (
+                        c in cuda_flags
+                        or c == "cuda"
+                        or (c == "16" and i > 0 and cmd[i-1] == "-extra_hw_frames")
+                        or (i > 0 and cmd[i-1] in cuda_flags)
+                    )]
+                    # Re-find vf index after stripping
+                    vf_idx = None
+                    for i, c in enumerate(cmd):
+                        if c == "-vf":
+                            vf_idx = i
+                            break
+                    log.info(f"Resize: stripped CUDA hwaccel for software scale")
+                scale_filter = f"scale={tgt_w}:{tgt_h}:flags=lanczos"
                 if vf_idx is not None:
                     cmd[vf_idx + 1] = cmd[vf_idx + 1] + "," + scale_filter
                 else:
@@ -1374,7 +1427,7 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
     # Progress output — remote jobs use -stats on stderr since pipe:1 doesn't tunnel
     # Progress output — remote jobs use -stats on stderr since pipe:1 doesn't tunnel
     if is_remote:
-        cmd += ["-stats", "-loglevel", "error"]
+        cmd += ["-stats", "-loglevel", "warning"]
     else:
         cmd += ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
 
@@ -1467,9 +1520,9 @@ class EncodeQueue:
             return 1
         return max(1, mem_total_mb // 2048)
 
-    def get_least_loaded_gpu(self, is_4k: bool = False):
+    def get_least_loaded_gpu(self, is_4k: bool = False, is_hdr: bool = False, is_10bit: bool = False):
         """Return the GPU index with the fewest active encodes, or None if all at max.
-        Skips GPUs that cannot handle the job's resolution and disabled GPUs."""
+        Skips GPUs that cannot handle the job's resolution/HDR/10bit and disabled GPUs."""
         gpu_loads = self.get_gpu_loads()
         disabled = set(app_settings.get("disabled_gpus", []))
         available = {}
@@ -1477,6 +1530,8 @@ class EncodeQueue:
             if g < 0:  # skip remote pseudo-GPU
                 continue
             if g in disabled:
+                continue
+            if not gpu_can_handle(g, is_4k, is_hdr, is_10bit):
                 continue
             max_enc = self.gpu_max_encodes(g, is_4k=is_4k)
             if max_enc > 0 and load < max_enc:
@@ -1804,6 +1859,149 @@ def _seed_gpu_info():
     except Exception:
         pass
 
+# Vulkan/libplacebo test — run once at startup
+_has_libplacebo = False
+try:
+    _lp_test = subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "color=black:s=1920x1080:d=2:r=25",
+         "-frames:v", "50", "-init_hw_device", "vulkan",
+         "-vf", "hwupload,libplacebo=format=yuv420p10le,hwdownload,format=yuv420p10le",
+         "-c:v", "libx265", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=30
+    )
+    _has_libplacebo = _lp_test.returncode == 0
+except Exception:
+    pass
+if _has_libplacebo:
+    log.info("Vulkan/libplacebo: functional")
+else:
+    log.info("Vulkan/libplacebo: not available — DV P5 will use HDR10 fallback")
+
+def _get_vulkan_version():
+    import re, glob
+    # Check actual library file for version
+    for pattern in ["/usr/lib64/libvulkan.so.*.*", "/usr/lib/x86_64-linux-gnu/libvulkan.so.*.*", "/usr/lib/libvulkan.so.*.*"]:
+        for path in sorted(glob.glob(pattern)):
+            m = re.search(r'libvulkan\.so\.(\d+\.\d+\.\d+)', path)
+            if m:
+                return m.group(1)
+    # Fallback: check if library exists at all
+    for path in ["/usr/lib64/libvulkan.so.1", "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"]:
+        if os.path.exists(path):
+            real = os.path.realpath(path)
+            m = re.search(r'libvulkan\.so\.(\d+\.\d+\.\d+)', real)
+            if m:
+                return m.group(1)
+            return "1.0"
+    return None
+
+# GPU capability testing — run once at startup, cache results
+_gpu_capabilities: dict[int, dict] = {}  # gpu_index -> {"1080p_sdr": True, "1080p_hdr": True, "4k_sdr": True, "4k_hdr": False}
+
+def _test_gpu_capabilities():
+    """Test each local GPU for 1080p/4K SDR/HDR encoding capability."""
+    if GPU_COUNT <= 0:
+        return
+    disabled = set(app_settings.get("disabled_gpus", []))
+    tests = [
+        ("1080p_sdr",   "1920x1080", "yuv420p",    False),
+        ("1080p_10bit", "1920x1080", "yuv420p10le", False),
+        ("1080p_hdr",   "1920x1080", "yuv420p10le", True),
+        ("4k_sdr",      "3840x2160", "yuv420p",     False),
+        ("4k_10bit",    "3840x2160", "yuv420p10le", False),
+        ("4k_hdr",      "3840x2160", "yuv420p10le", True),
+    ]
+    tmp_dir = app_settings.get("tmp_dir", "/tmp/recode")
+    os.makedirs(tmp_dir, exist_ok=True)
+    for gpu in range(GPU_COUNT):
+        if gpu in disabled:
+            continue
+        caps = {}
+        for name, size, pix_fmt, hdr in tests:
+            # Step 1: Generate a test HEVC file
+            test_file = os.path.join(tmp_dir, f"_captest_{gpu}_{name}.mkv")
+            gen_cmd = [
+                FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", f"color=black:s={size}:d=2:r=25",
+                "-frames:v", "50", "-pix_fmt", pix_fmt,
+                "-c:v", "hevc_nvenc", "-gpu", str(gpu),
+            ]
+            if hdr:
+                gen_cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
+            gen_cmd.append(test_file)
+            # Step 2: Decode with CUDA hwaccel + re-encode (the real pipeline)
+            enc_cmd = [
+                FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+                "-hwaccel", "cuda", "-hwaccel_device", str(gpu), "-hwaccel_output_format", "cuda",
+                "-extra_hw_frames", "16",
+                "-i", test_file,
+                "-c:v", "hevc_nvenc", "-gpu", str(gpu),
+                "-rc", "vbr", "-cq", "28", "-preset", "p4",
+                "-multipass", "qres", "-spatial-aq", "1", "-aq-strength", "8",
+            ]
+            if hdr:
+                enc_cmd += ["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]
+            enc_cmd += ["-f", "null", "-"]
+            try:
+                # Generate test file
+                r1 = subprocess.run(gen_cmd, capture_output=True, timeout=30)
+                if r1.returncode != 0:
+                    caps[name] = False
+                    log.info(f"GPU {gpu} capability {name}: FAIL (generate)")
+                    continue
+                # Test full decode+encode pipeline
+                r2 = subprocess.run(enc_cmd, capture_output=True, timeout=60)
+                caps[name] = r2.returncode == 0
+            except Exception:
+                caps[name] = False
+            finally:
+                try: os.remove(test_file)
+                except Exception: pass
+            log.info(f"GPU {gpu} capability {name}: {'OK' if caps[name] else 'FAIL'}")
+        _gpu_capabilities[gpu] = caps
+    log.info(f"Local GPU capabilities: {_gpu_capabilities}")
+
+_test_gpu_capabilities()
+
+def gpu_can_handle(gpu_idx: int, is_4k: bool, is_hdr: bool, is_10bit: bool = False) -> bool:
+    """Check if a GPU can handle this job based on capability test results."""
+    caps = _gpu_capabilities.get(gpu_idx)
+    if not caps:
+        return True  # no test data — assume capable
+    if is_4k and is_hdr:
+        return caps.get("4k_hdr", False)
+    elif is_4k and is_10bit:
+        return caps.get("4k_10bit", False)
+    elif is_4k:
+        return caps.get("4k_sdr", True)
+    elif is_hdr:
+        return caps.get("1080p_hdr", True)
+    elif is_10bit:
+        return caps.get("1080p_10bit", False)
+    return caps.get("1080p_sdr", True)
+
+def remote_gpu_can_handle(gpu_info: dict, is_4k: bool, is_hdr: bool, is_10bit: bool = False) -> bool:
+    """Check if a remote GPU can handle this job based on reported capabilities."""
+    caps_list = gpu_info.get("gpu_capabilities", [])
+    if not caps_list:
+        return True  # no capability data — assume capable
+    # Aggregate: if ANY GPU on the server can handle it, it's ok
+    for caps in caps_list:
+        if is_4k and is_hdr:
+            if caps.get("4k_hdr", False): return True
+        elif is_4k and is_10bit:
+            if caps.get("4k_10bit", False): return True
+        elif is_4k:
+            if caps.get("4k_sdr", True): return True
+        elif is_hdr:
+            if caps.get("1080p_hdr", True): return True
+        elif is_10bit:
+            if caps.get("1080p_10bit", False): return True
+        else:
+            if caps.get("1080p_sdr", True): return True
+    return False
+
 MAX_STATS_POINTS = 120  # ~4 minutes at 2s intervals
 stats_history = {
     "cpu": deque(maxlen=MAX_STATS_POINTS),
@@ -2126,11 +2324,13 @@ async def encode_worker(worker_id: int):
                 break
 
             # Local GPU jobs — check if any available GPU can handle this job
+            job_is_hdr = candidate.file_info.get("is_hdr", False) or candidate.file_info.get("hdr_type", "SDR") != "SDR"
+            job_is_10bit = "10" in (candidate.file_info.get("pix_fmt", "") or "")
             if available_gpus:
-                # Check if at least one available GPU can handle this resolution
+                # Check if at least one available GPU can handle this resolution + HDR
                 can_run = False
                 for g in available_gpus:
-                    if encode_queue.gpu_max_encodes(g, is_4k=job_is_4k) > 0:
+                    if encode_queue.gpu_max_encodes(g, is_4k=job_is_4k) > 0 and gpu_can_handle(g, job_is_4k, job_is_hdr, job_is_10bit):
                         can_run = True
                         break
                 if can_run:
@@ -2144,7 +2344,7 @@ async def encode_worker(worker_id: int):
                 try:
                     _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
                     with open(_lsf) as _f:
-                        _auto_gpus = [g for g in json.load(_f).get("gpus", []) if g.get("online")]
+                        _auto_gpus = [g for g in json.load(_f).get("gpus", []) if g.get("online") and remote_gpu_can_handle(g, job_is_4k, job_is_hdr, job_is_10bit)]
                     if _auto_gpus:
                         next_job = candidate
                         break
@@ -2177,6 +2377,8 @@ async def encode_worker(worker_id: int):
                     gpu_target = "auto"
             is_cpu_job = encoder == "cpu" or next_job.settings.get("use_cpu", False)
             _job_is_4k = next_job.file_info.get("width", 0) >= 3800
+            _job_is_hdr = next_job.file_info.get("is_hdr", False) or next_job.file_info.get("hdr_type", "SDR") != "SDR"
+            _job_is_10bit = "10" in (next_job.file_info.get("pix_fmt", "") or "")
 
             gpu_id = -1  # -1 = no GPU (CPU encode)
             remote_server_idx = -1  # -1 = not remote
@@ -2189,17 +2391,29 @@ async def encode_worker(worker_id: int):
                 # Count active jobs on this GPU
                 active_on_gpu = sum(1 for j in encode_queue.active_jobs.values()
                     if j.settings.get("_remote_gpu_name") == remote_gpu_name)
-                # Get max_jobs for this GPU from listener status
+                # Get max_jobs and capabilities for this GPU from listener status
                 gpu_max = 1
+                _remote_info = {}
                 try:
                     _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
                     with open(_lsf) as _f:
                         for g in json.load(_f).get("gpus", []):
                             if g.get("name") == remote_gpu_name:
                                 gpu_max = g.get("max_jobs", 1)
+                                _remote_info = g
                                 break
                 except Exception:
                     pass
+                # Check capability
+                if _remote_info and not remote_gpu_can_handle(_remote_info, _job_is_4k, _job_is_hdr, _job_is_10bit):
+                    _cap_desc = f"{'4K' if _job_is_4k else '1080p'} {'HDR' if _job_is_hdr else 'SDR'}"
+                    _skip_msg = f"{remote_gpu_name} cannot handle {_cap_desc} (failed capability test)"
+                    log.warning(f"[{next_job.id}] {_skip_msg}")
+                    encode_queue.ffmpeg_logs.setdefault(next_job.id, []).append(_skip_msg)
+                    _finish_job(JobStatus.FAILED, _skip_msg, no_retry=True)
+                    encode_queue._claiming = False
+                    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                    continue
                 if active_on_gpu >= gpu_max:
                     encode_queue._claiming = False
                     await asyncio.sleep(2)
@@ -2220,7 +2434,8 @@ async def encode_worker(worker_id: int):
                     pass
                 # Use connected GPUs from listener
                 if _connected_gpus:
-                    enabled_idxs = list(range(len(_connected_gpus)))
+                    # Filter by capability — only send to servers that can handle this job
+                    enabled_idxs = [i for i in range(len(_connected_gpus)) if remote_gpu_can_handle(_connected_gpus[i], _job_is_4k, _job_is_hdr, _job_is_10bit)]
                     # Build a virtual servers list from connected GPUs for load balancing
                     servers = [{"max_jobs": g.get("max_jobs", 1), "_online": True, "enabled": True, "name": g.get("name", f"GPU {i}")} for i, g in enumerate(_connected_gpus)]
                 else:
@@ -2249,7 +2464,7 @@ async def encode_worker(worker_id: int):
                     # No remote servers configured — fall back to local GPU or CPU
                     log.warning(f"[{next_job.id}] No remote GPU servers configured, falling back to local")
                     if GPU_COUNT > 0:
-                        gpu_id = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
+                        gpu_id = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k, is_hdr=_job_is_hdr, is_10bit=_job_is_10bit)
                         if gpu_id is None:
                             encode_queue._claiming = False
                             await asyncio.sleep(2)
@@ -2260,6 +2475,15 @@ async def encode_worker(worker_id: int):
                 try:
                     wanted = int(gpu_target.split(":")[1])
                     gpu_loads = encode_queue.get_gpu_loads()
+                    if not gpu_can_handle(wanted, _job_is_4k, _job_is_hdr, _job_is_10bit):
+                        _cap_desc = f"{'4K' if _job_is_4k else '1080p'} {'HDR' if _job_is_hdr else 'SDR'}"
+                        _skip_msg = f"GPU {wanted} cannot handle {_cap_desc} (failed capability test)"
+                        log.warning(f"[{next_job.id}] {_skip_msg}")
+                        encode_queue.ffmpeg_logs.setdefault(next_job.id, []).append(_skip_msg)
+                        _finish_job(JobStatus.FAILED, _skip_msg, no_retry=True)
+                        encode_queue._claiming = False
+                        await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                        continue
                     if encode_queue.gpu_max_encodes(wanted, is_4k=_job_is_4k) > 0 and gpu_loads.get(wanted, 0) < encode_queue.gpu_max_encodes(wanted, is_4k=_job_is_4k):
                         gpu_id = wanted
                     else:
@@ -2285,7 +2509,7 @@ async def encode_worker(worker_id: int):
                         except (ValueError, TypeError):
                             pass
                     if gpu_id is None:
-                        gpu_id = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
+                        gpu_id = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k, is_hdr=_job_is_hdr, is_10bit=_job_is_10bit)
                     if gpu_id is None:
                         encode_queue._claiming = False
                         await asyncio.sleep(2)
@@ -2294,7 +2518,7 @@ async def encode_worker(worker_id: int):
             else:
                 # "auto" — per-GPU limits control local capacity, plus remote servers independently
                 if GPU_COUNT > 0:
-                    candidate_gpu = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k)
+                    candidate_gpu = encode_queue.get_least_loaded_gpu(is_4k=_job_is_4k, is_hdr=_job_is_hdr, is_10bit=_job_is_10bit)
                     if candidate_gpu is not None:
                         gpu_id = candidate_gpu
                     else:
@@ -2312,8 +2536,9 @@ async def encode_worker(worker_id: int):
                     except Exception:
                         pass
                     if _auto_connected:
-                        servers = [{"max_jobs": g.get("max_jobs", 1), "name": g.get("name", f"GPU {i}")} for i, g in enumerate(_auto_connected)]
-                        enabled_idxs = list(range(len(servers)))
+                        servers = [{"max_jobs": g.get("max_jobs", 1), "name": g.get("name", f"GPU {i}"), "gpu_capabilities": g.get("gpu_capabilities", [])} for i, g in enumerate(_auto_connected)]
+                        # Filter by capability — only send to servers that can handle this job
+                        enabled_idxs = [i for i in range(len(servers)) if remote_gpu_can_handle(_auto_connected[i], _job_is_4k, _job_is_hdr, _job_is_10bit)]
                     else:
                         servers = app_settings.get("remote_gpu_servers", [])
                         enabled_idxs = [i for i, s in enumerate(servers)
@@ -2475,7 +2700,7 @@ async def encode_worker(worker_id: int):
         skip_reason = None
         dv_mode = settings.get("dv_mode", "skip")
         if info.get("hdr_type", "").startswith("Dolby Vision") and dv_mode == "skip":
-            skip_reason = "Dolby Vision (set DV mode to 'Convert to HDR10' or 'Encode DV')"
+            skip_reason = "Dolby Vision (set DV mode to 'Keep Original', 'Convert to HDR10', or 'Encode DV')"
         elif settings.get("skip_4k") and (info.get("width", 0) >= 3840 or info.get("height", 0) >= 2160):
             skip_reason = "4K file (Skip 4K enabled)"
         elif settings.get("hdr_only") and info.get("hdr_type") == "SDR":
@@ -3735,6 +3960,8 @@ async def setup_status():
         "ffmpeg_path": ffmpeg_path if ffmpeg_found else "",
         "has_nvenc": has_nvenc,
         "has_libplacebo": has_libplacebo,
+        "vulkan_available": _has_libplacebo,  # actual functional test from startup
+        "vulkan_version": _get_vulkan_version(),
         "has_dovi_tool": os.path.isfile(_find_bin("dovi_tool")),
         "has_mkvmerge": os.path.isfile(_find_bin("mkvmerge")),
         "hostname": HOSTNAME,
@@ -4230,6 +4457,32 @@ async def install_tool(tool: str):
                 proc = await _run_sudo("reboot")
                 await proc.communicate()
                 return  # Server going down
+
+            elif tool == "vulkan":
+                _install_tasks[tool]["log"] += "Installing Vulkan runtime...\n"
+                # Detect package manager
+                for pkg_mgr, pkg_name in [("dnf", "vulkan-loader"), ("yum", "vulkan-loader"), ("apt-get", "libvulkan1"), ("zypper", "vulkan-loader"), ("pacman", "vulkan-loader")]:
+                    if shutil.which(pkg_mgr):
+                        _install_tasks[tool]["log"] += f"Using {pkg_mgr} to install {pkg_name}...\n"
+                        if pkg_mgr == "apt-get":
+                            proc = await asyncio.create_subprocess_exec("apt-get", "update", "-qq", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                            await proc.communicate()
+                        install_cmd = [pkg_mgr, "install", "-y", pkg_name]
+                        if pkg_mgr == "pacman":
+                            install_cmd = ["pacman", "-S", "--noconfirm", pkg_name]
+                        proc = await asyncio.create_subprocess_exec(*install_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        stdout, stderr = await proc.communicate()
+                        _install_tasks[tool]["log"] += stdout.decode() + stderr.decode()
+                        if proc.returncode == 0:
+                            _install_tasks[tool]["log"] += f"\n{pkg_name} installed successfully.\n"
+                            _install_tasks[tool]["status"] = "done"
+                        else:
+                            _install_tasks[tool]["log"] += f"\nInstallation failed (exit {proc.returncode}).\n"
+                            _install_tasks[tool]["status"] = "error"
+                        return
+                _install_tasks[tool]["log"] += "No supported package manager found.\n"
+                _install_tasks[tool]["status"] = "error"
+                return
 
             elif tool == "restart-service":
                 _install_tasks[tool]["log"] += "Restarting Recode service...\n"
@@ -4930,6 +5183,9 @@ async def system_check():
         results["ffmpeg_libplacebo"] = "libplacebo" in _lp.stdout
     except Exception:
         results["ffmpeg_libplacebo"] = False
+    # Vulkan check
+    results["vulkan_available"] = _has_libplacebo
+    results["vulkan_version"] = _get_vulkan_version()
 
     # Check GPU
     try:
@@ -4951,7 +5207,7 @@ async def system_check():
         results["gpu"] = False
 
     # GPU info for settings UI
-    results["gpu_info"] = [{"index": g, "name": per_gpu_info.get(g, {}).get("name", f"GPU {g}"), "vram_mb": per_gpu_info.get(g, {}).get("mem_total", 0), "max_jobs": encode_queue.gpu_max_encodes(g)} for g in range(GPU_COUNT)]
+    results["gpu_info"] = [{"index": g, "name": per_gpu_info.get(g, {}).get("name", f"GPU {g}"), "vram_mb": per_gpu_info.get(g, {}).get("mem_total", 0), "max_jobs": encode_queue.gpu_max_encodes(g), "capabilities": _gpu_capabilities.get(g, {})} for g in range(GPU_COUNT)]
 
     # Check hevc_nvenc and h264_nvenc
     try:

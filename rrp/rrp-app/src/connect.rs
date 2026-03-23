@@ -81,6 +81,7 @@ pub async fn run(
     let mut gpu_max_jobs_vec: Vec<usize> = vec![1];
     let sem = Arc::new(tokio::sync::Semaphore::new(max_jobs));
     let gpu_limits: Arc<Mutex<Vec<(u32, u32)>>> = Arc::new(Mutex::new(vec![(0, 1)]));
+    let mut gpu_capabilities: Vec<serde_json::Value> = Vec::new();
 
     loop {
         // Re-detect GPUs and encoders on each connection attempt (driver may become ready after boot)
@@ -107,6 +108,13 @@ pub async fn run(
             *lim = gpu_max_jobs_vec.iter().map(|&m| (0u32, m as u32)).collect();
             drop(lim);
             info!("GPU connector: {} encoders={:?} max_jobs={} gpus={} per_gpu={:?}", name, encoders, effective, gpu_count, gpu_max_jobs_vec);
+            // Run GPU capability tests once (when GPU count changes)
+            let has_nvenc = encoders.iter().any(|e| e.contains("nvenc"));
+            if has_nvenc && gpu_capabilities.is_empty() {
+                info!("Running GPU capability tests...");
+                gpu_capabilities = crate::server::detect_gpu_capabilities(&ffmpeg, gpu_count);
+                info!("GPU capabilities: {:?}", gpu_capabilities);
+            }
         }
         let effective_max: usize = gpu_max_jobs_vec.iter().sum::<usize>().max(max_jobs.min(1));
 
@@ -115,7 +123,7 @@ pub async fn run(
         match connect_and_run(
             &address, &secret, &name, &ffmpeg, &tmp_dir,
             &sem, &active_jobs, &encoders, effective_max, &status_path,
-            gpu_count, &gpu_limits, &active_job_ids,
+            gpu_count, &gpu_limits, &active_job_ids, &gpu_capabilities,
         ).await {
             Ok(()) => {
                 info!("Disconnected from {}", address);
@@ -150,6 +158,7 @@ async fn connect_and_run(
     encoders: &[String], max_jobs: usize, status_path: &PathBuf,
     gpu_count: usize, gpu_limits: &Arc<Mutex<Vec<(u32, u32)>>>,
     active_job_ids: &Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    gpu_capabilities: &[serde_json::Value],
 ) -> Result<()> {
     let mut stream = TcpStream::connect(address).await.context("connect failed")?;
     stream.set_nodelay(true)?;
@@ -168,6 +177,7 @@ async fn connect_and_run(
         arch: std::env::consts::ARCH.into(),
         max_jobs,
         has_fuse: cfg!(feature = "fuse"),
+        gpu_capabilities: serde_json::to_string(gpu_capabilities).unwrap_or_default(),
     }).await?;
     tx.flush().await?;
 
@@ -257,14 +267,14 @@ async fn connect_and_run(
                             } else {
                                 ffmpeg_args
                             };
-                            let exit_code = match execute_job(
+                            let (exit_code, stderr) = match execute_job(
                                 &addr, &sec, &ff, &td,
                                 &job_id, ffmpeg_args, input_files, &output_path, connect_port,
                             ).await {
-                                Ok(ec) => ec,
+                                Ok((ec, se)) => (ec, se),
                                 Err(e) => {
                                     error!("Job {} failed: {}", job_id, e);
-                                    1
+                                    (1, format!("{}", e))
                                 }
                             };
                             active.fetch_sub(1, Ordering::Relaxed);
@@ -277,12 +287,6 @@ async fn connect_and_run(
                                     limits[assigned_gpu as usize].0 = limits[assigned_gpu as usize].0.saturating_sub(1);
                                 }
                             }
-                            // Read stderr from job dir
-                            let stderr = std::fs::read_to_string(
-                                PathBuf::from(&td).join(&job_id).join("ffmpeg_stderr.log")
-                            ).unwrap_or_default();
-                            // Truncate to last 2000 chars
-                            let stderr = if stderr.len() > 2000 { stderr[stderr.len()-2000..].to_string() } else { stderr };
                             drop(permit);
                             let _ = done.send((job_id, exit_code, stderr)).await;
                         });
@@ -418,7 +422,7 @@ async fn execute_job(
     address: &str, secret: &str, ffmpeg: &str, tmp_dir: &str,
     job_id: &str, ffmpeg_args: Vec<String>, input_files: Vec<FileInfo>,
     output_path: &str, connect_port: u16,
-) -> Result<i32> {
+) -> Result<(i32, String)> {
     // Connect data channel to the client
     let host = address.split(':').next().unwrap_or(address);
     let data_addr = format!("{}:{}", host, connect_port);
@@ -455,5 +459,10 @@ async fn execute_job(
         1
     };
 
-    Ok(exit_code)
+    // Read stderr BEFORE CleanupGuard drops and deletes the dir
+    let stderr_path = job_dir.join("ffmpeg_stderr.log");
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    let stderr = if stderr.len() > 2000 { stderr[stderr.len()-2000..].to_string() } else { stderr };
+
+    Ok((exit_code, stderr))
 }
