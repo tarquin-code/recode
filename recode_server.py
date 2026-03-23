@@ -2993,12 +2993,6 @@ async def encode_worker(worker_id: int):
                 _dovi_profile = info.get("dovi_profile")
                 _is_dv = info.get("hdr_type", "").startswith("Dolby Vision")
                 _needs_dv_inject = _is_dv and _dv_mode == "encode_dv"
-                _needs_dv_upgrade = (
-                    _dv_mode == "encode_dv"
-                    and not _is_dv
-                    and info.get("is_hdr", False)
-                    and info.get("hdr_type", "") == "HDR10"
-                )
                 if _needs_dv_inject:
                     _is_p5 = _dovi_profile == 5
                     _dv_label = f"DV P{_dovi_profile}→P8.4"
@@ -3086,6 +3080,143 @@ async def encode_worker(worker_id: int):
                     except Exception as e:
                         log.error(f"[{job.id}] {_dv_label} failed: {e}")
                         encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"DV conversion failed: {e}")
+                        for f in dovi_cleanup:
+                            if os.path.exists(f):
+                                os.remove(f)
+                        if os.path.exists(tmp_output):
+                            os.remove(tmp_output)
+                        _finish_job(JobStatus.FAILED, f"{_dv_label} failed")
+                        await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                        continue
+                    finally:
+                        for f in dovi_cleanup:
+                            if os.path.exists(f):
+                                os.remove(f)
+
+                # HDR10 → DV P8.4 upgrade for remote jobs (generate RPU from HDR10 metadata)
+                if (
+                    _dv_mode == "encode_dv"
+                    and not _is_dv
+                    and info.get("is_hdr", False)
+                    and info.get("hdr_type", "") == "HDR10"
+                    and os.path.exists(tmp_output)
+                ):
+                    _dv_label = "HDR10→DV P8.4"
+                    log.info(f"[{job.id}] {_dv_label} — generating DV RPU from HDR10 metadata (remote post-process)")
+                    encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (remote post-process) ===")
+                    encode_queue.ffmpeg_logs.get(job.id, []).append("Probing encoded file for frame count...")
+                    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                    tmp_dir = app_settings.get("tmp_dir", "/var/lib/plex/tmp")
+                    gen_json = os.path.join(tmp_dir, f"{job.id}_dv_gen.json")
+                    rpu_bin = os.path.join(tmp_dir, f"{job.id}_rpu.bin")
+                    encoded_hevc = os.path.join(tmp_dir, f"{job.id}_encoded.hevc")
+                    injected_hevc = os.path.join(tmp_dir, f"{job.id}_injected.hevc")
+                    remuxed_mkv = os.path.join(tmp_dir, f"{job.id}_dv.mkv")
+                    dovi_cleanup = [gen_json, rpu_bin, encoded_hevc, injected_hevc, remuxed_mkv]
+                    try:
+                        # Get frame count
+                        p = await asyncio.create_subprocess_exec(
+                            FFPROBE, "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=nb_frames,r_frame_rate,duration",
+                            "-of", "csv=p=0", tmp_output,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        probe_out, _ = await p.communicate()
+                        probe_parts = probe_out.decode().strip().split(",")
+                        frame_rate_str = probe_parts[0] if probe_parts else "24000/1001"
+                        frame_count = 0
+                        if len(probe_parts) > 1 and probe_parts[1].strip().isdigit():
+                            frame_count = int(probe_parts[1])
+                        if frame_count == 0:
+                            try:
+                                frn, frd = frame_rate_str.split("/")
+                                fps = float(frn) / float(frd)
+                            except Exception:
+                                fps = 23.976
+                            dur = 0
+                            if len(probe_parts) > 2:
+                                try: dur = float(probe_parts[2])
+                                except Exception: pass
+                            if dur <= 0:
+                                dur = info.get("duration_secs", 0)
+                            frame_count = int(dur * fps) or 1000
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"Frame count: {frame_count}")
+
+                        # Step 1: Generate RPU from HDR10 metadata
+                        hdr_meta = info.get("hdr10_metadata", {})
+                        min_lum_nits = hdr_meta.get("min_lum", 0.005)
+                        min_lum_u16 = int(round(min_lum_nits * 10000))
+                        gen_config = {
+                            "cm_version": "V40",
+                            "length": frame_count,
+                            "level6": {
+                                "max_display_mastering_luminance": int(hdr_meta.get("max_lum", 1000)),
+                                "min_display_mastering_luminance": min_lum_u16,
+                                "max_content_light_level": int(hdr_meta.get("max_cll", 1000)),
+                                "max_frame_average_light_level": int(hdr_meta.get("max_fall", 400)),
+                            },
+                        }
+                        with open(gen_json, "w") as f:
+                            json.dump(gen_config, f, indent=2)
+                        log.info(f"[{job.id}] {_dv_label} step 1/4: generating RPU")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"DV step 1/4: generating RPU ({frame_count} frames)...")
+                        p = await asyncio.create_subprocess_exec(
+                            DOVI_TOOL, "generate", "-j", gen_json, "-o", rpu_bin, "--profile", "8.4",
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        _, stderr_out = await p.communicate()
+                        if p.returncode != 0 or not os.path.exists(rpu_bin) or os.path.getsize(rpu_bin) == 0:
+                            raise RuntimeError(f"RPU generation failed: {stderr_out.decode(errors='replace')[-200:]}")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU generated ({human_size(os.path.getsize(rpu_bin))})")
+
+                        # Step 2: Extract HEVC bitstream
+                        log.info(f"[{job.id}] {_dv_label} step 2/4: extracting HEVC bitstream")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 2/4: extracting HEVC bitstream...")
+                        p = await asyncio.create_subprocess_exec(
+                            FFMPEG, "-y", "-i", tmp_output, "-c:v", "copy", "-an", "-sn",
+                            "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", encoded_hevc,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        _, stderr_out = await p.communicate()
+                        if p.returncode != 0:
+                            raise RuntimeError(f"HEVC extract failed: {stderr_out.decode(errors='replace')[-200:]}")
+
+                        # Step 3: Inject RPU
+                        log.info(f"[{job.id}] {_dv_label} step 3/4: injecting RPU")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 3/4: injecting RPU...")
+                        p = await asyncio.create_subprocess_exec(
+                            DOVI_TOOL, "inject-rpu", "-i", encoded_hevc, "--rpu-in", rpu_bin, "-o", injected_hevc,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        _, stderr_out = await p.communicate()
+                        if p.returncode != 0:
+                            raise RuntimeError(f"RPU inject failed: {stderr_out.decode(errors='replace')[-200:]}")
+                        for f in [encoded_hevc, rpu_bin, gen_json]:
+                            if os.path.exists(f):
+                                os.remove(f)
+
+                        # Step 4: Mux with mkvmerge
+                        log.info(f"[{job.id}] {_dv_label} step 4/4: muxing with mkvmerge")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 4/4: muxing with mkvmerge...")
+                        mkvmerge_bin = _find_bin("mkvmerge") if os.path.isfile(_find_bin("mkvmerge")) else None
+                        if mkvmerge_bin:
+                            p = await asyncio.create_subprocess_exec(
+                                mkvmerge_bin, "-o", remuxed_mkv,
+                                injected_hevc, "-D", tmp_output,
+                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                            stdout_out, stderr_out = await p.communicate()
+                            if p.returncode > 1:
+                                raise RuntimeError(f"mkvmerge failed (exit {p.returncode}): {stderr_out.decode(errors='replace')[-200:]}")
+                        else:
+                            raise RuntimeError("mkvmerge not found — required for DV muxing")
+
+                        if os.path.exists(injected_hevc):
+                            os.remove(injected_hevc)
+                        patch_dvvc_compat_id(remuxed_mkv, 4)
+                        os.remove(tmp_output)
+                        shutil.move(remuxed_mkv, tmp_output)
+                        log.info(f"[{job.id}] {_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"{_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
+
+                    except Exception as e:
+                        log.error(f"[{job.id}] {_dv_label} failed: {e}")
+                        encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"DV upgrade failed: {e}")
                         for f in dovi_cleanup:
                             if os.path.exists(f):
                                 os.remove(f)
