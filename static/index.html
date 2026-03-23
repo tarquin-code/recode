@@ -1006,7 +1006,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li><strong>HDR10 &amp; HLG</strong> &mdash; Passthrough and metadata preservation</li>
                     <li><strong>Dolby Vision</strong> &mdash; DV Profile 5, 7, 8 with P8.4 conversion</li>
                     <li><strong>DV P5 Conversion</strong> &mdash; Convert DV P5 to P8.4 using libplacebo + Vulkan</li>
-                    <li><strong>HDR to DV Upgrade</strong> &mdash; Convert HDR10 to Dolby Vision P8.4</li>
+                    <li><strong>HDR to DV Upgrade</strong> &mdash; Convert HDR10 to DV P8.4</li>
                 </ul>
 
                 <h4>Audio</h4>
@@ -1331,15 +1331,19 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <div style="display:grid;gap:8px;">
                         <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--text-muted);">
                             <div style="font-weight:600;">Skip (default)</div>
-                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">DV files are not encoded. They remain untouched in the queue.</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">DV files are not encoded &mdash; immediately sent to the skipped list.</div>
+                        </div>
+                        <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--purple);">
+                            <div style="font-weight:600;">Keep Original</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Re-encodes video while preserving DV metadata through the encode. No DV stripping or conversion. DV P5 runs at ~1.2x speed (CUDA decode without output_format cuda due to DOVI config incompatibility).</div>
                         </div>
                         <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--warning);">
                             <div style="font-weight:600;">Convert to HDR10</div>
-                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Strips DV metadata, keeps the HDR10 base layer. Reduces complexity, widest compatibility.</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Strips DV metadata, keeps the HDR10 base layer. Widest compatibility. DV P5 uses Vulkan/libplacebo for proper color conversion when available.</div>
                         </div>
                         <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--success);">
                             <div style="font-weight:600;">Convert to DV P8.4</div>
-                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Re-encodes video and converts DV metadata to Profile 8.4. Also upgrades HDR10 content to DV P8.4.</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Re-encodes video and converts DV metadata to Profile 8.4 via 4-step RPU pipeline. DV P5 uses Vulkan/libplacebo for color conversion. Also upgrades HDR10 content to DV P8.4. Works on both local and remote GPUs.</div>
                         </div>
                     </div>
                 </div>
@@ -1862,7 +1866,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.1</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.2</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1895,6 +1899,22 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.21.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>GPU thread limit</strong> &mdash; NVENC encodes now use <code>-threads 8</code> instead of defaulting to all CPU cores, reducing CPU waste from 1400% to ~30% per encode</li>
+                                <li><strong>DV P5 CUDA fix</strong> &mdash; DV Profile 5 files with any dv_mode (skip/keep/hdr10/encode_dv) now correctly skip <code>-hwaccel_output_format cuda</code> to avoid auto_scale filter crash</li>
+                                <li><strong>Remote DV P8.4 post-processing</strong> &mdash; RPU injection (extract/inject/mux) now runs after remote GPU encodes, fixing DV P5&rarr;P8.4 outputting as HDR10 on remote servers</li>
+                                <li><strong>DV skip handling</strong> &mdash; DV files with dv_mode=skip are now immediately skipped and sent to the skipped list instead of waiting indefinitely for a GPU</li>
+                                <li><strong>Vulkan software renderer detection</strong> &mdash; startup check now detects if Vulkan is using llvmpipe (CPU) instead of the GPU and logs a warning with the fix</li>
+                                <li><strong>Mesa dependencies</strong> &mdash; installer now includes mesa-dri-drivers, mesa-libEGL, mesa-libgbm, mesa-libGL, and libXext required for NVIDIA Vulkan ICD on headless servers</li>
+                                <li><strong>Queue controls always visible</strong> &mdash; Start/Stop queue buttons now show even when the queue is empty</li>
+                                <li><strong>Cancel All button</strong> &mdash; bulk cancel all active encodes from the encoding list without stopping the queue</li>
+                                <li><strong>Done list source/target badges</strong> &mdash; history items now show the same Source &rarr; Target badge layout as the queue (codec, resolution, HDR type, size)</li>
+                                <li><strong>DV badge fix</strong> &mdash; DV P8.4 target badges now use the correct purple DV color and shortened label</li>
+                                <li><strong>Test mode RPU limit</strong> &mdash; RPU extraction in test mode now limited to 5 minutes instead of reading the entire source file</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.21.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -2303,6 +2323,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="settings-nav-item" onclick="switchLogTab('ffmpeg',this)">ffmpeg</div>
                 <div class="settings-nav-item" onclick="switchLogTab('listener',this)">Listener</div>
                 <div class="settings-nav-item" onclick="switchLogTab('connectors',this)">Connectors</div>
+                <div class="settings-nav-item" onclick="switchLogTab('gc',this)">GC &amp; Queue</div>
             </nav>
             <div id="logScrollContainer" style="flex:1;overflow:auto;padding:16px;min-height:0;">
                 <div id="logTab-server" style="display:block;">
@@ -2313,6 +2334,9 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </div>
                 <div id="logTab-listener" style="display:none;">
                     <pre id="logListener" style="font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
+                </div>
+                <div id="logTab-gc" style="display:none;">
+                    <pre id="logGc" style="font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
                 </div>
                 <div id="logTab-connectors" style="display:none;">
                     <pre id="logConnectors" style="font-size:11px;font-family:var(--font-mono);color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.6;"></pre>
@@ -2588,9 +2612,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Remote Clients</div>
                         <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Connect this machine's GPU to remote Recode clients. Add the client's address and shared secret.</div>
                         <div id="remoteClientsList"></div>
-                        <div style="display:flex;gap:6px;margin-top:6px;">
+                        <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
                             <button class="btn btn-sm btn-primary" style="font-size:11px;" onclick="addRemoteClient()">+ Add Client</button>
                             <button class="btn btn-sm" style="font-size:11px;" onclick="checkRemoteClients()">Check Clients</button>
+                            <span id="checkClientsStatus" style="font-size:11px;color:var(--text-muted);"></span>
                         </div>
                     </div>
                 </div>
@@ -2888,20 +2913,18 @@ function updateGpuServerStatus() {
                     if (h265.length) badges.push('<span style="background:rgba(88,166,255,0.15);color:#58a6ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">H.265 ' + h265short.join(', ') + '</span>');
                     if (h264.length) badges.push('<span style="background:rgba(63,185,80,0.15);color:#3fb950;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">H.264 ' + h264short.join(', ') + '</span>');
                     const capsList = gpu.gpu_capabilities || [];
-                    const capDot = (ok) => `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ok ? 'var(--success)' : ok === false ? 'var(--error)' : 'var(--border)'};"></span>`;
                     let capsHtml = '';
                     if (capsList.length) {
-                        // Aggregate across all GPUs on this server
                         const agg = {s1: false, t1: false, h1: false, s4: false, t4: false, h4: false};
                         capsList.forEach(c => { if(c['1080p_sdr']) agg.s1=true; if(c['1080p_10bit']) agg.t1=true; if(c['1080p_hdr']) agg.h1=true; if(c['4k_sdr']) agg.s4=true; if(c['4k_10bit']) agg.t4=true; if(c['4k_hdr']) agg.h4=true; });
-                        capsHtml = `<span style="display:flex;gap:5px;font-size:10px;color:var(--text-muted);">
-                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.s1)} 1080p</span>
-                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.t1)} 10bit</span>
-                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.h1)} HDR</span>
-                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.s4)} 4K</span>
-                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.t4)} 4K 10bit</span>
-                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.h4)} 4K HDR</span>
+                        const cs = (ok, label) => `<span style="${ok ? 'color:#3fb950;' : 'color:#f85149;text-decoration:line-through;'}">${label}</span>`;
+                        const cStyle = 'font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,148,158,0.15);color:var(--text-muted);font-weight:600;';
+                        capsHtml = `<span style="display:flex;gap:4px;flex-wrap:wrap;">
+                            <span style="${cStyle}">${cs(agg.s1,'1080p')} ${cs(agg.t1,'10bit')} ${cs(agg.h1,'HDR')}</span>
+                            <span style="${cStyle}">${cs(agg.s4,'4K')} ${cs(agg.t4,'10bit')} ${cs(agg.h4,'HDR')}</span>
                         </span>`;
+                    } else {
+                        capsHtml = '<span style="font-size:10px;color:var(--warning);"><span style="display:inline-block;width:10px;height:10px;border:2px solid rgba(210,153,34,0.3);border-top:2px solid var(--warning);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:4px;"></span>Detecting capabilities...</span>';
                     }
                     html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;flex-wrap:wrap;">
                         <span style="color:var(--success);font-size:10px;">&#9679;</span>
@@ -3611,11 +3634,28 @@ function renderQueue() {
     const q = state.queue;
     const enabled = state.queueEnabled !== false;
     const hasActive = (state.active || []).length > 0;
-    if (!q.length && !hasActive) {
-        container.innerHTML = `<div class="empty-state"><div class="icon">${svgIcon('clipboard', 48)}</div><h3>Queue is empty</h3><p>Scan a directory and add files to the encode queue.</p></div>`;
-        badge.style.display = 'none'; return;
+    if (q.length || hasActive) {
+        badge.style.display = 'inline'; badge.textContent = q.length;
+    } else {
+        badge.style.display = 'none';
     }
-    badge.style.display = 'inline'; badge.textContent = q.length;
+
+    // Queue controls (always visible — even when empty, user needs Start/Stop)
+    const startBtn = enabled
+        ? `<button class="btn" onclick="queueControl('stop')" style="font-size:12px;background:#e74c3c;color:#fff;">Stop Queue</button>`
+        : `<button class="btn" onclick="queueControl('start')" style="font-size:12px;background:#27ae60;color:#fff;">Start Queue</button>`;
+    const stopNowBtn = hasActive
+        ? `<button class="btn btn-danger" onclick="queueControl('stop-now')" style="font-size:12px;">Stop &amp; Cancel</button>`
+        : '';
+    const statusText = !enabled ? '<span style="color:#e74c3c;font-weight:600;margin-right:8px;">Stopped</span>' :
+                        hasActive ? '<span style="color:#27ae60;font-weight:600;margin-right:8px;">Running</span>' :
+                        '<span style="color:#f39c12;font-weight:600;margin-right:8px;">Idle</span>';
+    const toolbar = `<div class="toolbar"><div class="toolbar-left">${statusText}<span class="info-text">${q.length} file${q.length!==1?'s':''} in queue</span></div><div class="toolbar-right">${startBtn} ${stopNowBtn} <button class="btn btn-danger" onclick="removeAllFromQueue()" style="font-size:12px;">Remove All</button></div></div>`;
+
+    if (!q.length && !hasActive) {
+        container.innerHTML = toolbar + `<div class="empty-state"><div class="icon">${svgIcon('clipboard', 48)}</div><h3>Queue is empty</h3><p>Scan a directory and add files to the encode queue.</p></div>`;
+        return;
+    }
 
     // Filter, sort, paginate
     let filtered = filterJobList(q, queueSearch, queueFilterCodec, queueFilterHdr, queueFilterTopN);
@@ -3629,18 +3669,7 @@ function renderQueue() {
     const endIdx = Math.min(startIdx + queuePageSize, totalFiles);
     const pageItems = filtered.slice(startIdx, endIdx);
 
-    // Queue controls
-    const startBtn = enabled
-        ? `<button class="btn" onclick="queueControl('stop')" style="font-size:12px;background:#e74c3c;color:#fff;">Stop Queue</button>`
-        : `<button class="btn" onclick="queueControl('start')" style="font-size:12px;background:#27ae60;color:#fff;">Start Queue</button>`;
-    const stopNowBtn = hasActive
-        ? `<button class="btn btn-danger" onclick="queueControl('stop-now')" style="font-size:12px;">Stop &amp; Cancel</button>`
-        : '';
-    const statusText = !enabled ? '<span style="color:#e74c3c;font-weight:600;margin-right:8px;">Stopped</span>' :
-                        hasActive ? '<span style="color:#27ae60;font-weight:600;margin-right:8px;">Running</span>' :
-                        '<span style="color:#f39c12;font-weight:600;margin-right:8px;">Waiting</span>';
-
-    let html = `<div class="toolbar"><div class="toolbar-left">${statusText}<span class="info-text">${q.length} file${q.length>1?'s':''} in queue</span></div><div class="toolbar-right">${startBtn} ${stopNowBtn} <button class="btn btn-danger" onclick="removeAllFromQueue()" style="font-size:12px;">Remove All</button></div></div>`;
+    let html = toolbar;
 
     // Filter bar + pager at top
     if (q.length > 0) {
@@ -3662,7 +3691,7 @@ function renderQueue() {
         const dm = job.settings.dv_mode || 'skip';
         const isDv = (f.hdr_type||'').startsWith('Dolby Vision');
         const origHdr = isDv ? (f.hdr_type||'').replace('Dolby Vision', 'DV') : (f.hdr_type||'SDR');
-        const targetHdr = (dm === 'encode_dv' && (isDv || f.hdr_type === 'HDR10')) ? 'Dolby Vision P8.4' : (dm === 'hdr10' && isDv) ? 'HDR10' : (f.hdr_type||'SDR');
+        const targetHdr = (dm === 'encode_dv' && (isDv || f.hdr_type === 'HDR10')) ? 'DV P8.4' : (dm === 'hdr10' && isDv) ? 'HDR10' : (f.hdr_type||'SDR');
         const origHdrBadge = isDv ? 'badge-dv' : f.hdr_type === 'SDR' ? 'badge-sdr' : 'badge-hdr';
         const targetHdrBadge = targetHdr.startsWith('DV') ? 'badge-dv' : targetHdr === 'SDR' ? 'badge-sdr' : 'badge-hdr';
 
@@ -3708,6 +3737,7 @@ function renderQueue() {
 async function removeFromQueue(jobId) { await fetch(`/api/queue/${jobId}`, {method: 'DELETE'}); }
 async function removeAllFromQueue() { await fetch('/api/queue', {method: 'DELETE'}); }
 async function queueControl(action) { await fetch(`/api/queue/${action}`, {method: 'POST'}); }
+async function cancelAllActive() { await fetch('/api/queue/cancel-active', {method: 'POST'}); }
 
 /* =========================================================================
    Encoding Progress
@@ -3764,7 +3794,9 @@ function renderEncoding() {
 
     if (hasJobs && jobsChanged) {
         lastRenderedJobIds = currentIds;
-        let jobsHtml = '';
+        let jobsHtml = activeJobs.length > 1
+            ? `<div class="toolbar" style="margin-bottom:8px;"><div class="toolbar-left"><span class="info-text">${activeJobs.length} active encodes</span></div><div class="toolbar-right"><button class="btn btn-danger" onclick="cancelAllActive()" style="font-size:12px;">Cancel All</button></div></div>`
+            : '';
         for (const job of activeJobs) {
             const f = job.file_info;
             const p = job.progress || {};
@@ -3862,7 +3894,7 @@ function renderEncoding() {
                                 const enc = getHwLabel(s);
                                 const dm = s.dv_mode || 'skip';
                                 const isDv = (f.hdr_type||'').startsWith('Dolby Vision');
-                                const tgtHdr = (dm === 'encode_dv' && (isDv || f.hdr_type === 'HDR10')) ? 'Dolby Vision P8.4' : (dm === 'hdr10' && isDv) ? 'HDR10' : f.hdr_type;
+                                const tgtHdr = (dm === 'encode_dv' && (isDv || f.hdr_type === 'HDR10')) ? 'DV P8.4' : (dm === 'hdr10' && isDv) ? 'HDR10' : f.hdr_type;
                                 const tgtRes = (s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label);
                                 return enc + ' · ' + vcLabel + ' · ' + tgtRes + ' · ' + tgtHdr;
                             })()}</div>
@@ -4408,7 +4440,7 @@ function renderHistory() {
     const statusLabel = activeStatus.charAt(0).toUpperCase() + activeStatus.slice(1);
     let html = `<div class="toolbar"><div class="toolbar-left" style="display:flex;gap:4px;align-items:center;"></div>
         <div class="toolbar-right" style="display:flex;gap:4px;">
-        ${(activeStatus === 'failed' || activeStatus === 'cancelled') ? `<button class="btn btn-sm" onclick="retryAllFailed()" title="Re-queue all ${activeStatus} jobs">${svgIcon('rotate-cw', 12)} Retry All</button>` : ''}
+        ${(activeStatus === 'failed' || activeStatus === 'cancelled') ? `<button class="btn btn-sm" onclick="retryAllByStatus('${activeStatus}')" title="Re-queue all ${activeStatus} jobs">${svgIcon('rotate-cw', 12)} Retry All</button>` : ''}
         <button class="btn btn-sm" onclick="clearHistory('${activeStatus}')">Clear ${statusLabel}</button></div></div>`;
 
     // Filter bar + pager at top
@@ -4479,14 +4511,37 @@ function renderHistory() {
         const hGpuId = s.gpu_id;
         const encoderLabel = getHwLabel(s) + ' ' + vcLabel;
 
-        let detailHtml = `<span class="badge badge-sm ${badgeClass}">${statusText}</span>`;
-        detailHtml += ` <span class="badge badge-sm badge-codec">${getHwLabel(s)}</span>`;
-        detailHtml += ` <span class="badge badge-sm badge-sdr">${presetLabel}</span>`;
-        detailHtml += ` <span class="badge badge-sm badge-audio">CQ${rcq}</span>`;
-        detailHtml += ` <span class="badge badge-sm badge-res">${rbit}</span>`;
-        detailHtml += ` <span class="badge badge-sm badge-codec">${rspd}</span>`;
+        const hDm = s.dv_mode || 'skip';
+        const hIsDv = (f.hdr_type||'').startsWith('Dolby Vision');
+        const hOrigHdr = hIsDv ? (f.hdr_type||'').replace('Dolby Vision', 'DV') : (f.hdr_type||'SDR');
+        const hTargetHdr = (hDm === 'encode_dv' && (hIsDv || f.hdr_type === 'HDR10')) ? 'DV P8.4' : (hDm === 'hdr10' && hIsDv) ? 'HDR10' : (f.hdr_type||'SDR');
+        const hOrigHdrBadge = hIsDv ? 'badge-dv' : f.hdr_type === 'SDR' ? 'badge-sdr' : 'badge-hdr';
+        const hTargetHdrBadge = hTargetHdr.startsWith('DV') ? 'badge-dv' : hTargetHdr === 'SDR' ? 'badge-sdr' : 'badge-hdr';
+        const hHwLabel = getHwLabel(s);
+        const hTgtRes = (s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label);
+        const hAcfg = s.audio_config || [];
+        const hIncCount = hAcfg.length > 0 ? hAcfg.filter(a => a.include).length : (f.audio_streams || []).length;
+        const hTotCount = (f.audio_streams || []).length;
+        const hAudioLabel = hAcfg.length > 0 ? `${hIncCount}/${hTotCount} audio` : `${hTotCount} audio`;
+
+        let detailHtml = `<span class="badge badge-sm ${badgeClass}">${statusText}</span> `;
+        // Source badges
+        detailHtml += `<span style="color:var(--text-muted);font-size:10px;">Source:</span> `;
+        detailHtml += `<span class="badge badge-sm badge-codec">${f.codec ? f.codec.toUpperCase() : '?'}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>`;
+        detailHtml += `<span class="badge badge-sm ${hOrigHdrBadge}">${hOrigHdr}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-size">${f.size_human}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-audio">${hAudioLabel}</span>`;
+        // Arrow + target badges
+        detailHtml += `<span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span> `;
+        detailHtml += `<span class="badge badge-sm badge-codec">${hHwLabel} ${vcLabel}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-res">${hTgtRes}</span>`;
+        detailHtml += `<span class="badge badge-sm ${hTargetHdrBadge}">${hTargetHdr}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-sdr">${presetLabel}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-audio">CQ${rcq}</span>`;
+        // Result info
         if (job.result && job.result.orig_size) {
-            detailHtml += ` <span>${job.result.orig_size} -> ${job.result.new_size}</span>`;
+            detailHtml += ` <span>${job.result.orig_size} → ${job.result.new_size}</span>`;
             if (job.status === 'done') {
                 const cls = (job.result.saved_pct || 0) >= 0 ? '' : 'negative';
                 detailHtml += ` <span class="hi-saved ${cls}">${job.result.saved_pct >= 0 ? 'Saved' : 'Grew'} ${Math.abs(job.result.saved_pct)}%</span>`;
@@ -4513,7 +4568,7 @@ function renderHistory() {
 
         const hdm = s.dv_mode || 'skip';
         const hisDv = (f.hdr_type||'').startsWith('Dolby Vision');
-        const hisTargetHdr = (hdm === 'encode_dv' && (hisDv || f.hdr_type === 'HDR10')) ? 'Dolby Vision P8.4' : (hdm === 'hdr10' && hisDv) ? 'HDR10' : (f.hdr_type||'SDR');
+        const hisTargetHdr = (hdm === 'encode_dv' && (hisDv || f.hdr_type === 'HDR10')) ? 'DV P8.4' : (hdm === 'hdr10' && hisDv) ? 'HDR10' : (f.hdr_type||'SDR');
         const hisEnc = getHwLabel(s);
         const hisTgtRes = (s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label || '?');
         const hisAudioCodec = s.audio_codec === 'copy' ? 'Passthrough' : (s.audio_codec || 'auto').replace('lib','');
@@ -4596,7 +4651,22 @@ function renderHistory() {
     }
 }
 
-async function clearHistory(status) { await fetch(`/api/queue/clear-history?filter=${status || historyFilter}`, {method: 'POST'}); }
+async function clearHistory(status) {
+    const btn = event?.target;
+    if (btn && !btn.dataset.confirmed) {
+        btn.dataset.confirmed = 'true';
+        btn.textContent = 'Are you sure?';
+        btn.style.background = 'var(--error)';
+        btn.style.color = '#fff';
+        setTimeout(() => { if (btn.dataset.confirmed) { delete btn.dataset.confirmed; btn.textContent = 'Clear ' + (status || 'All').charAt(0).toUpperCase() + (status || 'all').slice(1); btn.style.background = ''; btn.style.color = ''; } }, 3000);
+        return;
+    }
+    if (btn) { delete btn.dataset.confirmed; btn.textContent = 'Clearing...'; btn.disabled = true; }
+    await fetch(`/api/queue/clear-history?filter=${status || historyFilter}`, {method: 'POST'});
+    if (btn) { btn.textContent = 'Cleared'; btn.style.background = 'var(--success)'; setTimeout(() => { btn.style.background = ''; btn.style.color = ''; btn.disabled = false; }, 1500); }
+    // Refresh state
+    try { const r = await fetch('/api/queue/state'); state = {...state, ...(await r.json())}; renderHistory(); } catch(e) {}
+}
 
 async function retryJob(jobId) {
     const btn = document.getElementById(`retryBtn-${jobId}`);
@@ -4609,10 +4679,10 @@ async function retryJob(jobId) {
     }
 }
 
-async function retryAllFailed() {
-    const failed = (state.history || []).filter(j => j.status === 'failed' || j.status === 'cancelled');
-    if (!failed.length) return;
-    for (const job of failed) {
+async function retryAllByStatus(status) {
+    const jobs = (state.history || []).filter(j => j.status === status);
+    if (!jobs.length) return;
+    for (const job of jobs) {
         const btn = document.getElementById(`retryBtn-${job.id}`);
         if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; btn.textContent = 'Queued'; }
         const res = await fetch(`/api/queue/retry?job_id=${encodeURIComponent(job.id)}`, {method: 'POST'});
@@ -5245,14 +5315,11 @@ async function openSettings() {
                     `<option value="${n}" ${n === currentMax ? 'selected' : ''}>${n}</option>`
                 ).join('');
                 const caps = g.capabilities || {};
-                const capDot = (ok) => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ok ? 'var(--success)' : ok === false ? 'var(--error)' : 'var(--border)'};"></span>`;
-                const capHtml = Object.keys(caps).length > 0 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;">
-                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['1080p_sdr'])} 1080p</span>
-                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['1080p_10bit'])} 10bit</span>
-                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['1080p_hdr'])} HDR</span>
-                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['4k_sdr'])} 4K</span>
-                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['4k_10bit'])} 4K 10bit</span>
-                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['4k_hdr'])} 4K HDR</span>
+                const capSpan = (ok, label) => ok === undefined ? '' : `<span style="${ok ? 'color:#3fb950;' : 'color:#f85149;text-decoration:line-through;'}">${label}</span>`;
+                const capStyle = 'font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,148,158,0.15);color:var(--text-muted);font-weight:600;';
+                const capHtml = Object.keys(caps).length > 0 ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">
+                    <span style="${capStyle}">${capSpan(caps['1080p_sdr'], '1080p')} ${capSpan(caps['1080p_10bit'], '10bit')} ${capSpan(caps['1080p_hdr'], 'HDR')}</span>
+                    <span style="${capStyle}">${capSpan(caps['4k_sdr'], '4K')} ${capSpan(caps['4k_10bit'], '10bit')} ${capSpan(caps['4k_hdr'], 'HDR')}</span>
                 </div>` : '';
                 return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.4;' : ''}">
                     <button class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="toggleGpu(${g.index}, ${!disabled});loadSettings();">${svgIcon('power', 14)}</button>
@@ -5485,6 +5552,7 @@ function renderRemoteClients() {
 async function checkRemoteClients() {
     const clients = window._remoteClients || [];
     if (!clients.length) return;
+    const statusEl = document.getElementById('checkClientsStatus');
     // Show spinning indicator on each enabled client's power button
     clients.forEach((c, i) => {
         const el = document.getElementById('rc-status-' + i);
@@ -5494,29 +5562,78 @@ async function checkRemoteClients() {
             el.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top:2px solid #fff;border-radius:50%;animation:spin 0.8s linear infinite;"></span>';
         }
     });
+    if (statusEl) statusEl.textContent = 'Checking...';
     try {
-        const r = await fetch('/api/remote-gpu/status');
-        const data = await r.json();
-        for (const srv of (data.servers || [])) {
-            const el = document.getElementById('rc-status-' + srv.index);
-            if (!el) continue;
-            el.innerHTML = svgIcon('power', 14);
-            if (window._remoteClients[srv.index]?.enabled === false) {
-                el.style.background = 'var(--error)'; el.title = 'Disabled';
-            } else if (srv.online) {
-                el.style.background = 'var(--success)'; el.title = 'Connected to ' + (srv.address || '');
-                if (window._remoteClients[srv.index]) window._remoteClients[srv.index]._online = true;
-            } else {
-                el.style.background = 'var(--warning)'; el.title = srv.error || 'Not connected';
-                if (window._remoteClients[srv.index]) window._remoteClients[srv.index]._online = false;
+        // Poll until all enabled clients are connected or 30s timeout
+        const startTime = Date.now();
+        const timeout = 30000;
+        let allConnected = false;
+        while (!allConnected && (Date.now() - startTime) < timeout) {
+            await new Promise(r => setTimeout(r, 1500));
+            const r = await fetch('/api/remote-gpu/status');
+            const data = await r.json();
+            const serverMap = {};
+            for (const srv of (data.servers || [])) {
+                serverMap[srv.index] = srv;
             }
+            allConnected = true;
+            clients.forEach((c, i) => {
+                if (c.enabled === false) return;
+                const srv = serverMap[i];
+                if (!srv || !srv.online) {
+                    allConnected = false;
+                    const el = document.getElementById('rc-status-' + i);
+                    if (el && srv?.error) el.title = srv.error;
+                    // Show status next to Check Clients button
+                    if (statusEl && srv?.error && srv.error !== 'Not connected') {
+                        statusEl.textContent = (c.name || 'Client ' + i) + ': ' + srv.error;
+                    }
+                }
+            });
+            // Update icons as they connect
+            clients.forEach((c, i) => {
+                const el = document.getElementById('rc-status-' + i);
+                if (!el) return;
+                const srv = serverMap[i];
+                if (c.enabled === false) {
+                    el.innerHTML = svgIcon('power', 14);
+                    el.style.background = 'var(--error)'; el.title = 'Disabled';
+                } else if (srv && srv.online) {
+                    el.innerHTML = svgIcon('power', 14);
+                    el.style.background = 'var(--success)'; el.title = 'Connected to ' + (srv.address || '');
+                    c._online = true;
+                }
+            });
         }
-    } catch(e) {
-        // Restore icons on error
+        // Final update — set any still-not-connected to grey
+        const r2 = await fetch('/api/remote-gpu/status');
+        const data = await r2.json();
+        const serverMap = {};
+        for (const srv of (data.servers || [])) {
+            serverMap[srv.index] = srv;
+        }
         clients.forEach((c, i) => {
             const el = document.getElementById('rc-status-' + i);
-            if (el) el.innerHTML = svgIcon('power', 14);
+            if (!el) return;
+            el.innerHTML = svgIcon('power', 14);
+            const srv = serverMap[i];
+            if (c.enabled === false) {
+                el.style.background = 'var(--error)'; el.title = 'Disabled';
+            } else if (srv && srv.online) {
+                el.style.background = 'var(--success)'; el.title = 'Connected to ' + (srv.address || '');
+                c._online = true;
+            } else {
+                el.style.background = 'var(--border)'; el.title = srv?.error || 'Not connected';
+                c._online = false;
+            }
         });
+        if (statusEl) statusEl.textContent = '';
+    } catch(e) {
+        clients.forEach((c, i) => {
+            const el = document.getElementById('rc-status-' + i);
+            if (el) { el.innerHTML = svgIcon('power', 14); el.style.background = 'var(--border)'; }
+        });
+        if (statusEl) statusEl.textContent = '';
     }
 }
 function addRemoteClient() {
@@ -5859,8 +5976,8 @@ async function saveSettings() {
         const data = await res.json();
         if (data.ok) {
             applySettingsToSidebar(data.settings);
-            // Refresh server status and check remote client connections after save
-            setTimeout(() => { updateGpuServerStatus(); checkRemoteClients(); }, 2000);
+            // Refresh server status after save (don't re-check clients — connectors need time to reconnect)
+            setTimeout(() => { updateGpuServerStatus(); }, 2000);
             btn.textContent = 'Saved';
             btn.style.background = 'var(--success)';
             const unsaved = document.getElementById('settingsUnsaved');
@@ -6021,7 +6138,7 @@ function toggleLogAutoRefresh(on) {
 function switchLogTab(tab, el) {
     document.querySelectorAll('#logsModal .settings-nav-item').forEach(n => n.classList.remove('active'));
     if (el) el.classList.add('active');
-    ['server','ffmpeg','listener','connectors'].forEach(t => {
+    ['server','ffmpeg','listener','connectors','gc'].forEach(t => {
         document.getElementById('logTab-' + t).style.display = t === tab ? 'block' : 'none';
     });
 }
@@ -6074,6 +6191,9 @@ async function loadLogs() {
                 c.lines.map(l => _colorLog(l)).join('\n')
             ).join('\n');
         }
+        // GC & Queue log
+        const gcEl = document.getElementById('logGc');
+        gcEl.innerHTML = (data.gc || []).map(l => _colorLog(l)).join('\n') || '<span style="color:var(--text-muted);">No GC/queue logs</span>';
         if (_logAutoScroll && scrollBox) scrollBox.scrollTop = scrollBox.scrollHeight;
     } catch(e) {
         document.getElementById('logServer').textContent = 'Failed to load logs: ' + e;

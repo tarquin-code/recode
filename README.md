@@ -20,10 +20,12 @@
 ### HDR & Dolby Vision
 - **HDR10** — Passthrough and metadata preservation
 - **HLG** — Hybrid Log-Gamma support
-- **Dolby Vision** — DV Profile 5, 7, 8 support with P8.4 conversion
-- **DV P5 Conversion** — Convert DV P5 to P8.4 using libplacebo + Vulkan
+- **Dolby Vision** — DV Profile 5, 7, 8 support with skip, keep, HDR10, and P8.4 modes
+- **DV P5 → P8.4** — Vulkan/libplacebo color conversion (IPTPQc2 → BT.2020) + RPU injection
+- **DV Keep Original** — Re-encode while preserving DV metadata untouched
 - **HDR to DV Upgrade** — Convert HDR10 content to Dolby Vision P8.4
-- **dovi_tool Integration** — Automatic RPU extraction and injection
+- **dovi_tool Integration** — Automatic RPU extraction, conversion, and injection
+- **Remote DV Support** — DV P8.4 post-processing works on both local and remote GPU encodes
 
 ### Audio
 - **Codec Options** — Passthrough, Opus, AAC, AC3, EAC3
