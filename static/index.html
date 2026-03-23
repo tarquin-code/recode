@@ -998,7 +998,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li><strong>H.265 (HEVC) &amp; H.264</strong> &mdash; Configurable codec and quality</li>
                     <li><strong>Presets</strong> &mdash; Auto, Film, Animation, Grain, Custom with per-preset CQ/bitrate/speed</li>
                     <li><strong>Resolution Scaling</strong> &mdash; Downscale 4K to 1080p, 1440p, 720p, or keep original</li>
-                    <li><strong>Test Mode</strong> &mdash; Encode only the first 5 minutes for quick quality checks</li>
+                    <li><strong>Test Mode</strong> &mdash; Encode only the first 5 minutes for quick quality checks. Originals are never deleted in test mode even if "Delete original" is enabled</li>
                 </ul>
 
                 <h4>HDR &amp; Dolby Vision</h4>
@@ -1913,6 +1913,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <li><strong>Done list source/target badges</strong> &mdash; history items now show the same Source &rarr; Target badge layout as the queue (codec, resolution, HDR type, size)</li>
                                 <li><strong>DV badge fix</strong> &mdash; DV P8.4 target badges now use the correct purple DV color and shortened label</li>
                                 <li><strong>Test mode RPU limit</strong> &mdash; RPU extraction in test mode now limited to 5 minutes instead of reading the entire source file</li>
+                                <li><strong>Test mode delete protection</strong> &mdash; originals are never deleted in test mode even if "Delete original" is enabled</li>
                             </ul>
                         </div>
                         <div>

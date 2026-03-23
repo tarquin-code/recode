@@ -3111,13 +3111,17 @@ async def encode_worker(worker_id: int):
                         saved_pct = round((1 - new_bytes / orig_bytes) * 100) if orig_bytes > 0 else 0
                         action = "kept original"
                         if settings.get("delete_original", False):
-                            try:
-                                os.remove(info["path"])
-                                action = "deleted original"
-                                log.info(f"[{job.id}] Deleted original: {info['path']}")
-                            except Exception as e:
-                                action = "failed to delete original"
-                                log.warning(f"[{job.id}] Failed to delete original: {e}")
+                            if app_settings.get("test_mode"):
+                                log.info(f"[{job.id}] Test mode (5 min) — not deleting original")
+                                encode_queue.ffmpeg_logs.setdefault(job.id, []).append("Test mode (5 min) — not deleting original")
+                            else:
+                                try:
+                                    os.remove(info["path"])
+                                    action = "deleted original"
+                                    log.info(f"[{job.id}] Deleted original: {info['path']}")
+                                except Exception as e:
+                                    action = "failed to delete original"
+                                    log.warning(f"[{job.id}] Failed to delete original: {e}")
                         job.result = {
                             "output_path": output_file,
                             "orig_size": human_size(orig_bytes),
@@ -3931,13 +3935,17 @@ async def encode_worker(worker_id: int):
                 job.status = JobStatus.DONE
                 action = "kept original"
                 if settings.get("delete_original", False):
-                    try:
-                        os.remove(info["path"])
-                        action = "deleted original"
-                        log.info(f"[{job.id}] Deleted original: {info['path']}")
-                    except Exception as e:
-                        action = "failed to delete original"
-                        log.error(f"[{job.id}] Failed to delete original {info['path']}: {e}")
+                    if app_settings.get("test_mode"):
+                        log.info(f"[{job.id}] Test mode (5 min) — not deleting original")
+                        encode_queue.ffmpeg_logs.setdefault(job.id, []).append("Test mode (5 min) — not deleting original")
+                    else:
+                        try:
+                            os.remove(info["path"])
+                            action = "deleted original"
+                            log.info(f"[{job.id}] Deleted original: {info['path']}")
+                        except Exception as e:
+                            action = "failed to delete original"
+                            log.error(f"[{job.id}] Failed to delete original {info['path']}: {e}")
                 else:
                     log.info(f"[{job.id}] Kept original: {info['path']}")
 
