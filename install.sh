@@ -206,6 +206,8 @@ case "$PKG_MGR" in
         else
             $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils fuse3 vulkan-loader
         fi
+        # Vulkan/libplacebo needs mesa DRI + EGL for NVIDIA Vulkan ICD to work (even headless)
+        $PKG_INSTALL mesa-dri-drivers mesa-libEGL mesa-libgbm mesa-libGL libXext 2>/dev/null || true
         # mediainfo from EPEL — install separately so failure doesn't block
         $PKG_INSTALL mediainfo 2>/dev/null || warn "mediainfo not available — install via web UI"
         # mkvtoolnix is bundled in the package — no need to install from repos
@@ -217,6 +219,8 @@ case "$PKG_MGR" in
         else
             $PKG_INSTALL python3 python3-pip python3-venv mkvtoolnix mediainfo curl wget fuse3 libvulkan1
         fi
+        # Vulkan/libplacebo needs mesa + EGL for NVIDIA Vulkan ICD (even headless)
+        $PKG_INSTALL mesa-vulkan-drivers libegl1 libgbm1 libxext6 2>/dev/null || true
         ;;
     zypper)
         zypper refresh
@@ -225,6 +229,7 @@ case "$PKG_MGR" in
         else
             $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils mediainfo fuse3 vulkan-loader
         fi
+        $PKG_INSTALL Mesa-dri Mesa-libEGL1 Mesa-libgbm1 libXext6 2>/dev/null || true
         ;;
     pacman)
         if $HAS_BINARY; then
@@ -232,6 +237,7 @@ case "$PKG_MGR" in
         else
             $PKG_INSTALL python python-pip mkvtoolnix-cli mediainfo curl wget fuse3 vulkan-loader
         fi
+        $PKG_INSTALL mesa libxext 2>/dev/null || true
         ;;
 esac
 

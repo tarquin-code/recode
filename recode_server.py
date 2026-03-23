@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.21.1"
+VERSION = "2.21.2"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -1125,7 +1125,14 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
             log.info(f"DV Profile 5 — Vulkan libplacebo + GPU encode (GPU {gpu_id})")
             cmd += ["-init_hw_device", f"vulkan=vk:{gpu_id}", "-filter_hw_device", "vk"]
         elif pix_fmt in cuda_safe_fmts:
-            cmd += ["-hwaccel", "cuda", "-hwaccel_device", gpu_id, "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16"]
+            cmd += ["-hwaccel", "cuda", "-hwaccel_device", gpu_id, "-extra_hw_frames", "16"]
+            if not dovi_p5:
+                # Full CUDA pipeline — frames stay in GPU memory
+                cmd += ["-hwaccel_output_format", "cuda"]
+            else:
+                # DV P5: CUDA decode to system memory — DOVI config record in container
+                # causes auto_scale filter conflict with hwaccel_output_format cuda
+                log.info("DV P5: CUDA decode without output_format cuda (DOVI config incompatible)")
         else:
             log.info(f"Pixel format '{pix_fmt}' — using software decode + GPU encode to avoid color issues")
 
@@ -1302,6 +1309,9 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
         # Only add -gpu flag for local GPU encoding, not remote
         if not is_remote:
             cmd += ["-gpu", gpu_id]
+        # Limit CPU threads for GPU encodes — GPU does the heavy lifting,
+        # only need a few CPU threads for demux/mux/BSF pipeline
+        cmd += ["-threads", "8"]
 
     # HDR / DV metadata (HEVC only — H.264 does not support HDR/DV)
     hdr_type = info.get("hdr_type", "SDR")
@@ -1873,8 +1883,32 @@ try:
     _has_libplacebo = _lp_test.returncode == 0
 except Exception:
     pass
+_vulkan_is_software = False
 if _has_libplacebo:
-    log.info("Vulkan/libplacebo: functional")
+    # Check if Vulkan is using a real GPU or software fallback (llvmpipe)
+    # Use device index 0 to match how encode commands target specific GPUs
+    try:
+        _vk_probe = subprocess.run(
+            [FFMPEG, "-hide_banner", "-loglevel", "verbose",
+             "-init_hw_device", "vulkan=vk:0",
+             "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.01",
+             "-vf", "hwupload,libplacebo=format=yuv420p10le,hwdownload,format=yuv420p10le",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=15
+        )
+        _vk_out = _vk_probe.stderr or ""
+        import re as _re
+        _vk_dev = _re.search(r'Using device:\s*(.+)', _vk_out)
+        _vk_dev_name = _vk_dev.group(1).strip() if _vk_dev else ""
+        if "llvmpipe" in _vk_dev_name or "software" in _vk_dev_name.lower():
+            _vulkan_is_software = True
+            log.warning(f"Vulkan/libplacebo: using SOFTWARE renderer ({_vk_dev_name}) — install mesa-dri-drivers mesa-libEGL mesa-libgbm mesa-libGL libXext for GPU Vulkan")
+        elif _vk_dev_name:
+            log.info(f"Vulkan/libplacebo: functional — {_vk_dev_name}")
+        else:
+            log.info("Vulkan/libplacebo: functional")
+    except Exception:
+        log.info("Vulkan/libplacebo: functional")
 else:
     log.info("Vulkan/libplacebo: not available — DV P5 will use HDR10 fallback")
 
@@ -2313,6 +2347,13 @@ async def encode_worker(worker_id: int):
                 job_target = "auto"
                 candidate.settings["gpu_target"] = "auto"
 
+            # Pre-flight skip checks — don't wait for GPU to skip these
+            _dv_mode = candidate.settings.get("dv_mode", "skip")
+            _hdr_type = candidate.file_info.get("hdr_type", "")
+            if _hdr_type.startswith("Dolby Vision") and _dv_mode == "skip":
+                next_job = candidate
+                break
+
             # CPU jobs can always run
             if job_encoder == "cpu" or candidate.settings.get("use_cpu", False):
                 next_job = candidate
@@ -2336,25 +2377,41 @@ async def encode_worker(worker_id: int):
                 if can_run:
                     next_job = candidate
                     break
-                # No local GPU can handle this resolution — fall through to remote check
+                # No local GPU can handle this — fall through to remote check
 
-            # Auto mode — could go local or remote
+            # Auto mode — try remote GPUs
+            _skip_fname = candidate.file_info.get("filename", "?")[:35]
+            _skip_res = "4K" if job_is_4k else "1080p"
+            _skip_fmt = "HDR" if job_is_hdr else "10bit" if job_is_10bit else "SDR"
             if job_target == "auto":
                 # Check if remote GPUs are available
                 try:
                     _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
                     with open(_lsf) as _f:
-                        _auto_gpus = [g for g in json.load(_f).get("gpus", []) if g.get("online") and remote_gpu_can_handle(g, job_is_4k, job_is_hdr, job_is_10bit)]
+                        _all_remote = json.load(_f).get("gpus", [])
+                    # Check if any capable remote GPU has an available slot
+                    _remote_loads = {}
+                    for _aj in encode_queue.active_jobs.values():
+                        _rn = _aj.settings.get("_remote_gpu_name", "")
+                        if _rn and not _aj.paused:
+                            _remote_loads[_rn] = _remote_loads.get(_rn, 0) + 1
+                    _auto_gpus = [g for g in _all_remote
+                        if g.get("online")
+                        and remote_gpu_can_handle(g, job_is_4k, job_is_hdr, job_is_10bit)
+                        and _remote_loads.get(g.get("name", ""), 0) < g.get("max_jobs", 1)]
                     if _auto_gpus:
                         next_job = candidate
                         break
                 except Exception:
                     pass
-                # No remote either — only pick if under local concurrent limit
-                if available_gpus:
+                # No capable remote — check if any local GPU can handle it
+                if available_gpus and any(gpu_can_handle(g, job_is_4k, job_is_hdr, job_is_10bit) for g in available_gpus):
                     next_job = candidate
                     break
-                # At limit, no remote — skip, let it wait
+                # No GPU anywhere can handle this job right now — skip to next
+                if not hasattr(candidate, '_skip_logged'):
+                    log.info(f"[queue] Skip: {_skip_fname} ({_skip_res} {_skip_fmt}) — no capable GPU with available slot")
+                    candidate._skip_logged = True
                 continue
 
             # No available GPUs — skip, let it wait
@@ -2581,7 +2638,11 @@ async def encode_worker(worker_id: int):
             encode_queue.active_jobs[next_job.id] = next_job
             encode_queue.job_gpus[next_job.id] = gpu_id
             _rname = next_job.settings.get("_remote_gpu_name", "")
-            log.info(f"[{next_job.id}] Dispatched: gpu_id={gpu_id} remote={_rname} target={gpu_target} 4K={_job_is_4k}")
+            _fname = next_job.file_info.get("filename", "?")[:40]
+            _res = "4K" if _job_is_4k else "1080p"
+            _hdr_label = "HDR" if _job_is_hdr else "10bit" if _job_is_10bit else "SDR"
+            _dest = f"remote:{_rname}" if _rname else f"GPU {gpu_id}"
+            log.info(f"[{next_job.id}] Dispatched: {_fname} → {_dest} | {_res} {_hdr_label} | target={gpu_target}")
             encode_queue._claiming = False
 
         job = next_job
@@ -2923,10 +2984,122 @@ async def encode_worker(worker_id: int):
                 _finish_job(JobStatus.FAILED, error_msg or f"Remote encode failed (exit {exit_code})")
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
                 continue
-            # Output file is at tmp_output — move to final location
+            # Output file is at tmp_output — run DV post-processing if needed, then move
             if os.path.exists(tmp_output):
-                new_bytes = os.path.getsize(tmp_output)
                 orig_bytes = info.get("size_bytes", 0)
+
+                # DV RPU injection for remote encode_dv jobs (same as local path)
+                _dv_mode = settings.get("dv_mode", "skip")
+                _dovi_profile = info.get("dovi_profile")
+                _is_dv = info.get("hdr_type", "").startswith("Dolby Vision")
+                _needs_dv_inject = _is_dv and _dv_mode == "encode_dv"
+                _needs_dv_upgrade = (
+                    _dv_mode == "encode_dv"
+                    and not _is_dv
+                    and info.get("is_hdr", False)
+                    and info.get("hdr_type", "") == "HDR10"
+                )
+                if _needs_dv_inject:
+                    _is_p5 = _dovi_profile == 5
+                    _dv_label = f"DV P{_dovi_profile}→P8.4"
+                    log.info(f"[{job.id}] {_dv_label} — RPU injection starting (remote post-process)")
+                    encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (remote post-process) ===")
+                    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                    tmp_dir = app_settings.get("tmp_dir", "/var/lib/plex/tmp")
+                    src_path = info["path"]
+                    rpu_bin = os.path.join(tmp_dir, f"{job.id}_rpu.bin")
+                    encoded_hevc = os.path.join(tmp_dir, f"{job.id}_encoded.hevc")
+                    injected_hevc = os.path.join(tmp_dir, f"{job.id}_injected.hevc")
+                    remuxed_mkv = os.path.join(tmp_dir, f"{job.id}_dv.mkv")
+                    dovi_cleanup = [rpu_bin, encoded_hevc, injected_hevc, remuxed_mkv]
+                    try:
+                        # Step 1: Extract RPU from source
+                        _dovi_mode_str = " -m 4"
+                        _rpu_duration = "-t 300 " if app_settings.get("test_mode") else ""
+                        log.info(f"[{job.id}] {_dv_label} step 1/4: extracting RPU")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 1/4: extracting RPU...")
+                        pipe_cmd = (
+                            f'{FFMPEG} {_rpu_duration}-i "{src_path}" -c:v copy -bsf:v hevc_mp4toannexb'
+                            f' -an -sn -f hevc pipe:1 2>/dev/null'
+                            f' | {DOVI_TOOL}{_dovi_mode_str} extract-rpu - -o "{rpu_bin}"'
+                        )
+                        p = await asyncio.create_subprocess_shell(
+                            pipe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        _, dovi_err = await p.communicate()
+                        if p.returncode != 0 or not os.path.exists(rpu_bin) or os.path.getsize(rpu_bin) == 0:
+                            raise RuntimeError(f"RPU extraction failed: {dovi_err.decode(errors='replace')[-200:]}")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU extracted ({human_size(os.path.getsize(rpu_bin))})")
+
+                        # Step 2: Extract raw HEVC from encoded file
+                        log.info(f"[{job.id}] {_dv_label} step 2/4: extracting HEVC bitstream")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 2/4: extracting HEVC bitstream...")
+                        p = await asyncio.create_subprocess_exec(
+                            FFMPEG, "-y", "-i", tmp_output, "-c:v", "copy", "-an", "-sn",
+                            "-bsf:v", "hevc_mp4toannexb,filter_units=remove_types=62", "-f", "hevc", encoded_hevc,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        _, stderr_out = await p.communicate()
+                        if p.returncode != 0:
+                            raise RuntimeError(f"HEVC extract failed: {stderr_out.decode(errors='replace')[-200:]}")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"HEVC extracted ({human_size(os.path.getsize(encoded_hevc))})")
+
+                        # Step 3: Inject RPU into encoded HEVC
+                        log.info(f"[{job.id}] {_dv_label} step 3/4: injecting RPU")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 3/4: injecting RPU...")
+                        p = await asyncio.create_subprocess_exec(
+                            DOVI_TOOL, "inject-rpu", "-i", encoded_hevc, "--rpu-in", rpu_bin, "-o", injected_hevc,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        _, stderr_out = await p.communicate()
+                        if p.returncode != 0:
+                            raise RuntimeError(f"RPU inject failed: {stderr_out.decode(errors='replace')[-200:]}")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU injected ({human_size(os.path.getsize(injected_hevc))})")
+                        for f in [encoded_hevc, rpu_bin]:
+                            if os.path.exists(f):
+                                os.remove(f)
+
+                        # Step 4: Mux with mkvmerge
+                        log.info(f"[{job.id}] {_dv_label} step 4/4: muxing with mkvmerge")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 4/4: muxing with mkvmerge...")
+                        mkvmerge_bin = _find_bin("mkvmerge") if os.path.isfile(_find_bin("mkvmerge")) else None
+                        if mkvmerge_bin:
+                            p = await asyncio.create_subprocess_exec(
+                                mkvmerge_bin, "-o", remuxed_mkv,
+                                injected_hevc, "-D", tmp_output,
+                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                            stdout_out, stderr_out = await p.communicate()
+                            if p.returncode > 1:
+                                raise RuntimeError(f"mkvmerge failed (exit {p.returncode}): {stderr_out.decode(errors='replace')[-200:]}")
+                        else:
+                            raise RuntimeError("mkvmerge not found — required for DV muxing")
+
+                        if os.path.exists(injected_hevc):
+                            os.remove(injected_hevc)
+
+                        # Patch dvvC compatibility_id
+                        patch_dvvc_compat_id(remuxed_mkv, 4)
+
+                        os.remove(tmp_output)
+                        shutil.move(remuxed_mkv, tmp_output)
+                        new_bytes = os.path.getsize(tmp_output)
+                        log.info(f"[{job.id}] {_dv_label} complete — final size {human_size(new_bytes)}")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"{_dv_label} complete — {human_size(new_bytes)}")
+
+                    except Exception as e:
+                        log.error(f"[{job.id}] {_dv_label} failed: {e}")
+                        encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"DV conversion failed: {e}")
+                        for f in dovi_cleanup:
+                            if os.path.exists(f):
+                                os.remove(f)
+                        if os.path.exists(tmp_output):
+                            os.remove(tmp_output)
+                        _finish_job(JobStatus.FAILED, f"{_dv_label} failed")
+                        await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                        continue
+                    finally:
+                        for f in dovi_cleanup:
+                            if os.path.exists(f):
+                                os.remove(f)
+
+                new_bytes = os.path.getsize(tmp_output)
                 if settings.get("discard_larger") and new_bytes >= orig_bytes and orig_bytes > 0:
                     log.info(f"[{job.id}] Encoded file larger ({new_bytes} >= {orig_bytes}) — discarding")
                     os.remove(tmp_output)
@@ -3455,8 +3628,9 @@ async def encode_worker(worker_id: int):
                             mode_desc = f"P{dovi_profile} → P8.4 via -m 4"
                         log.info(f"[{job.id}] {dv_label} step 1/4: extracting RPU ({mode_desc})")
                         encode_queue.ffmpeg_logs.get(job.id, []).append(f"DV step 1/4: extracting RPU ({mode_desc})...")
+                        _rpu_duration = "-t 300 " if app_settings.get("test_mode") else ""
                         pipe_cmd = (
-                            f'{FFMPEG} -i "{src_path}" -c:v copy -bsf:v hevc_mp4toannexb'
+                            f'{FFMPEG} {_rpu_duration}-i "{src_path}" -c:v copy -bsf:v hevc_mp4toannexb'
                             f' -an -sn -f hevc pipe:1 2>/dev/null'
                             f' | {DOVI_TOOL}{dovi_mode_str} extract-rpu - -o "{rpu_bin}"'
                         )
@@ -4812,9 +4986,12 @@ async def stop_remote_client_listener():
 
 # Persistent connect processes — one per configured Remote Client
 _remote_connect_procs: dict = {}  # key: index -> subprocess
+_prev_remote_cfg = None  # track previous config to avoid unnecessary restarts
 
 async def start_remote_connectors():
     """Start recode-remote connect for each configured remote client."""
+    global _prev_remote_cfg
+    _prev_remote_cfg = app_settings.get("remote_gpu_servers", [])
     await stop_remote_connectors()
     rrp_bin = os.path.join(BIN_DIR, "recode-remote")
     if not os.path.isfile(rrp_bin):
@@ -5740,8 +5917,6 @@ async def queue_state():
 async def clear_history(filter: str = "all"):
     if filter == "all":
         encode_queue.history.clear()
-    elif filter == "failed":
-        encode_queue.history = [j for j in encode_queue.history if j.get("status") not in ("failed", "cancelled")]
     else:
         encode_queue.history = [j for j in encode_queue.history if j.get("status") != filter]
     encode_queue._save_state()
@@ -5820,6 +5995,13 @@ async def queue_stop():
 async def queue_stop_now():
     """Disable queue processing and cancel all active encodes."""
     encode_queue.queue_enabled = False
+    await encode_queue.cancel_job()  # cancel all active
+    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+    return {"ok": True}
+
+@app.post("/api/queue/cancel-active")
+async def queue_cancel_active():
+    """Cancel all active encodes without stopping the queue."""
     await encode_queue.cancel_job()  # cancel all active
     await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
     return {"ok": True}
@@ -6113,7 +6295,40 @@ async def get_logs(lines: int = 200):
         for line in (h.get("log") or [])[-10:]:
             fname = h.get("file_info", {}).get("filename", h.get("id", "?"))
             ffmpeg_logs.append(f"[{fname[:40]}] {line}")
+    # Also pull ffmpeg-related lines from connector logs
+    for i in range(10):
+        cpath = os.path.join(BASE_DIR, f"rrp-connect-{i}.log")
+        if not os.path.isfile(cpath):
+            break
+        try:
+            with open(cpath) as f:
+                for line in f.readlines()[-lines:]:
+                    line = line.rstrip()
+                    if any(kw in line for kw in ("ffmpeg ", "ffmpeg_stderr", "Probe ", "GPU connector", "Assigned GPU", "Compiled encoder", "capability", "exited", "error", "ERROR", "WARN")):
+                        ffmpeg_logs.append(f"[Connector {i}] {line}")
+        except Exception:
+            pass
     result["ffmpeg"] = ffmpeg_logs[-lines:]
+    # GC logs from connector logs + server queue dispatch logs
+    gc_logs = []
+    for i in range(10):
+        cpath = os.path.join(BASE_DIR, f"rrp-connect-{i}.log")
+        if not os.path.isfile(cpath):
+            break
+        try:
+            with open(cpath) as f:
+                for line in f.readlines()[-lines:]:
+                    line = line.rstrip()
+                    if "GC:" in line:
+                        gc_logs.append(f"[Connector {i}] {line}")
+        except Exception:
+            pass
+    # Queue dispatch/skip logs from server
+    for entry in _log_buffer.buffer:
+        msg = entry.get("msg", "")
+        if "[queue]" in msg or "Dispatched:" in msg or "Skip:" in msg:
+            gc_logs.append(msg)
+    result["gc"] = gc_logs[-lines:]
     # Server logs (in-memory ring buffer)
     result["server"] = list(_log_buffer.buffer)[-lines:]
     # Listener log
@@ -6500,6 +6715,7 @@ async def remote_gpu_status():
                     st = json.load(f)
                 connected = st.get("connected", False)
                 connect_error = st.get("error", "")
+                connect_status = st.get("status", "")
             except Exception:
                 pass
         if connected:
@@ -6511,7 +6727,7 @@ async def remote_gpu_status():
         else:
             if i < len(servers):
                 servers[i]["_online"] = False
-            error_msg = connect_error or ("Not running" if not proc_alive else "Not connected")
+            error_msg = connect_status or connect_error or ("Not running" if not proc_alive else "Not connected")
             results.append({"index": i, "name": name, "online": False, "error": error_msg})
     return {"servers": results}
 
@@ -6553,6 +6769,7 @@ async def get_settings():
 @app.post("/api/settings")
 async def update_settings(new_settings: dict):
     """Update and persist app settings."""
+    global _prev_remote_cfg
     # Accept all known keys plus dynamic ones like library_profiles
     known_keys = set(APP_DEFAULTS.keys())
     for k, v in new_settings.items():
@@ -6633,9 +6850,13 @@ async def update_settings(new_settings: dict):
     if any(k in new_settings for k in ("remote_client_enabled", "remote_client_port", "remote_client_secret")):
         await start_remote_client_listener()
 
-    # Restart remote client connectors if server list changed
+    # Restart remote client connectors only if config actually changed
     if "remote_gpu_servers" in new_settings:
-        await start_remote_connectors()
+        old_cfg = json.dumps(_prev_remote_cfg, sort_keys=True) if _prev_remote_cfg else ""
+        new_cfg = json.dumps(new_settings["remote_gpu_servers"], sort_keys=True)
+        if old_cfg != new_cfg:
+            await start_remote_connectors()
+            _prev_remote_cfg = new_settings["remote_gpu_servers"]
 
     return {"ok": True, "settings": app_settings}
 
