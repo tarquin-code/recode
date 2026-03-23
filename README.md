@@ -2,7 +2,7 @@
 
 **GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.21.1-blue)
+![Version](https://img.shields.io/badge/version-2.21.2-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -15,7 +15,7 @@
 - **Presets** — Auto, Film, Animation, Grain, Custom with per-preset CQ/bitrate/speed
 - **Constant Quality (CQ)** — Configurable quality level with max bitrate cap
 - **Resolution Scaling** — Downscale 4K to 1080p, 1440p, 720p, or keep original
-- **Test Mode** — Encode only the first 5 minutes for quick quality checks
+- **Test Mode** — Encode only the first 5 minutes for quick quality checks (originals never deleted)
 
 ### HDR & Dolby Vision
 - **HDR10** — Passthrough and metadata preservation
