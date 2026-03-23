@@ -19,9 +19,18 @@
 # Author:  Tarquin Douglass
 # License: GPL-3.0-or-later
 # URL:     https://github.com/tarquin-code/plex-recencoder
-# Usage:   sudo bash install.sh
+# Usage:   sudo bash install.sh [--user <username>]
 #
 set -e
+
+# Parse arguments
+INSTALL_USER=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --user|-u) INSTALL_USER="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
 
 APP_NAME="Plex Re-Encoder"
 APP_DIR="/opt/Recode"
@@ -111,29 +120,41 @@ detect_plex_user() {
     echo ""
 }
 
-PLEX_USER=$(detect_plex_user)
-if [[ -n "$PLEX_USER" ]]; then
-    log "Detected Plex user: ${BOLD}${PLEX_USER}${NC}"
-    RUN_USER="$PLEX_USER"
-    RUN_GROUP=$(id -gn "$PLEX_USER" 2>/dev/null || echo "$PLEX_USER")
-else
-    warn "Could not detect Plex user"
-    # Try to detect from media files
-    if [[ -d "/mnt" ]]; then
-        MEDIA_OWNER=$(find /mnt -maxdepth 3 -name "*.mkv" -o -name "*.mp4" 2>/dev/null | head -1 | xargs stat -c '%U' 2>/dev/null || echo "")
-        if [[ -n "$MEDIA_OWNER" && "$MEDIA_OWNER" != "root" ]]; then
-            info "Media files owned by: ${BOLD}${MEDIA_OWNER}${NC}"
-            RUN_USER="$MEDIA_OWNER"
-            RUN_GROUP=$(id -gn "$MEDIA_OWNER" 2>/dev/null || echo "$MEDIA_OWNER")
-        fi
+# Use --user argument if provided, otherwise auto-detect
+if [[ -n "$INSTALL_USER" ]]; then
+    RUN_USER="$INSTALL_USER"
+    RUN_GROUP=$(id -gn "$INSTALL_USER" 2>/dev/null || echo "$INSTALL_USER")
+    if ! id "$RUN_USER" &>/dev/null; then
+        log "Creating user ${RUN_USER}..."
+        useradd -r -s /sbin/nologin "$RUN_USER" 2>/dev/null || true
+        RUN_GROUP="$RUN_USER"
     fi
-    if [[ -z "$RUN_USER" ]]; then
-        read -p "Enter the user to run Recode as [plex]: " RUN_USER
-        RUN_USER=${RUN_USER:-plex}
-        RUN_GROUP=${RUN_USER}
-        if ! id "$RUN_USER" &>/dev/null; then
-            log "Creating user ${RUN_USER}..."
-            useradd -r -s /sbin/nologin "$RUN_USER" 2>/dev/null || true
+    log "Using specified user: ${BOLD}${RUN_USER}:${RUN_GROUP}${NC}"
+else
+    PLEX_USER=$(detect_plex_user)
+    if [[ -n "$PLEX_USER" ]]; then
+        log "Detected Plex user: ${BOLD}${PLEX_USER}${NC}"
+        RUN_USER="$PLEX_USER"
+        RUN_GROUP=$(id -gn "$PLEX_USER" 2>/dev/null || echo "$PLEX_USER")
+    else
+        warn "Could not detect Plex user"
+        # Try to detect from media files
+        if [[ -d "/mnt" ]]; then
+            MEDIA_OWNER=$(find /mnt -maxdepth 3 -name "*.mkv" -o -name "*.mp4" 2>/dev/null | head -1 | xargs stat -c '%U' 2>/dev/null || echo "")
+            if [[ -n "$MEDIA_OWNER" && "$MEDIA_OWNER" != "root" ]]; then
+                info "Media files owned by: ${BOLD}${MEDIA_OWNER}${NC}"
+                RUN_USER="$MEDIA_OWNER"
+                RUN_GROUP=$(id -gn "$MEDIA_OWNER" 2>/dev/null || echo "$MEDIA_OWNER")
+            fi
+        fi
+        if [[ -z "$RUN_USER" ]]; then
+            read -p "Enter the user to run Recode as [plex]: " RUN_USER
+            RUN_USER=${RUN_USER:-plex}
+            RUN_GROUP=${RUN_USER}
+            if ! id "$RUN_USER" &>/dev/null; then
+                log "Creating user ${RUN_USER}..."
+                useradd -r -s /sbin/nologin "$RUN_USER" 2>/dev/null || true
+            fi
         fi
     fi
 fi
@@ -181,9 +202,9 @@ case "$PKG_MGR" in
         # Remove stale mkvtoolnix repo if present (we bundle it now)
         rm -f /etc/yum.repos.d/mkvtoolnix.repo 2>/dev/null
         if $HAS_BINARY; then
-            $PKG_INSTALL curl wget pciutils fuse3
+            $PKG_INSTALL curl wget pciutils fuse3 vulkan-loader
         else
-            $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils fuse3
+            $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils fuse3 vulkan-loader
         fi
         # mediainfo from EPEL — install separately so failure doesn't block
         $PKG_INSTALL mediainfo 2>/dev/null || warn "mediainfo not available — install via web UI"
@@ -192,24 +213,24 @@ case "$PKG_MGR" in
     apt)
         apt-get update -qq
         if $HAS_BINARY; then
-            $PKG_INSTALL curl wget fuse3
+            $PKG_INSTALL curl wget fuse3 libvulkan1
         else
-            $PKG_INSTALL python3 python3-pip python3-venv mkvtoolnix mediainfo curl wget fuse3
+            $PKG_INSTALL python3 python3-pip python3-venv mkvtoolnix mediainfo curl wget fuse3 libvulkan1
         fi
         ;;
     zypper)
         zypper refresh
         if $HAS_BINARY; then
-            $PKG_INSTALL curl wget pciutils fuse3
+            $PKG_INSTALL curl wget pciutils fuse3 vulkan-loader
         else
-            $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils mediainfo fuse3
+            $PKG_INSTALL python3 python3-pip python3-devel curl wget pciutils mediainfo fuse3 vulkan-loader
         fi
         ;;
     pacman)
         if $HAS_BINARY; then
-            $PKG_INSTALL curl wget fuse3
+            $PKG_INSTALL curl wget fuse3 vulkan-loader
         else
-            $PKG_INSTALL python python-pip mkvtoolnix-cli mediainfo curl wget fuse3
+            $PKG_INSTALL python python-pip mkvtoolnix-cli mediainfo curl wget fuse3 vulkan-loader
         fi
         ;;
 esac

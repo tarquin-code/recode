@@ -167,6 +167,8 @@ pub enum ReverseControlMsg {
         arch: String,
         max_jobs: usize,
         has_fuse: bool,
+        #[serde(default)]
+        gpu_capabilities: String,
     },
     /// Client → GPU server: auth response
     AuthOk,

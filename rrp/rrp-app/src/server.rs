@@ -343,17 +343,32 @@ pub async fn run_fuse_job(
         rw.push(out);
     }
 
-    // Redirect stderr to file for error capture
+    // Pipe stderr through our process so we capture it even on crash
     let stderr_path = job_dir.join("ffmpeg_stderr.log");
-    let stderr_file = std::fs::File::create(&stderr_path)?;
     let mut child = Command::new(ffmpeg)
         .args(&rw)
         .env("RRP_JOB_ID", job_id)
         .env("RRP_CLIENT", peer)
         .env("RRP_INPUT", orig_input)
         .stdout(Stdio::null())
-        .stderr(Stdio::from(stderr_file))
+        .stderr(Stdio::piped())
         .spawn()?;
+
+    // Spawn a task to continuously read stderr and write to file
+    let stderr = child.stderr.take().unwrap();
+    let sp = stderr_path.clone();
+    let stderr_task = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut file = std::fs::File::create(&sp).unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => { let _ = std::io::Write::write_all(&mut file, &buf[..n]); }
+            }
+        }
+    });
 
     // Poll progress file every 500ms in a background task
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<ProgressMsg>(32);
@@ -460,6 +475,9 @@ pub async fn run_fuse_job(
     }
 
     progress_task.abort();
+    // Give stderr a moment to flush, then stop
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    stderr_task.abort();
 
     // Step 1: Kill ffmpeg first, wait for it to exit
     let exit_code = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
@@ -721,11 +739,99 @@ pub fn detect_encoders(ffmpeg: &str) -> Vec<String> {
     encoders
 }
 
+/// Test GPU capabilities — what resolutions/HDR combinations each GPU can handle.
+/// Returns a JSON-serializable map of capabilities per GPU.
+pub fn detect_gpu_capabilities(ffmpeg: &str, gpu_count: usize) -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let tests = [
+        ("1080p_sdr",   "1920x1080", "yuv420p",    false),
+        ("1080p_10bit", "1920x1080", "yuv420p10le", false),
+        ("1080p_hdr",   "1920x1080", "yuv420p10le", true),
+        ("4k_sdr",      "3840x2160", "yuv420p",     false),
+        ("4k_10bit",    "3840x2160", "yuv420p10le", false),
+        ("4k_hdr",      "3840x2160", "yuv420p10le", true),
+    ];
+    let tmp_dir = std::env::temp_dir();
+    let mut results = Vec::new();
+    for gpu in 0..gpu_count {
+        let mut caps = serde_json::Map::new();
+        caps.insert("gpu".into(), json!(gpu));
+        for &(name, size, pix_fmt, hdr) in &tests {
+            let gpu_str = gpu.to_string();
+            let test_file = tmp_dir.join(format!("_captest_{}_{}.mkv", gpu, name));
+            let test_path = test_file.to_string_lossy().to_string();
+
+            // Step 1: Generate test HEVC file
+            let input_arg = format!("color=black:s={}:d=2:r=25", size);
+            let mut gen_args = vec![
+                "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", input_arg.as_str(),
+                "-frames:v", "50", "-pix_fmt", pix_fmt,
+                "-c:v", "hevc_nvenc", "-gpu", gpu_str.as_str(),
+            ];
+            if hdr {
+                gen_args.extend_from_slice(&["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]);
+            }
+            gen_args.push(test_path.as_str());
+
+            let gen_ok = std::process::Command::new(ffmpeg).args(&gen_args).output()
+                .map(|o| o.status.success()).unwrap_or(false);
+
+            if !gen_ok {
+                caps.insert(name.into(), json!(false));
+                tracing::info!("GPU {} capability {}: FAIL (generate)", gpu, name);
+                let _ = std::fs::remove_file(&test_file);
+                continue;
+            }
+
+            // Step 2: Full decode (CUDA hwaccel) + encode pipeline
+            let mut enc_args = vec![
+                "-hide_banner", "-loglevel", "error", "-y",
+                "-hwaccel", "cuda", "-hwaccel_device", gpu_str.as_str(),
+                "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16",
+                "-i", test_path.as_str(),
+                "-c:v", "hevc_nvenc", "-gpu", gpu_str.as_str(),
+                "-rc", "vbr", "-cq", "28", "-preset", "p4",
+                "-multipass", "qres", "-spatial-aq", "1", "-aq-strength", "8",
+            ];
+            if hdr {
+                enc_args.extend_from_slice(&["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]);
+            }
+            enc_args.extend_from_slice(&["-f", "null", "-"]);
+
+            let ok = std::process::Command::new(ffmpeg).args(&enc_args).output()
+                .map(|o| o.status.success()).unwrap_or(false);
+
+            let _ = std::fs::remove_file(&test_file);
+            caps.insert(name.into(), json!(ok));
+            tracing::info!("GPU {} capability {}: {}", gpu, name, if ok { "OK" } else { "FAIL" });
+        }
+        // Test Vulkan/libplacebo (server-wide, not per-GPU)
+        if gpu == 0 {
+            let vulkan_ok = std::process::Command::new(ffmpeg)
+                .args([
+                    "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=black:s=1920x1080:d=2:r=25",
+                    "-frames:v", "50", "-init_hw_device", "vulkan",
+                    "-vf", "hwupload,libplacebo=format=yuv420p10le,hwdownload,format=yuv420p10le",
+                    "-c:v", "libx265", "-f", "null", "-",
+                ])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            caps.insert("vulkan_libplacebo".into(), json!(vulkan_ok));
+            tracing::info!("Vulkan/libplacebo: {}", if vulkan_ok { "OK" } else { "NOT AVAILABLE" });
+        }
+        results.push(json!(caps));
+    }
+    results
+}
+
 /// Test if a hardware encoder actually works with typical encoding flags.
 fn probe_encoder(ffmpeg: &str, encoder: &str, full_flags: bool) -> bool {
     let mut args = vec![
         "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", "color=black:s=256x256:d=0.04:r=25",
+        "-f", "lavfi", "-i", "color=black:s=1920x1080:d=0.04:r=25",
         "-frames:v", "1",
         "-c:v", encoder,
     ];

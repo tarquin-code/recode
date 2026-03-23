@@ -703,11 +703,12 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <label for="selDvMode" style="font-size:12px;white-space:nowrap;">Dolby Vision</label>
                     <select id="selDvMode" style="font-size:11px;flex:1;" onchange="onEncodeSettingsChange()">
                         <option value="skip">Skip</option>
+                        <option value="keep">Keep Original DV</option>
                         <option value="hdr10">Convert to HDR10</option>
                         <option value="encode_dv">Convert to DV P8.4</option>
                     </select>
                 </div>
-                <span class="set-desc" style="margin:-2px 0 4px 0;">Skip: DV files won't encode. HDR10: strips DV, keeps HDR10. DV P8.4: re-encodes all DV as Profile 8.1, upgrades HDR10 to DV P8.4</span>
+                <span class="set-desc" style="margin:-2px 0 4px 0;">Skip: DV files won't encode. Keep: re-encodes video but preserves DV metadata. HDR10: strips DV, keeps HDR10. DV P8.4: re-encodes with DV P8.4</span>
             </div>
 
             <div class="sidebar-section">
@@ -1861,7 +1862,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.1</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1895,7 +1896,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
-                            <div style="font-weight:600;color:var(--text-primary);">v2.21.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.21.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
                                 <li><strong>Per-GPU max jobs</strong> &mdash; configure max concurrent encodes per GPU in Settings. Replaces the global Concurrent Encodes setting with fine-grained per-GPU control</li>
                                 <li><strong>Redesigned GPU Config</strong> &mdash; Local GPUs section with power toggle, VRAM display, and max jobs dropdown per GPU. Remote Clients redesigned to match</li>
@@ -1909,7 +1910,13 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <li><strong>Garbage collector</strong> &mdash; periodic cleanup of orphaned job dirs, stale FUSE mounts, and temp files on remote GPU servers (every 60s)</li>
                                 <li><strong>Restart safety</strong> &mdash; restart button warns when active encodes are running, requires confirmation click</li>
                                 <li><strong>Fast service restart</strong> &mdash; TimeoutStopSec=10, KillMode=mixed for quick service restarts instead of 90s default</li>
-                                <li><strong>scale_cuda</strong> &mdash; GPU-accelerated scaling when resizing with CUDA hwaccel (4K&rarr;1080p uses GPU for decode, scale, and encode)</li>
+                                <li><strong>GPU capability testing</strong> &mdash; full decode+encode tests at startup for 1080p/4K/SDR/10bit/HDR per GPU. Scheduler only routes jobs to capable GPUs</li>
+                                <li><strong>10-bit detection</strong> &mdash; Tesla M6 and other GPUs without 10-bit support automatically excluded from 10-bit SDR/HDR jobs</li>
+                                <li><strong>Vulkan runtime detection</strong> &mdash; functional test on each server, shown in About and Setup wizard with install button</li>
+                                <li><strong>DV Keep Original</strong> &mdash; new Dolby Vision mode that re-encodes video while preserving DV metadata (no stripping, no P8.4 conversion)</li>
+                                <li><strong>DV P5 Vulkan pipeline</strong> &mdash; per-server Vulkan/libplacebo capability test, proper fallback to HDR10 when unavailable</li>
+                                <li><strong>Remote ffmpeg stderr fix</strong> &mdash; stderr read before CleanupGuard deletes job dir, actual errors now visible in debug log</li>
+                                <li><strong>Installer</strong> &mdash; accepts --user flag for non-interactive install, installs vulkan-loader automatically</li>
                                 <li><strong>System Logs viewer</strong> &mdash; new Logs modal (file icon in sidebar) with Server, ffmpeg, Listener, and Connector tabs. Auto-refresh every 3s with auto-scroll. Color-coded by severity and per-job colors for ffmpeg logs</li>
                                 <li><strong>Stats charts</strong> &mdash; daily encode and space saved bar charts in the Stats tab (last 30 days)</li>
                                 <li><strong>History totals</strong> &mdash; summary bar on Done/Failed/Cancelled/Skipped lists showing total files, original size, encoded size, space saved, and encode time</li>
@@ -2470,6 +2477,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <label style="font-size:11px;">Dolby Vision</label>
                                 <select id="setDvMode" style="font-size:12px;">
                                     <option value="skip">Skip</option>
+                                    <option value="keep">Keep Original DV</option>
                                     <option value="hdr10">Convert to HDR10</option>
                                     <option value="encode_dv">Convert to DV P8.4</option>
                                 </select>
@@ -2879,12 +2887,28 @@ function updateGpuServerStatus() {
                     const badges = [];
                     if (h265.length) badges.push('<span style="background:rgba(88,166,255,0.15);color:#58a6ff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">H.265 ' + h265short.join(', ') + '</span>');
                     if (h264.length) badges.push('<span style="background:rgba(63,185,80,0.15);color:#3fb950;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">H.264 ' + h264short.join(', ') + '</span>');
+                    const capsList = gpu.gpu_capabilities || [];
+                    const capDot = (ok) => `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ok ? 'var(--success)' : ok === false ? 'var(--error)' : 'var(--border)'};"></span>`;
+                    let capsHtml = '';
+                    if (capsList.length) {
+                        // Aggregate across all GPUs on this server
+                        const agg = {s1: false, t1: false, h1: false, s4: false, t4: false, h4: false};
+                        capsList.forEach(c => { if(c['1080p_sdr']) agg.s1=true; if(c['1080p_10bit']) agg.t1=true; if(c['1080p_hdr']) agg.h1=true; if(c['4k_sdr']) agg.s4=true; if(c['4k_10bit']) agg.t4=true; if(c['4k_hdr']) agg.h4=true; });
+                        capsHtml = `<span style="display:flex;gap:5px;font-size:10px;color:var(--text-muted);">
+                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.s1)} 1080p</span>
+                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.t1)} 10bit</span>
+                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.h1)} HDR</span>
+                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.s4)} 4K</span>
+                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.t4)} 4K 10bit</span>
+                            <span style="display:flex;align-items:center;gap:2px;">${capDot(agg.h4)} 4K HDR</span>
+                        </span>`;
+                    }
                     html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;flex-wrap:wrap;">
                         <span style="color:var(--success);font-size:10px;">&#9679;</span>
                         <span style="font-weight:500;font-size:12px;">${escHtml(gpu.name || 'Unknown')}</span>
                         <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">${escHtml(gpu.address || '')}</span>
-                        <span style="font-size:11px;color:var(--text-muted);">${escHtml(gpu.os || '')}/${escHtml(gpu.arch || '')}</span>
                         ${badges.join(' ')}
+                        ${capsHtml}
                         <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">${gpu.active_jobs || 0}/${gpu.max_jobs || 1} jobs</span>
                     </div>`;
                 });
@@ -3859,7 +3883,7 @@ function renderEncoding() {
                             ${s.delete_original ? '<span class="badge badge-fail">Delete original</span>' : ''}
                             ${s.discard_larger ? '<span class="badge badge-skip">Discard if larger</span>' : ''}
                             ${s.english_only ? '<span class="badge badge-sdr">English only</span>' : ''}
-                            ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-hdr">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-hdr">DV P8.4</span>' : ''; })()}
+                            ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'keep' && isDv ? '<span class="badge badge-hdr">DV Keep</span>' : s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-hdr">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-hdr">DV P8.4</span>' : ''; })()}
                             ${s.skip_4k ? '<span class="badge badge-skip">Skip 4K</span>' : ''}
                             ${s.hdr_only ? '<span class="badge badge-hdr">HDR only</span>' : ''}
                         </div>
@@ -4525,7 +4549,7 @@ function renderHistory() {
                 ${s.delete_original ? '<span class="badge badge-fail">Delete original</span>' : ''}
                 ${s.discard_larger ? '<span class="badge badge-skip">Discard if larger</span>' : ''}
                 ${s.english_only ? '<span class="badge badge-sdr">English only</span>' : ''}
-                ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-hdr">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-hdr">DV P8.4</span>' : ''; })()}
+                ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'keep' && isDv ? '<span class="badge badge-hdr">DV Keep</span>' : s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-hdr">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-hdr">DV P8.4</span>' : ''; })()}
                 ${s.skip_4k ? '<span class="badge badge-skip">Skip 4K</span>' : ''}
                 ${s.hdr_only ? '<span class="badge badge-hdr">HDR only</span>' : ''}
             </div>
@@ -5220,11 +5244,22 @@ async function openSettings() {
                 const maxOpts = Array.from({length: 8}, (_,i) => i+1).map(n =>
                     `<option value="${n}" ${n === currentMax ? 'selected' : ''}>${n}</option>`
                 ).join('');
+                const caps = g.capabilities || {};
+                const capDot = (ok) => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ok ? 'var(--success)' : ok === false ? 'var(--error)' : 'var(--border)'};"></span>`;
+                const capHtml = Object.keys(caps).length > 0 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;">
+                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['1080p_sdr'])} 1080p</span>
+                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['1080p_10bit'])} 10bit</span>
+                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['1080p_hdr'])} HDR</span>
+                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['4k_sdr'])} 4K</span>
+                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['4k_10bit'])} 4K 10bit</span>
+                    <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:2px;">${capDot(caps['4k_hdr'])} 4K HDR</span>
+                </div>` : '';
                 return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.4;' : ''}">
                     <button class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="toggleGpu(${g.index}, ${!disabled});loadSettings();">${svgIcon('power', 14)}</button>
                     <div style="flex:1;min-width:0;">
                         <div style="font-size:12px;font-weight:600;">GPU ${g.index} <span style="font-weight:400;color:var(--text-muted);">${escHtml(g.name)}</span></div>
                         <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${vram} VRAM</div>
+                        ${capHtml}
                     </div>
                     <div style="flex-shrink:0;">
                         <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Max Jobs</div>
@@ -5359,8 +5394,8 @@ async function loadAboutSystemInfo() {
         html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(s.has_mkvmerge)}<span><strong>mkvmerge</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.mkvmerge_version || (s.has_mkvmerge ? 'Installed' : 'Not installed')}</span></span></div>`;
         // mediainfo
         html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(!!s.mediainfo_version)}<span><strong>mediainfo</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.mediainfo_version || 'Not installed'}</span></span></div>`;
-        // Python
-        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(!!s.rrp_version)}<span><strong>RRP</strong><br><span style="font-size:11px;color:var(--text-muted);">${s.rrp_version || 'not found'}</span></span></div>`;
+        const vkInstall = !s.vulkan_available ? ` <button class="btn btn-sm" style="font-size:10px;padding:1px 8px;margin-left:4px;" onclick="fetch('/api/setup/install-tool?tool=vulkan',{method:'POST'}).then(()=>this.textContent='Installing...').then(()=>setTimeout(()=>location.reload(),5000))">Install</button>` : '';
+        html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">${dot(s.vulkan_available)}<span><strong>Vulkan</strong>${vkInstall}<br><span style="font-size:11px;color:var(--text-muted);">${s.vulkan_version ? s.vulkan_version : 'Not installed'}</span></span></div>`;
         html += `</div>`;
         container.innerHTML = html;
     } catch(e) {
@@ -5423,7 +5458,7 @@ function renderRemoteClients() {
             `<option value="${n}" ${n === mj ? 'selected' : ''}>${n}</option>`
         ).join('');
         html += `<div style="display:flex;align-items:flex-end;gap:10px;margin-bottom:6px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.4;' : ''}">
-            <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--border)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;margin-bottom:1px;" onclick="window._remoteClients[${i}].enabled=${disabled};renderRemoteClients();setTimeout(()=>checkRemoteClients(),300);">${svgIcon('power', 14)}</button>
+            <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Disabled' : c._online ? 'Connected' : 'Checking...'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : c._online ? 'var(--success)' : 'var(--border)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;margin-bottom:1px;" onclick="window._remoteClients[${i}].enabled=${disabled};renderRemoteClients();setTimeout(()=>checkRemoteClients(),300);">${svgIcon('power', 14)}</button>
             <div style="flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:4px 10px;">
                 <div style="flex:1;min-width:100px;">
                     <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Name</div>
@@ -5460,16 +5495,6 @@ async function checkRemoteClients() {
         }
     });
     try {
-        const validClients = clients.filter(c => c.name?.trim() && c.address?.trim() && c.secret?.trim());
-        if (validClients.length > 0) {
-            await fetch('/api/settings', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({remote_gpu_servers: validClients}),
-            });
-        }
-        // Wait for connectors to restart and establish connections
-        await new Promise(r => setTimeout(r, 3000));
         const r = await fetch('/api/remote-gpu/status');
         const data = await r.json();
         for (const srv of (data.servers || [])) {
@@ -5480,8 +5505,10 @@ async function checkRemoteClients() {
                 el.style.background = 'var(--error)'; el.title = 'Disabled';
             } else if (srv.online) {
                 el.style.background = 'var(--success)'; el.title = 'Connected to ' + (srv.address || '');
+                if (window._remoteClients[srv.index]) window._remoteClients[srv.index]._online = true;
             } else {
                 el.style.background = 'var(--warning)'; el.title = srv.error || 'Not connected';
+                if (window._remoteClients[srv.index]) window._remoteClients[srv.index]._online = false;
             }
         }
     } catch(e) {
@@ -6601,6 +6628,7 @@ function renderLibraryProfiles() {
                     <label style="font-size:11px;">Dolby Vision</label>
                     <select style="font-size:12px;" onchange="updateLibProfile('${escHtml(lpath)}','dv_mode',this.value)">
                         <option value="skip" ${(p.dv_mode||'skip')==='skip'?'selected':''}>Skip</option>
+                        <option value="keep" ${p.dv_mode==='keep'?'selected':''}>Keep Original DV</option>
                         <option value="hdr10" ${p.dv_mode==='hdr10'?'selected':''}>Convert to HDR10</option>
                         <option value="encode_dv" ${p.dv_mode==='encode_dv'?'selected':''}>Convert to DV P8.4</option>
                     </select>

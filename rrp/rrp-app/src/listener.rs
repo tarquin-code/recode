@@ -22,6 +22,7 @@ struct ConnectedGpu {
     has_fuse: bool,
     active_jobs: u32,
     last_heartbeat: std::time::Instant,
+    gpu_capabilities: Vec<serde_json::Value>,
     /// Send job assignments to this GPU's control channel handler
     job_tx: mpsc::Sender<ReverseControlMsg>,
 }
@@ -108,7 +109,8 @@ async fn write_status_file(state: &ListenerState, path: &PathBuf) {
             "max_jobs": g.max_jobs,
             "active_jobs": g.active_jobs,
             "has_fuse": g.has_fuse,
-            "online": g.last_heartbeat.elapsed().as_secs() < 45,
+            "online": g.last_heartbeat.elapsed().as_secs() < 45 && !g.gpu_capabilities.is_empty(),
+            "gpu_capabilities": g.gpu_capabilities,
         })
     }).collect();
     let status = serde_json::json!({
@@ -303,13 +305,14 @@ async fn handle_control(
     let (mut rx, mut tx) = stream.split();
 
     let auth: ReverseControlMsg = read_msg(&mut rx).await?;
-    let (name, encoders, os, arch, max_jobs, has_fuse) = match auth {
-        ReverseControlMsg::Auth { secret, server_name, encoders, os, arch, max_jobs, has_fuse } => {
+    let (name, encoders, os, arch, max_jobs, has_fuse, gpu_capabilities) = match auth {
+        ReverseControlMsg::Auth { secret, server_name, encoders, os, arch, max_jobs, has_fuse, gpu_capabilities: gpu_caps_str } => {
             if secret != state.secret {
                 write_msg(&mut tx, &ReverseControlMsg::AuthFail("bad secret".into())).await?;
                 bail!("Auth failed from {}", peer);
             }
-            (server_name, encoders, os, arch, max_jobs, has_fuse)
+            let gpu_capabilities: Vec<serde_json::Value> = serde_json::from_str(&gpu_caps_str).unwrap_or_default();
+            (server_name, encoders, os, arch, max_jobs, has_fuse, gpu_capabilities)
         }
         _ => bail!("Expected Auth"),
     };
@@ -326,10 +329,12 @@ async fn handle_control(
     let conn_id = format!("{}@{}", name, peer);
     let (job_tx, mut job_rx) = mpsc::channel::<ReverseControlMsg>(16);
 
+    info!("GPU capabilities for '{}': {:?}", name, gpu_capabilities);
     state.gpus.write().await.insert(conn_id.clone(), ConnectedGpu {
         name: name.clone(), address: peer.ip().to_string(), encoders, encoder_type, os, arch, max_jobs, has_fuse,
         active_jobs: 0,
         last_heartbeat: std::time::Instant::now(),
+        gpu_capabilities,
         job_tx,
     });
 

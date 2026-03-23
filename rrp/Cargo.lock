@@ -511,6 +511,7 @@ dependencies = [
  "bincode",
  "hmac",
  "serde",
+ "serde_json",
  "sha2",
  "tokio",
 ]
