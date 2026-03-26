@@ -7038,6 +7038,10 @@ async def get_settings():
 async def update_settings(new_settings: dict):
     """Update and persist app settings."""
     global _prev_remote_cfg
+    # Snapshot config before applying changes (for change detection)
+    _old_gpu_max_jobs = json.dumps(app_settings.get("gpu_max_jobs", {}), sort_keys=True)
+    _old_disabled_gpus = sorted(app_settings.get("disabled_gpus", []))
+    _old_listener_cfg = (app_settings.get("remote_client_enabled"), app_settings.get("remote_client_port"), app_settings.get("remote_client_secret"))
     # Accept all known keys plus dynamic ones like library_profiles
     known_keys = set(APP_DEFAULTS.keys())
     for k, v in new_settings.items():
@@ -7051,8 +7055,10 @@ async def update_settings(new_settings: dict):
     WEBHOOK_DEFAULTS.update(build_default_profile())
     save_settings(app_settings)
 
-    # If gpu_max_jobs changed, requeue excess jobs on GPUs over their new limit
-    if "gpu_max_jobs" in new_settings or "disabled_gpus" in new_settings:
+    # If gpu_max_jobs or disabled_gpus actually changed, requeue excess jobs
+    _gpu_jobs_changed = json.dumps(app_settings.get("gpu_max_jobs", {}), sort_keys=True) != _old_gpu_max_jobs
+    _disabled_changed = sorted(app_settings.get("disabled_gpus", [])) != _old_disabled_gpus
+    if _gpu_jobs_changed or _disabled_changed:
         gpu_loads = encode_queue.get_gpu_loads()
         disabled = set(app_settings.get("disabled_gpus", []))
         to_requeue = []
@@ -7113,9 +7119,9 @@ async def update_settings(new_settings: dict):
             encode_queue._save_state(force=True)
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
-    # Restart GPU server if settings changed
-    # Restart reverse-connect listener if settings changed
-    if any(k in new_settings for k in ("remote_client_enabled", "remote_client_port", "remote_client_secret")):
+    # Restart reverse-connect listener only if listener settings actually changed
+    _new_listener_cfg = (app_settings.get("remote_client_enabled"), app_settings.get("remote_client_port"), app_settings.get("remote_client_secret"))
+    if _new_listener_cfg != _old_listener_cfg:
         await start_remote_client_listener()
 
     # Restart remote client connectors only if config actually changed
