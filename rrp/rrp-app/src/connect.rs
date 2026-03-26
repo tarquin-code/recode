@@ -103,8 +103,8 @@ pub async fn run(
         info!("GPU connector: {} encoders={:?} max_jobs={} gpus={} per_gpu={:?}", name, encoders, effective, gpu_count, gpu_max_jobs_vec);
 
         // Always scan GPU capabilities fresh on every startup
-        let has_nvenc = encoders.iter().any(|e| e.contains("nvenc"));
-        if has_nvenc {
+        let has_hw_encoder = encoders.iter().any(|e| e.contains("nvenc") || e.contains("videotoolbox") || e.contains("vaapi") || e.contains("qsv"));
+        if has_hw_encoder {
             info!("Running GPU capability tests...");
             gpu_capabilities = crate::server::detect_gpu_capabilities(&ffmpeg, gpu_count);
             info!("GPU capabilities: {:?}", gpu_capabilities);
@@ -359,6 +359,11 @@ fn assign_gpu(mut args: Vec<String>, gpu: u32) -> Vec<String> {
         } else if args[i] == "-hwaccel_device" && i + 1 < args.len() {
             args[i + 1] = gpu_str.clone();
             found_hwaccel_device = true;
+            i += 2;
+        } else if args[i] == "-init_hw_device" && i + 1 < args.len() && args[i + 1].starts_with("vulkan=vk:") {
+            // Rewrite Vulkan device index for DV P5 libplacebo pipeline
+            args[i + 1] = format!("vulkan=vk:{}", gpu_str);
+            info!("Assigned Vulkan device: vk:{}", gpu_str);
             i += 2;
         } else {
             i += 1;

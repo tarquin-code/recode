@@ -345,6 +345,10 @@ pub async fn run_fuse_job(
     }
 
     // Pipe stderr through our process so we capture it even on crash
+    // Write metadata files so GUI can read them (macOS can't read process env vars)
+    let _ = std::fs::write(job_dir.join("rrp_input.txt"), orig_input);
+    let _ = std::fs::write(job_dir.join("rrp_client.txt"), peer);
+
     let stderr_path = job_dir.join("ffmpeg_stderr.log");
     let mut child = Command::new(ffmpeg)
         .args(&rw)
@@ -791,6 +795,16 @@ pub fn detect_encoders(ffmpeg: &str) -> Vec<String> {
 /// Returns a JSON-serializable map of capabilities per GPU.
 pub fn detect_gpu_capabilities(ffmpeg: &str, gpu_count: usize) -> Vec<serde_json::Value> {
     use serde_json::json;
+
+    // Detect which encoder to use for capability testing
+    let encoders = detect_encoders(ffmpeg);
+    let has_nvenc = encoders.iter().any(|e| e.contains("nvenc"));
+    let has_vt = encoders.iter().any(|e| e.contains("videotoolbox"));
+    let hw_encoder = if has_nvenc { "hevc_nvenc" } else if has_vt { "hevc_videotoolbox" } else { "libx265" };
+    let is_nvenc = hw_encoder == "hevc_nvenc";
+    let is_vt = hw_encoder.contains("videotoolbox");
+    tracing::info!("Capability test encoder: {} (gpus={})", hw_encoder, gpu_count);
+
     let tests = [
         ("1080p_sdr",   "1920x1080", "yuv420p",    false),
         ("1080p_10bit", "1920x1080", "yuv420p10le", false),
@@ -804,8 +818,8 @@ pub fn detect_gpu_capabilities(ffmpeg: &str, gpu_count: usize) -> Vec<serde_json
     for gpu in 0..gpu_count {
         let mut caps = serde_json::Map::new();
         caps.insert("gpu".into(), json!(gpu));
+        let gpu_str = gpu.to_string();
         for &(name, size, pix_fmt, hdr) in &tests {
-            let gpu_str = gpu.to_string();
             let test_file = tmp_dir.join(format!("_captest_{}_{}.mkv", gpu, name));
             let test_path = test_file.to_string_lossy().to_string();
 
@@ -815,8 +829,14 @@ pub fn detect_gpu_capabilities(ffmpeg: &str, gpu_count: usize) -> Vec<serde_json
                 "-hide_banner", "-loglevel", "error", "-y",
                 "-f", "lavfi", "-i", input_arg.as_str(),
                 "-frames:v", "50", "-pix_fmt", pix_fmt,
-                "-c:v", "hevc_nvenc", "-gpu", gpu_str.as_str(),
+                "-c:v", hw_encoder,
             ];
+            if is_nvenc {
+                gen_args.extend_from_slice(&["-gpu", gpu_str.as_str()]);
+            }
+            if is_vt {
+                gen_args.extend_from_slice(&["-allow_sw", "1"]);
+            }
             if hdr {
                 gen_args.extend_from_slice(&["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]);
             }
@@ -832,16 +852,25 @@ pub fn detect_gpu_capabilities(ffmpeg: &str, gpu_count: usize) -> Vec<serde_json
                 continue;
             }
 
-            // Step 2: Full decode (CUDA hwaccel) + encode pipeline
+            // Step 2: Full decode + encode pipeline
             let mut enc_args = vec![
                 "-hide_banner", "-loglevel", "error", "-y",
-                "-hwaccel", "cuda", "-hwaccel_device", gpu_str.as_str(),
-                "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16",
-                "-i", test_path.as_str(),
-                "-c:v", "hevc_nvenc", "-gpu", gpu_str.as_str(),
-                "-rc", "vbr", "-cq", "28", "-preset", "p4",
-                "-multipass", "qres", "-spatial-aq", "1", "-aq-strength", "8",
             ];
+            // CUDA hwaccel only for NVENC
+            if is_nvenc {
+                enc_args.extend_from_slice(&[
+                    "-hwaccel", "cuda", "-hwaccel_device", gpu_str.as_str(),
+                    "-hwaccel_output_format", "cuda", "-extra_hw_frames", "16",
+                ]);
+            }
+            enc_args.extend_from_slice(&["-i", test_path.as_str(), "-c:v", hw_encoder]);
+            if is_nvenc {
+                enc_args.extend_from_slice(&["-gpu", gpu_str.as_str(), "-rc", "vbr", "-cq", "28", "-preset", "p4",
+                    "-multipass", "qres", "-spatial-aq", "1", "-aq-strength", "8"]);
+            }
+            if is_vt {
+                enc_args.extend_from_slice(&["-allow_sw", "1", "-b:v", "5M"]);
+            }
             if hdr {
                 enc_args.extend_from_slice(&["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"]);
             }
@@ -892,6 +921,9 @@ fn probe_encoder(ffmpeg: &str, encoder: &str, full_flags: bool) -> bool {
         if full_flags {
             args.extend_from_slice(&["-temporal-aq", "1"]);
         }
+    }
+    if encoder.contains("videotoolbox") {
+        args.extend_from_slice(&["-allow_sw", "1"]);
     }
     args.extend_from_slice(&["-f", "null", "-"]);
     match std::process::Command::new(ffmpeg).args(&args).output() {
