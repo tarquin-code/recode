@@ -987,7 +987,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <nav class="settings-nav">
                 <div class="settings-nav-item active" onclick="switchHelpTab('getting-started',this)">Getting Started</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('encoding',this)">Encoding</div>
-                <div class="settings-nav-item" onclick="switchHelpTab('audio',this)">Audio</div>
+                <div class="settings-nav-item" onclick="switchHelpTab('audio',this)">Audio &amp; Subtitles</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('dolby-vision',this)">Dolby Vision</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('gpu',this)">GPU &amp; Remote</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('profiles',this)">Profiles</div>
@@ -1070,7 +1070,15 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <ul>
                     <li><strong>Codec Options</strong> &mdash; Passthrough, Opus, AAC, AC3, EAC3</li>
                     <li><strong>Per-Stream Control</strong> &mdash; Configure codec and bitrate per audio track</li>
-                    <li><strong>Filters</strong> &mdash; All tracks, first only, English only, or specific language</li>
+                    <li><strong>Language Filter</strong> &mdash; Keep all or selected languages (comma-separated codes)</li>
+                    <li><strong>Type Filter</strong> &mdash; Filter by TrueHD, EAC3, AC3, stereo, surround</li>
+                </ul>
+
+                <h4>Subtitles</h4>
+                <ul>
+                    <li><strong>Per-Stream Control</strong> &mdash; Include/exclude individual subtitle tracks</li>
+                    <li><strong>Language Filter</strong> &mdash; Keep all, selected languages, or discard all</li>
+                    <li><strong>Profile Support</strong> &mdash; Settings in default profile and per-library profiles</li>
                 </ul>
 
                 <h4>Multi-GPU &amp; Remote</h4>
@@ -1370,13 +1378,45 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </ul>
                 <p>When set to "Default", the bitrate selector is disabled since the sidebar default applies.</p>
 
-                <h4>English Only</h4>
-                <p>When enabled, non-English audio tracks are automatically excluded. This can significantly reduce file size for media with many language tracks.</p>
+                <h4>Audio Language Filter</h4>
+                <p>Controls which audio tracks to keep by language:</p>
+                <ul>
+                    <li><strong>Keep all languages</strong> &mdash; Include all audio tracks (default)</li>
+                    <li><strong>Keep selected languages</strong> &mdash; Only include tracks matching the specified language codes (comma-separated, e.g. <code>eng, spa, fre</code>). Tracks with "und" (undefined) language are always included.</li>
+                </ul>
+                <p>Available in the sidebar, default profile (Settings), and per-library profiles.</p>
 
                 <h4>Keep Only Audio Type</h4>
                 <p>Filters which audio streams are included by codec type. For example, set to "EAC3" to only keep EAC3 tracks and drop TrueHD, AAC, etc.</p>
 
                 <div class="warn-tip"><strong>Dolby Vision + Audio:</strong> When encoding DV content, use <strong>Passthrough</strong> for audio. Re-encoding audio (even to EAC3) can prevent devices like Fire Stick from triggering the DV playback pipeline.</div>
+
+                <h3 style="margin-top:20px;">Subtitle Settings</h3>
+
+                <h4>Subtitle Mode</h4>
+                <p>Controls how subtitles are handled during encoding:</p>
+                <div class="example-box">
+                    <div style="display:grid;gap:8px;">
+                        <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--success);">
+                            <div style="font-weight:600;">Keep all subtitles</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">All subtitle tracks are included in the output (default).</div>
+                        </div>
+                        <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--warning);">
+                            <div style="font-weight:600;">Keep selected languages</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Only include subtitle tracks matching the specified language codes (e.g. <code>eng, spa</code>). Tracks with "und" language are always included.</div>
+                        </div>
+                        <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--error);">
+                            <div style="font-weight:600;">Discard all subtitles</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">No subtitle tracks in the output. Reduces file size.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <h4>Per-Stream Override</h4>
+                <p>Expand any file in the scan results to see individual subtitle tracks. Toggle the checkbox to include or exclude specific tracks, or use the <strong>Include All</strong> / <strong>Exclude All</strong> buttons.</p>
+
+                <h4>Profile Support</h4>
+                <p>Subtitle settings are available in the sidebar (session), default profile (Settings &rarr; Encode Defaults), and per-library profiles. Library profiles override the default for specific Plex libraries.</p>
             </div>
 
             <!-- DOLBY VISION -->
@@ -1813,6 +1853,18 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
                 <h4>Auto-Start Queue</h4>
                 <p>By default, the queue starts <strong>paused</strong> after a server restart. You must click Start to begin encoding. Enable "Auto-start queue on server restart" in Settings &rarr; General to start automatically.</p>
+
+                <h4>Scan Results</h4>
+                <ul>
+                    <li><strong>Status column</strong> &mdash; Shows "Encoded" (file has RECODE metadata tag) or "Candidate" (ready to encode). The tag is embedded in the MKV container during encoding and survives file renames, moves, and suffix changes.</li>
+                    <li><strong>Status filter</strong> &mdash; Filter scan results by "Encode Candidate" or "Already Encoded" using the Status dropdown.</li>
+                    <li><strong>Duration column</strong> &mdash; Movie/episode length, sortable by column header or dropdown (Longest/Shortest first).</li>
+                    <li><strong>Delete files</strong> &mdash; Delete individual files (X button per row) or bulk delete selected files ("Delete Selected from Disk" button). Both require two-step confirmation. Only files under configured allowed paths can be deleted.</li>
+                    <li><strong>Per-stream control</strong> &mdash; Expand any file to configure audio tracks (codec, bitrate, include/exclude) and subtitle tracks (include/exclude) individually.</li>
+                </ul>
+
+                <h4>Cancel All</h4>
+                <p>The encoding list shows a "Cancel All" button when 2+ encodes are active. This cancels all running encodes without stopping the queue &mdash; new jobs will be picked up automatically.</p>
             </div>
 
             <!-- INTERFACE -->
