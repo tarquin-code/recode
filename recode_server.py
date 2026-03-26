@@ -1319,19 +1319,16 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
             cmd += ["-threads", str(cpu_threads)]
     elif is_videotoolbox:
         # Apple VideoToolbox hardware encoder
-        # Map CQ (lower=better, 0-51) to VT quality (higher=better, 1-100)
-        vt_quality = max(1, min(100, int(100 - (cq * 1.8))))
+        # Use bitrate-based encoding (FFmpeg 8+ dropped -q:v for VideoToolbox)
         if is_h264:
             cmd += [
                 "-c:v", "h264_videotoolbox",
-                "-q:v", str(vt_quality),
                 "-b:v", maxbitrate,
                 "-allow_sw", "1",
             ]
         else:
             cmd += [
                 "-c:v", "hevc_videotoolbox",
-                "-q:v", str(vt_quality),
                 "-b:v", maxbitrate,
                 "-tag:v", "hvc1",
                 "-allow_sw", "1",
@@ -2880,7 +2877,12 @@ async def encode_worker(worker_id: int):
                 connected_gpus = [g for g in _ls.get("gpus", []) if g.get("online")]
                 if connected_gpus:
                     use_remote_listener = True
-                    log.info(f"[{job.id}] Using remote GPU via listener ({len(connected_gpus)} GPUs available)")
+                    # Set encoder type from target GPU (for VideoToolbox vs NVENC command building)
+                    target_name = settings.get("_remote_gpu_name", "")
+                    target_gpu = next((g for g in connected_gpus if g.get("name") == target_name), connected_gpus[0] if connected_gpus else None)
+                    if target_gpu:
+                        settings["_remote_encoder_type"] = target_gpu.get("encoder_type", "nvenc")
+                    log.info(f"[{job.id}] Using remote GPU via listener ({len(connected_gpus)} GPUs available, encoder={settings.get('_remote_encoder_type', 'nvenc')})")
                 else:
                     # No remote GPUs — put job back in queue and wait
                     log.info(f"[{job.id}] No remote GPUs connected — waiting in queue")
@@ -6763,21 +6765,39 @@ async def folder_watcher():
                     else:
                         merged = defaults
                     file_settings = merged
-                    # Build per-stream audio config from profile settings
+                    # Build per-stream audio config from profile language settings
                     fw_audio_codec = merged.get("audio_codec", "libopus")
                     fw_audio_bitrate = merged.get("audio_bitrate", "448k")
-                    fw_english_only = merged.get("english_only", False)
+                    fw_audio_lang_mode = merged.get("audio_lang_mode", "all")
+                    fw_audio_langs = set(l.strip().lower() for l in merged.get("audio_langs", "eng").split(",") if l.strip())
                     fw_audio_cfg = []
                     for ai, astream in enumerate(info.audio_streams):
-                        lang = astream.get("language", "").lower()
-                        is_eng = lang in ("eng", "en", "english", "")
+                        lang = astream.get("language", "und").lower()
+                        if fw_audio_lang_mode == "langs":
+                            include = lang in fw_audio_langs or lang in ("und", "")
+                        else:
+                            include = True
                         fw_audio_cfg.append({
                             "index": ai,
-                            "include": (not fw_english_only) or is_eng,
+                            "include": include,
                             "codec": fw_audio_codec,
                             "bitrate": fw_audio_bitrate,
                         })
                     file_settings["audio_config"] = fw_audio_cfg
+                    # Build per-stream subtitle config from profile language settings
+                    fw_sub_mode = merged.get("subtitle_mode", "all")
+                    fw_sub_langs = set(l.strip().lower() for l in merged.get("subtitle_langs", "eng").split(",") if l.strip())
+                    fw_sub_cfg = []
+                    for si, sstream in enumerate(info.sub_streams):
+                        lang = sstream.get("language", "und").lower()
+                        if fw_sub_mode == "none":
+                            include = False
+                        elif fw_sub_mode == "langs":
+                            include = lang in fw_sub_langs or lang in ("und", "")
+                        else:
+                            include = True
+                        fw_sub_cfg.append({"index": si, "include": include})
+                    file_settings["subtitle_config"] = fw_sub_cfg
                     # Pre-resolve preset for display
                     fw_preset = file_settings.get("preset", "auto")
                     if fw_preset in ("auto",) or fw_preset in PRESETS:
@@ -7191,17 +7211,22 @@ async def _webhook_queue_file(file_path: str) -> Optional[dict]:
     else:
         merged = defaults
 
-    file_settings = {k: v for k, v in merged.items() if k not in ("english_only",)}
-    english_only = merged.get("english_only", False)
+    file_settings = {k: v for k, v in merged.items()}
     profile_audio_codec = merged.get("audio_codec", "libopus")
     profile_audio_bitrate = merged.get("audio_bitrate", "448k")
+    audio_lang_mode = merged.get("audio_lang_mode", "all")
+    audio_langs = set(l.strip().lower() for l in merged.get("audio_langs", "eng").split(",") if l.strip())
+    subtitle_mode = merged.get("subtitle_mode", "all")
+    subtitle_langs = set(l.strip().lower() for l in merged.get("subtitle_langs", "eng").split(",") if l.strip())
 
-    # Always build per-stream audio config for automated paths
+    # Build per-stream audio config using profile language settings
     audio_cfg = []
     for i, astream in enumerate(info.audio_streams):
-        lang = astream.get("language", "").lower()
-        is_english = lang in ("eng", "en", "english", "")
-        include = (not english_only) or is_english
+        lang = astream.get("language", "und").lower()
+        if audio_lang_mode == "langs":
+            include = lang in audio_langs or lang in ("und", "")
+        else:
+            include = True
         audio_cfg.append({
             "index": i,
             "include": include,
@@ -7209,6 +7234,19 @@ async def _webhook_queue_file(file_path: str) -> Optional[dict]:
             "bitrate": profile_audio_bitrate,
         })
     file_settings["audio_config"] = audio_cfg
+
+    # Build per-stream subtitle config using profile language settings
+    sub_cfg = []
+    for i, sstream in enumerate(info.sub_streams):
+        lang = sstream.get("language", "und").lower()
+        if subtitle_mode == "none":
+            include = False
+        elif subtitle_mode == "langs":
+            include = lang in subtitle_langs or lang in ("und", "")
+        else:
+            include = True
+        sub_cfg.append({"index": i, "include": include})
+    file_settings["subtitle_config"] = sub_cfg
 
     # Pre-resolve preset for display
     p_name = file_settings.get("preset", "auto")
