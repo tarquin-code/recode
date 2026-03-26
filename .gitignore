@@ -20,3 +20,4 @@ remote-gpu/
 requirements.txt
 venv/
 lib/
+mac-app/
