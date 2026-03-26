@@ -50,6 +50,8 @@ struct JobRequest {
     /// Local paths to actual files (for serving reads)
     local_paths: Vec<String>,
     output_path: String,
+    /// Shell commands to run after ffmpeg (e.g. DV RPU injection)
+    post_commands: Vec<String>,
 }
 
 pub async fn run(port: u16, secret: String, status_file: String) -> Result<()> {
@@ -159,11 +161,14 @@ async fn watch_job_files(state: Arc<ListenerState>, jobs_dir: PathBuf) {
                             .map(|a: &Vec<serde_json::Value>| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                             .unwrap_or_default();
                         let output_path = job["output_path"].as_str().unwrap_or("").to_string();
+                        let post_commands: Vec<String> = job["post_commands"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
 
                         let target_gpu = job["target_gpu"].as_str().unwrap_or("").to_string();
 
-                        info!("Job file received: {} ({} inputs, target={})", job_id, input_files.len(), if target_gpu.is_empty() { "any" } else { &target_gpu });
-                        dispatch_job(&state, job_id, ffmpeg_args, input_files, local_paths, output_path, &target_gpu).await;
+                        info!("Job file received: {} ({} inputs, target={}, post_cmds={})", job_id, input_files.len(), if target_gpu.is_empty() { "any" } else { &target_gpu }, post_commands.len());
+                        dispatch_job(&state, job_id, ffmpeg_args, input_files, local_paths, output_path, post_commands, &target_gpu).await;
                     }
                 }
                 Err(e) => { warn!("Failed to read job file {:?}: {}", path, e); }
@@ -180,6 +185,7 @@ async fn dispatch_job(
     input_files: Vec<FileInfo>,
     local_paths: Vec<String>,
     output_path: String,
+    post_commands: Vec<String>,
     target_gpu: &str,
 ) {
     let gpus = state.gpus.read().await;
@@ -264,6 +270,7 @@ async fn dispatch_job(
         input_files: input_files.clone(),
         local_paths,
         output_path: output_path.clone(),
+        post_commands: post_commands.clone(),
     });
 
     // Send assignment over control channel
@@ -274,6 +281,7 @@ async fn dispatch_job(
         input_files,
         output_path,
         connect_port: port,
+        post_commands,
     };
     if job_tx.send(assignment).await.is_err() {
         warn!("Failed to send job {} to GPU", job_id);

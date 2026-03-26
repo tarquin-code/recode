@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.21.2"
+VERSION = "2.21.3"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -136,6 +136,34 @@ def build_encode_tag(video_codec: str, info: dict, dv_mode: str = "skip", resize
 def is_encoded_output(filename: str) -> bool:
     """Check if a filename looks like one of our encoded outputs."""
     return bool(ENCODE_TAG_RE.search(os.path.splitext(filename)[0]))
+
+MANIFEST_NAME = ".recode.json"
+
+def read_recode_manifest(directory: str) -> dict:
+    """Read the .recode.json manifest from a directory. Returns {source_filename: {...info...}}."""
+    mpath = os.path.join(directory, MANIFEST_NAME)
+    try:
+        with open(mpath) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def write_recode_manifest_entry(source_path: str, output_path: str, version: str = None):
+    """Add/update an entry in the .recode.json manifest for a completed encode."""
+    directory = os.path.dirname(source_path)
+    source_name = os.path.basename(source_path)
+    mpath = os.path.join(directory, MANIFEST_NAME)
+    manifest = read_recode_manifest(directory)
+    manifest[source_name] = {
+        "output": os.path.basename(output_path),
+        "encoded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "version": version or VERSION,
+    }
+    try:
+        with open(mpath, "w") as f:
+            json.dump(manifest, f, indent=2)
+    except Exception as e:
+        log.warning(f"Failed to write recode manifest: {e}")
 
 PRESETS = {
     "stream":    {"cq": 20, "maxbitrate": "25M", "speed": "p6", "desc": "High quality 1080p streaming"},
@@ -275,6 +303,11 @@ APP_DEFAULTS = {
     "audio_codec": "libopus",
     "audio_bitrate": "448k",
     "english_only": False,
+    "audio_lang_mode": "all",  # "all" or "langs"
+    "audio_langs": "eng",
+    # Subtitle defaults
+    "subtitle_mode": "all",  # "all", "langs", or "none"
+    "subtitle_langs": "eng",
     # Concurrent encoding
     "max_concurrent_encodes": 1,
     "auto_start_queue": False,
@@ -467,6 +500,8 @@ class QueueAddRequest(BaseModel):
     tmp_dir: str = "/var/lib/plex/tmp"
     # Per-file audio config: { "filepath": [ {index, include, codec, bitrate}, ... ] }
     audio_config: dict[str, list[AudioStreamConfig]] = {}
+    # Per-file subtitle config: { "filepath": [ {index, include}, ... ] }
+    subtitle_config: dict[str, list[dict]] = {}
     # Pre-built file info from scan results (avoids re-probing)
     file_info: dict[str, dict] = {}
 
@@ -520,6 +555,7 @@ class FileInfo:
     dovi_profile: Optional[int]
     hdr10_metadata: dict
     output_exists: bool
+    recode_tag: str = ""
 
 
 @dataclass
@@ -562,6 +598,7 @@ async def probe_file(path: str) -> dict:
         "-show_entries", "stream_tags=language,title",
         "-show_entries", "stream_side_data=side_data_type",
         "-show_entries", "format=duration,bit_rate",
+        "-show_entries", "format_tags=RECODE",
         "-of", "json",
         path
     ]
@@ -813,12 +850,9 @@ async def get_file_info(path: str) -> Optional[FileInfo]:
     size = p.stat().st_size
     nameonly = p.stem
     dirname = str(p.parent)
-    # Check for any encoded output (old _Streamer or new tagged format)
-    output_exists = False
-    for f in Path(dirname).iterdir() if Path(dirname).is_dir() else []:
-        if f.stem.startswith(nameonly) and f.stem != nameonly and is_encoded_output(f.name):
-            output_exists = True
-            break
+    # Check if this file was encoded by Recode — RECODE metadata tag in MKV container
+    recode_tag = fmt.get("tags", {}).get("RECODE", "")
+    output_exists = bool(recode_tag)
 
     return FileInfo(
         path=path,
@@ -843,6 +877,7 @@ async def get_file_info(path: str) -> Optional[FileInfo]:
         dovi_profile=dovi_profile,
         hdr10_metadata=hdr10_metadata,
         output_exists=output_exists,
+        recode_tag=recode_tag,
     )
 
 
@@ -963,6 +998,12 @@ def get_cache_db() -> sqlite3.Connection:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # column already exists
+    # Migrate: add recode_tag column if missing
+    try:
+        conn.execute("ALTER TABLE file_cache ADD COLUMN recode_tag TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     return conn
 
 
@@ -974,8 +1015,8 @@ def save_to_cache(conn: sqlite3.Connection, info: "FileInfo", suggestion: dict):
             (path, mtime, size_bytes, filename, dirname, size_human, codec, width, height,
              resolution_label, pix_fmt, hdr_type, is_hdr, color_transfer, color_primaries,
              duration_secs, audio_streams, sub_streams, is_hevc, has_dovi, dovi_profile,
-             suggestion_level, suggestion_text, savings_pct)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             suggestion_level, suggestion_text, savings_pct, recode_tag)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (info.path, st.st_mtime, info.size_bytes, info.filename, info.dirname,
              info.size_human, info.codec, info.width, info.height,
              info.resolution_label, info.pix_fmt, info.hdr_type, int(info.is_hdr),
@@ -983,7 +1024,8 @@ def save_to_cache(conn: sqlite3.Connection, info: "FileInfo", suggestion: dict):
              json.dumps(info.audio_streams), json.dumps(info.sub_streams),
              int(info.is_hevc), int(info.has_dovi),
              info.dovi_profile,
-             suggestion.get("level"), suggestion.get("text", ""), suggestion.get("savings_pct", 0)))
+             suggestion.get("level"), suggestion.get("text", ""), suggestion.get("savings_pct", 0),
+             info.recode_tag))
         conn.commit()
     except Exception:
         pass
@@ -994,14 +1036,12 @@ def cache_row_to_dict(row: sqlite3.Row) -> dict:
     p = Path(row["path"])
     nameonly = p.stem
     dirname = Path(row["dirname"])
-    output_exists = False
+    # Check RECODE metadata tag from cache
     try:
-        for f in dirname.iterdir():
-            if f.stem.startswith(nameonly) and f.stem != nameonly and is_encoded_output(f.name):
-                output_exists = True
-                break
-    except OSError:
-        pass
+        recode_tag = row["recode_tag"] or ""
+    except (IndexError, KeyError):
+        recode_tag = ""
+    output_exists = bool(recode_tag)
     return {
         "path": row["path"],
         "filename": row["filename"],
@@ -1234,18 +1274,26 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
 
     # Map subtitles — skip streams with unsupported codecs (e.g. codec 94213)
     # mov_text (tx3g) is MP4-only and must be converted to srt for MKV output
+    # Respects subtitle_config if provided (include/exclude per track)
     supported_sub_codecs = {"srt", "subrip", "ass", "ssa", "mov_text", "webvtt", "dvd_subtitle", "dvdsub", "hdmv_pgs_subtitle", "pgssub", "text", "ttml"}
     sub_streams = info.get("sub_streams", [])
+    sub_config = settings.get("subtitle_config", [])
     sub_codec_overrides = []
     mapped_sub_idx = 0
     if sub_streams:
         for ss in sub_streams:
             codec = ss["codec"].lower()
-            if codec in supported_sub_codecs:
-                cmd += ["-map", f"0:s:{ss['index']}"]
-                if codec == "mov_text":
-                    sub_codec_overrides += [f"-c:s:{mapped_sub_idx}", "srt"]
-                mapped_sub_idx += 1
+            if codec not in supported_sub_codecs:
+                continue
+            # Check subtitle_config — if provided, only include tracks marked as include
+            if sub_config:
+                scfg = next((sc for sc in sub_config if sc.get("index") == ss["index"]), None)
+                if scfg and not scfg.get("include", True):
+                    continue
+            cmd += ["-map", f"0:s:{ss['index']}"]
+            if codec == "mov_text":
+                sub_codec_overrides += [f"-c:s:{mapped_sub_idx}", "srt"]
+            mapped_sub_idx += 1
     else:
         # No sub stream info (e.g. old queue entries) — skip subs to avoid codec 94213 failures
         pass
@@ -1432,6 +1480,7 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
     # Subtitles + misc — copy by default, with per-stream overrides for mov_text→srt
     cmd += ["-c:s", "copy"]
     cmd += sub_codec_overrides
+    cmd += ["-metadata", f"RECODE={VERSION}"]
     cmd += ["-max_muxing_queue_size", "9999"]
 
     # Progress output — remote jobs use -stats on stderr since pipe:1 doesn't tunnel
@@ -1745,6 +1794,7 @@ class EncodeQueue:
             "queue_enabled": self.queue_enabled,
             "queue_count": len(queued),
             "active_count": len(active),
+            "gpu_scan_complete": _gpu_scan_complete,
         }
 
     async def cancel_job(self, job_id: str = None):
@@ -1871,46 +1921,49 @@ def _seed_gpu_info():
 
 # Vulkan/libplacebo test — run once at startup
 _has_libplacebo = False
-try:
-    _lp_test = subprocess.run(
-        [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-         "-f", "lavfi", "-i", "color=black:s=1920x1080:d=2:r=25",
-         "-frames:v", "50", "-init_hw_device", "vulkan",
-         "-vf", "hwupload,libplacebo=format=yuv420p10le,hwdownload,format=yuv420p10le",
-         "-c:v", "libx265", "-f", "null", "-"],
-        capture_output=True, text=True, timeout=30
-    )
-    _has_libplacebo = _lp_test.returncode == 0
-except Exception:
-    pass
 _vulkan_is_software = False
-if _has_libplacebo:
-    # Check if Vulkan is using a real GPU or software fallback (llvmpipe)
-    # Use device index 0 to match how encode commands target specific GPUs
+_gpu_scan_complete = False
+
+def _run_vulkan_test():
+    """Test Vulkan/libplacebo availability. Called from background startup scan."""
+    global _has_libplacebo, _vulkan_is_software
     try:
-        _vk_probe = subprocess.run(
-            [FFMPEG, "-hide_banner", "-loglevel", "verbose",
-             "-init_hw_device", "vulkan=vk:0",
-             "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.01",
+        _lp_test = subprocess.run(
+            [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "lavfi", "-i", "color=black:s=1920x1080:d=2:r=25",
+             "-frames:v", "50", "-init_hw_device", "vulkan",
              "-vf", "hwupload,libplacebo=format=yuv420p10le,hwdownload,format=yuv420p10le",
-             "-f", "null", "-"],
-            capture_output=True, text=True, timeout=15
+             "-c:v", "libx265", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=30
         )
-        _vk_out = _vk_probe.stderr or ""
-        import re as _re
-        _vk_dev = _re.search(r'Using device:\s*(.+)', _vk_out)
-        _vk_dev_name = _vk_dev.group(1).strip() if _vk_dev else ""
-        if "llvmpipe" in _vk_dev_name or "software" in _vk_dev_name.lower():
-            _vulkan_is_software = True
-            log.warning(f"Vulkan/libplacebo: using SOFTWARE renderer ({_vk_dev_name}) — install mesa-dri-drivers mesa-libEGL mesa-libgbm mesa-libGL libXext for GPU Vulkan")
-        elif _vk_dev_name:
-            log.info(f"Vulkan/libplacebo: functional — {_vk_dev_name}")
-        else:
-            log.info("Vulkan/libplacebo: functional")
+        _has_libplacebo = _lp_test.returncode == 0
     except Exception:
-        log.info("Vulkan/libplacebo: functional")
-else:
-    log.info("Vulkan/libplacebo: not available — DV P5 will use HDR10 fallback")
+        pass
+    if _has_libplacebo:
+        try:
+            _vk_probe = subprocess.run(
+                [FFMPEG, "-hide_banner", "-loglevel", "verbose",
+                 "-init_hw_device", "vulkan=vk:0",
+                 "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.01",
+                 "-vf", "hwupload,libplacebo=format=yuv420p10le,hwdownload,format=yuv420p10le",
+                 "-f", "null", "-"],
+                capture_output=True, text=True, timeout=15
+            )
+            _vk_out = _vk_probe.stderr or ""
+            import re as _re
+            _vk_dev = _re.search(r'Using device:\s*(.+)', _vk_out)
+            _vk_dev_name = _vk_dev.group(1).strip() if _vk_dev else ""
+            if "llvmpipe" in _vk_dev_name or "software" in _vk_dev_name.lower():
+                _vulkan_is_software = True
+                log.warning(f"Vulkan/libplacebo: using SOFTWARE renderer ({_vk_dev_name}) — install mesa-dri-drivers mesa-libEGL mesa-libgbm mesa-libGL libXext for GPU Vulkan")
+            elif _vk_dev_name:
+                log.info(f"Vulkan/libplacebo: functional — {_vk_dev_name}")
+            else:
+                log.info("Vulkan/libplacebo: functional")
+        except Exception:
+            log.info("Vulkan/libplacebo: functional")
+    else:
+        log.info("Vulkan/libplacebo: not available — DV P5 will use HDR10 fallback")
 
 def _get_vulkan_version():
     import re, glob
@@ -1996,10 +2049,24 @@ def _test_gpu_capabilities():
         _gpu_capabilities[gpu] = caps
     log.info(f"Local GPU capabilities: {_gpu_capabilities}")
 
-_test_gpu_capabilities()
+def _run_startup_gpu_scan():
+    """Run all GPU tests (Vulkan + capabilities) in background. Called from startup event."""
+    global _gpu_scan_complete
+    log.info("Background GPU scan starting...")
+    _run_vulkan_test()
+    _test_gpu_capabilities()
+    _gpu_scan_complete = True
+    log.info("Background GPU scan complete")
+
+# Not called at module load — deferred to startup event for fast server start
 
 def gpu_can_handle(gpu_idx: int, is_4k: bool, is_hdr: bool, is_10bit: bool = False) -> bool:
-    """Check if a GPU can handle this job based on capability test results."""
+    """Check if a GPU can handle this job based on capability test results and VRAM."""
+    # VRAM-based guard: GPUs with < 3GB can't reliably handle 4K (test passes but real content OOMs)
+    if is_4k:
+        vram = per_gpu_info.get(gpu_idx, {}).get("mem_total", 0)
+        if 0 < vram < 3072:
+            return False
     caps = _gpu_capabilities.get(gpu_idx)
     if not caps:
         return True  # no test data — assume capable
@@ -2984,11 +3051,11 @@ async def encode_worker(worker_id: int):
                 _finish_job(JobStatus.FAILED, error_msg or f"Remote encode failed (exit {exit_code})")
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
                 continue
-            # Output file is at tmp_output — run DV post-processing if needed, then move
+            # Output file is at tmp_output — run DV post-processing locally if needed, then move
             if os.path.exists(tmp_output):
                 orig_bytes = info.get("size_bytes", 0)
 
-                # DV RPU injection for remote encode_dv jobs (same as local path)
+                # DV RPU injection for remote encode_dv jobs (runs locally — source file is on local disk)
                 _dv_mode = settings.get("dv_mode", "skip")
                 _dovi_profile = info.get("dovi_profile")
                 _is_dv = info.get("hdr_type", "").startswith("Dolby Vision")
@@ -2996,8 +3063,8 @@ async def encode_worker(worker_id: int):
                 if _needs_dv_inject:
                     _is_p5 = _dovi_profile == 5
                     _dv_label = f"DV P{_dovi_profile}→P8.4"
-                    log.info(f"[{job.id}] {_dv_label} — RPU injection starting (remote post-process)")
-                    encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (remote post-process) ===")
+                    log.info(f"[{job.id}] {_dv_label} — RPU injection starting (local post-process)")
+                    encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (local post-process) ===")
                     await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
                     tmp_dir = app_settings.get("tmp_dir", "/var/lib/plex/tmp")
                     src_path = info["path"]
@@ -3007,7 +3074,6 @@ async def encode_worker(worker_id: int):
                     remuxed_mkv = os.path.join(tmp_dir, f"{job.id}_dv.mkv")
                     dovi_cleanup = [rpu_bin, encoded_hevc, injected_hevc, remuxed_mkv]
                     try:
-                        # Step 1: Extract RPU from source
                         _dovi_mode_str = " -m 4"
                         _rpu_duration = "-t 300 " if app_settings.get("test_mode") else ""
                         log.info(f"[{job.id}] {_dv_label} step 1/4: extracting RPU")
@@ -3024,7 +3090,6 @@ async def encode_worker(worker_id: int):
                             raise RuntimeError(f"RPU extraction failed: {dovi_err.decode(errors='replace')[-200:]}")
                         encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU extracted ({human_size(os.path.getsize(rpu_bin))})")
 
-                        # Step 2: Extract raw HEVC from encoded file
                         log.info(f"[{job.id}] {_dv_label} step 2/4: extracting HEVC bitstream")
                         encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 2/4: extracting HEVC bitstream...")
                         p = await asyncio.create_subprocess_exec(
@@ -3034,9 +3099,7 @@ async def encode_worker(worker_id: int):
                         _, stderr_out = await p.communicate()
                         if p.returncode != 0:
                             raise RuntimeError(f"HEVC extract failed: {stderr_out.decode(errors='replace')[-200:]}")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"HEVC extracted ({human_size(os.path.getsize(encoded_hevc))})")
 
-                        # Step 3: Inject RPU into encoded HEVC
                         log.info(f"[{job.id}] {_dv_label} step 3/4: injecting RPU")
                         encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 3/4: injecting RPU...")
                         p = await asyncio.create_subprocess_exec(
@@ -3045,12 +3108,9 @@ async def encode_worker(worker_id: int):
                         _, stderr_out = await p.communicate()
                         if p.returncode != 0:
                             raise RuntimeError(f"RPU inject failed: {stderr_out.decode(errors='replace')[-200:]}")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU injected ({human_size(os.path.getsize(injected_hevc))})")
                         for f in [encoded_hevc, rpu_bin]:
-                            if os.path.exists(f):
-                                os.remove(f)
+                            if os.path.exists(f): os.remove(f)
 
-                        # Step 4: Mux with mkvmerge
                         log.info(f"[{job.id}] {_dv_label} step 4/4: muxing with mkvmerge")
                         encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 4/4: muxing with mkvmerge...")
                         mkvmerge_bin = _find_bin("mkvmerge") if os.path.isfile(_find_bin("mkvmerge")) else None
@@ -3059,52 +3119,40 @@ async def encode_worker(worker_id: int):
                                 mkvmerge_bin, "-o", remuxed_mkv,
                                 injected_hevc, "-D", tmp_output,
                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                            stdout_out, stderr_out = await p.communicate()
+                            _, stderr_out = await p.communicate()
                             if p.returncode > 1:
                                 raise RuntimeError(f"mkvmerge failed (exit {p.returncode}): {stderr_out.decode(errors='replace')[-200:]}")
                         else:
-                            raise RuntimeError("mkvmerge not found — required for DV muxing")
-
-                        if os.path.exists(injected_hevc):
-                            os.remove(injected_hevc)
-
-                        # Patch dvvC compatibility_id
+                            raise RuntimeError("mkvmerge not found")
+                        if os.path.exists(injected_hevc): os.remove(injected_hevc)
                         patch_dvvc_compat_id(remuxed_mkv, 4)
-
                         os.remove(tmp_output)
                         shutil.move(remuxed_mkv, tmp_output)
-                        new_bytes = os.path.getsize(tmp_output)
-                        log.info(f"[{job.id}] {_dv_label} complete — final size {human_size(new_bytes)}")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"{_dv_label} complete — {human_size(new_bytes)}")
-
+                        log.info(f"[{job.id}] {_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
+                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"{_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
                     except Exception as e:
                         log.error(f"[{job.id}] {_dv_label} failed: {e}")
                         encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"DV conversion failed: {e}")
                         for f in dovi_cleanup:
-                            if os.path.exists(f):
-                                os.remove(f)
-                        if os.path.exists(tmp_output):
-                            os.remove(tmp_output)
+                            if os.path.exists(f): os.remove(f)
+                        if os.path.exists(tmp_output): os.remove(tmp_output)
                         _finish_job(JobStatus.FAILED, f"{_dv_label} failed")
                         await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
                         continue
                     finally:
                         for f in dovi_cleanup:
-                            if os.path.exists(f):
-                                os.remove(f)
+                            if os.path.exists(f): os.remove(f)
 
-                # HDR10 → DV P8.4 upgrade for remote jobs (generate RPU from HDR10 metadata)
-                if (
-                    _dv_mode == "encode_dv"
-                    and not _is_dv
-                    and info.get("is_hdr", False)
-                    and info.get("hdr_type", "") == "HDR10"
+                # HDR10 → DV P8.4 upgrade (runs locally)
+                _needs_dv_upgrade = (
+                    _dv_mode == "encode_dv" and not _is_dv
+                    and info.get("is_hdr", False) and info.get("hdr_type", "") == "HDR10"
                     and os.path.exists(tmp_output)
-                ):
+                )
+                if _needs_dv_upgrade:
                     _dv_label = "HDR10→DV P8.4"
-                    log.info(f"[{job.id}] {_dv_label} — generating DV RPU from HDR10 metadata (remote post-process)")
-                    encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (remote post-process) ===")
-                    encode_queue.ffmpeg_logs.get(job.id, []).append("Probing encoded file for frame count...")
+                    log.info(f"[{job.id}] {_dv_label} — generating RPU (local post-process)")
+                    encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (local post-process) ===")
                     await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
                     tmp_dir = app_settings.get("tmp_dir", "/var/lib/plex/tmp")
                     gen_json = os.path.join(tmp_dir, f"{job.id}_dv_gen.json")
@@ -3114,7 +3162,6 @@ async def encode_worker(worker_id: int):
                     remuxed_mkv = os.path.join(tmp_dir, f"{job.id}_dv.mkv")
                     dovi_cleanup = [gen_json, rpu_bin, encoded_hevc, injected_hevc, remuxed_mkv]
                     try:
-                        # Get frame count
                         p = await asyncio.create_subprocess_exec(
                             FFPROBE, "-v", "error", "-select_streams", "v:0",
                             "-show_entries", "stream=nb_frames,r_frame_rate,duration",
@@ -3127,49 +3174,28 @@ async def encode_worker(worker_id: int):
                         if len(probe_parts) > 1 and probe_parts[1].strip().isdigit():
                             frame_count = int(probe_parts[1])
                         if frame_count == 0:
-                            try:
-                                frn, frd = frame_rate_str.split("/")
-                                fps = float(frn) / float(frd)
-                            except Exception:
-                                fps = 23.976
-                            dur = 0
-                            if len(probe_parts) > 2:
-                                try: dur = float(probe_parts[2])
-                                except Exception: pass
-                            if dur <= 0:
-                                dur = info.get("duration_secs", 0)
+                            try: frn, frd = frame_rate_str.split("/"); fps = float(frn) / float(frd)
+                            except Exception: fps = 23.976
+                            dur = float(probe_parts[2]) if len(probe_parts) > 2 and probe_parts[2].strip() else info.get("duration_secs", 0)
                             frame_count = int(dur * fps) or 1000
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"Frame count: {frame_count}")
 
-                        # Step 1: Generate RPU from HDR10 metadata
                         hdr_meta = info.get("hdr10_metadata", {})
-                        min_lum_nits = hdr_meta.get("min_lum", 0.005)
-                        min_lum_u16 = int(round(min_lum_nits * 10000))
-                        gen_config = {
-                            "cm_version": "V40",
-                            "length": frame_count,
-                            "level6": {
-                                "max_display_mastering_luminance": int(hdr_meta.get("max_lum", 1000)),
-                                "min_display_mastering_luminance": min_lum_u16,
-                                "max_content_light_level": int(hdr_meta.get("max_cll", 1000)),
-                                "max_frame_average_light_level": int(hdr_meta.get("max_fall", 400)),
-                            },
-                        }
-                        with open(gen_json, "w") as f:
-                            json.dump(gen_config, f, indent=2)
-                        log.info(f"[{job.id}] {_dv_label} step 1/4: generating RPU")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"DV step 1/4: generating RPU ({frame_count} frames)...")
+                        min_lum_u16 = int(round(hdr_meta.get("min_lum", 0.005) * 10000))
+                        gen_config = {"cm_version": "V40", "length": frame_count, "level6": {
+                            "max_display_mastering_luminance": int(hdr_meta.get("max_lum", 1000)),
+                            "min_display_mastering_luminance": min_lum_u16,
+                            "max_content_light_level": int(hdr_meta.get("max_cll", 1000)),
+                            "max_frame_average_light_level": int(hdr_meta.get("max_fall", 400)),
+                        }}
+                        with open(gen_json, "w") as f: json.dump(gen_config, f)
+
                         p = await asyncio.create_subprocess_exec(
                             DOVI_TOOL, "generate", "-j", gen_json, "-o", rpu_bin, "--profile", "8.4",
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                         _, stderr_out = await p.communicate()
                         if p.returncode != 0 or not os.path.exists(rpu_bin) or os.path.getsize(rpu_bin) == 0:
                             raise RuntimeError(f"RPU generation failed: {stderr_out.decode(errors='replace')[-200:]}")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU generated ({human_size(os.path.getsize(rpu_bin))})")
 
-                        # Step 2: Extract HEVC bitstream
-                        log.info(f"[{job.id}] {_dv_label} step 2/4: extracting HEVC bitstream")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 2/4: extracting HEVC bitstream...")
                         p = await asyncio.create_subprocess_exec(
                             FFMPEG, "-y", "-i", tmp_output, "-c:v", "copy", "-an", "-sn",
                             "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", encoded_hevc,
@@ -3178,9 +3204,6 @@ async def encode_worker(worker_id: int):
                         if p.returncode != 0:
                             raise RuntimeError(f"HEVC extract failed: {stderr_out.decode(errors='replace')[-200:]}")
 
-                        # Step 3: Inject RPU
-                        log.info(f"[{job.id}] {_dv_label} step 3/4: injecting RPU")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 3/4: injecting RPU...")
                         p = await asyncio.create_subprocess_exec(
                             DOVI_TOOL, "inject-rpu", "-i", encoded_hevc, "--rpu-in", rpu_bin, "-o", injected_hevc,
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -3188,47 +3211,35 @@ async def encode_worker(worker_id: int):
                         if p.returncode != 0:
                             raise RuntimeError(f"RPU inject failed: {stderr_out.decode(errors='replace')[-200:]}")
                         for f in [encoded_hevc, rpu_bin, gen_json]:
-                            if os.path.exists(f):
-                                os.remove(f)
+                            if os.path.exists(f): os.remove(f)
 
-                        # Step 4: Mux with mkvmerge
-                        log.info(f"[{job.id}] {_dv_label} step 4/4: muxing with mkvmerge")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 4/4: muxing with mkvmerge...")
                         mkvmerge_bin = _find_bin("mkvmerge") if os.path.isfile(_find_bin("mkvmerge")) else None
                         if mkvmerge_bin:
                             p = await asyncio.create_subprocess_exec(
                                 mkvmerge_bin, "-o", remuxed_mkv,
                                 injected_hevc, "-D", tmp_output,
                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                            stdout_out, stderr_out = await p.communicate()
+                            _, stderr_out = await p.communicate()
                             if p.returncode > 1:
-                                raise RuntimeError(f"mkvmerge failed (exit {p.returncode}): {stderr_out.decode(errors='replace')[-200:]}")
+                                raise RuntimeError(f"mkvmerge failed: {stderr_out.decode(errors='replace')[-200:]}")
                         else:
-                            raise RuntimeError("mkvmerge not found — required for DV muxing")
-
-                        if os.path.exists(injected_hevc):
-                            os.remove(injected_hevc)
+                            raise RuntimeError("mkvmerge not found")
+                        if os.path.exists(injected_hevc): os.remove(injected_hevc)
                         patch_dvvc_compat_id(remuxed_mkv, 4)
                         os.remove(tmp_output)
                         shutil.move(remuxed_mkv, tmp_output)
                         log.info(f"[{job.id}] {_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"{_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
-
                     except Exception as e:
                         log.error(f"[{job.id}] {_dv_label} failed: {e}")
-                        encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"DV upgrade failed: {e}")
                         for f in dovi_cleanup:
-                            if os.path.exists(f):
-                                os.remove(f)
-                        if os.path.exists(tmp_output):
-                            os.remove(tmp_output)
+                            if os.path.exists(f): os.remove(f)
+                        if os.path.exists(tmp_output): os.remove(tmp_output)
                         _finish_job(JobStatus.FAILED, f"{_dv_label} failed")
                         await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
                         continue
                     finally:
                         for f in dovi_cleanup:
-                            if os.path.exists(f):
-                                os.remove(f)
+                            if os.path.exists(f): os.remove(f)
 
                 new_bytes = os.path.getsize(tmp_output)
                 if settings.get("discard_larger") and new_bytes >= orig_bytes and orig_bytes > 0:
@@ -3253,6 +3264,8 @@ async def encode_worker(worker_id: int):
                                 except Exception as e:
                                     action = "failed to delete original"
                                     log.warning(f"[{job.id}] Failed to delete original: {e}")
+                        # Write manifest entry for this encode
+                        write_recode_manifest_entry(info["path"], output_file)
                         job.result = {
                             "output_path": output_file,
                             "orig_size": human_size(orig_bytes),
@@ -4081,6 +4094,8 @@ async def encode_worker(worker_id: int):
                     log.info(f"[{job.id}] Kept original: {info['path']}")
 
                 log.info(f"[{job.id}] Output saved: {output_file} (saved {saved_pct}%)")
+                # Write manifest entry for this encode
+                write_recode_manifest_entry(info["path"], output_file)
                 job.result = {
                     "output_path": output_file,
                     "orig_size": human_size(orig_bytes),
@@ -5193,6 +5208,11 @@ async def stop_remote_connectors():
 
 @app.on_event("startup")
 async def startup():
+    # Run GPU capability scan in background thread (non-blocking)
+    import concurrent.futures
+    _gpu_scan_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    asyncio.get_event_loop().run_in_executor(_gpu_scan_executor, _run_startup_gpu_scan)
+
     # Note: staged .new binaries are swapped by systemd ExecStartPre, not here
     # (Swapping inside the running process corrupts PyInstaller binaries)
 
@@ -5963,6 +5983,9 @@ async def queue_add(req: QueueAddRequest):
     for fpath, streams in req.audio_config.items():
         audio_cfg_dict[fpath] = [s.model_dump() for s in streams]
 
+    # Subtitle config (simple dicts, no Pydantic)
+    sub_cfg_dict = dict(req.subtitle_config)
+
     # Use pre-built file info from scan results when available, fall back to probing
     added = []
     skipped_dupes = 0
@@ -5991,10 +6014,12 @@ async def queue_add(req: QueueAddRequest):
                 "output_exists": info.output_exists,
                 "suggestion": compute_suggestion(info),
             }
-        # Attach per-file audio config if provided
+        # Attach per-file audio and subtitle config if provided
         file_settings = base_settings.copy()
         if fpath in audio_cfg_dict:
             file_settings["audio_config"] = audio_cfg_dict[fpath]
+        if fpath in sub_cfg_dict:
+            file_settings["subtitle_config"] = sub_cfg_dict[fpath]
         # Pre-resolve preset for display
         p_name = file_settings.get("preset", "auto")
         w = info_dict.get("width", 0)
@@ -6144,6 +6169,76 @@ async def queue_cancel_active():
     await encode_queue.cancel_job()  # cancel all active
     await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
     return {"ok": True}
+
+@app.post("/api/backfill-manifests")
+async def backfill_manifests(req: dict = None):
+    """Scan allowed paths for existing encoded outputs and populate .recode.json manifests."""
+    search_paths = app_settings.get("library_paths", []) + app_settings.get("allowed_paths", ["/mnt"])
+    search_paths = [p for p in search_paths if p and os.path.isdir(p)]
+    if not search_paths:
+        return {"ok": False, "error": "No library or allowed paths configured"}
+    updated = 0
+    dirs_scanned = 0
+    for base_path in search_paths:
+        for root, dirs, files in os.walk(base_path):
+            # Skip hidden dirs
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            filenames = set(files)
+            manifest = read_recode_manifest(root)
+            changed = False
+            for fname in files:
+                if not is_encoded_output(fname):
+                    continue
+                # This is an encoded output — find its source
+                stem = os.path.splitext(fname)[0]
+                # Strip the encode tag to recover original stem
+                m = ENCODE_TAG_RE.search(stem)
+                if not m:
+                    continue
+                orig_stem = stem[:m.start()]
+                # Find the source file (any video extension)
+                source_name = None
+                for ext in ('.mkv', '.mp4', '.avi', '.ts', '.m2ts', '.wmv', '.flv', '.mov'):
+                    candidate = orig_stem + ext
+                    if candidate in filenames and candidate != fname:
+                        source_name = candidate
+                        break
+                if source_name and source_name not in manifest:
+                    manifest[source_name] = {
+                        "output": fname,
+                        "encoded_at": "backfill",
+                        "version": "backfill",
+                    }
+                    changed = True
+                    updated += 1
+            if changed:
+                mpath = os.path.join(root, MANIFEST_NAME)
+                try:
+                    with open(mpath, "w") as f:
+                        json.dump(manifest, f, indent=2)
+                except Exception:
+                    pass
+            dirs_scanned += 1
+    log.info(f"Manifest backfill: {updated} entries added across {dirs_scanned} directories")
+    return {"ok": True, "updated": updated, "dirs_scanned": dirs_scanned}
+
+@app.post("/api/delete-file")
+async def delete_file(req: dict):
+    """Delete a file from disk. Used by scan results to remove unwanted files."""
+    path = req.get("path", "")
+    if not path or not os.path.isfile(path):
+        return {"ok": False, "error": "File not found"}
+    # Safety: only allow deleting files under configured library or allowed paths
+    safe_paths = app_settings.get("library_paths", []) + app_settings.get("allowed_paths", ["/mnt"])
+    if not any(path.startswith(sp.rstrip("/")) for sp in safe_paths if sp):
+        return {"ok": False, "error": "File is not under a configured library or allowed path"}
+    try:
+        os.remove(path)
+        log.info(f"Deleted file: {path}")
+        return {"ok": True}
+    except Exception as e:
+        log.error(f"Failed to delete file {path}: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 # =============================================================================
@@ -6903,7 +6998,21 @@ async def remote_client_status():
 @app.get("/api/settings")
 async def get_settings():
     """Return all app settings."""
-    return {"settings": app_settings, "plex_token_found": PLEX_TOKEN is not None}
+    # Check if any GPU (local or remote) is still scanning capabilities
+    _any_scanning = not _gpu_scan_complete
+    if not _any_scanning:
+        try:
+            _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+            if os.path.isfile(_lsf):
+                with open(_lsf) as _f:
+                    for _g in json.load(_f).get("gpus", []):
+                        # Connected but capabilities empty = still scanning
+                        if not _g.get("gpu_capabilities") and _g.get("name"):
+                            _any_scanning = True
+                            break
+        except Exception:
+            pass
+    return {"settings": app_settings, "plex_token_found": PLEX_TOKEN is not None, "gpu_scan_complete": not _any_scanning}
 
 @app.post("/api/settings")
 async def update_settings(new_settings: dict):

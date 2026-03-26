@@ -23,6 +23,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300b4d8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a9 9 0 1 1-6.219-8.56'/><polyline points='21 3 21 9 15 9'/></svg>">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Plex Re-Encoder</title>
 <style>
@@ -570,6 +571,13 @@ tr.file-row:hover td { background: var(--bg-hover); }
         </div>
         <button class="btn btn-sm" style="font-size:11px;padding:2px 8px;" onclick="restartService(this)">Restart</button>
     </div>
+    <div id="gpuScanBanner" style="display:none;background:linear-gradient(90deg,rgba(0,180,216,0.15),rgba(0,180,216,0.05));border-bottom:1px solid var(--accent);padding:8px 24px;font-size:12px;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spin-icon"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="21 3 21 9 15 9"/></svg>
+            <span style="color:var(--accent);font-weight:600;">GPU capability scan in progress</span>
+            <span style="color:var(--text-muted);">Testing GPU encode capabilities — this may take a minute.</span>
+        </div>
+    </div>
 
     <div class="layout">
         <aside class="sidebar">
@@ -759,14 +767,37 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     </select>
                     <span class="set-desc">Discard audio streams that don't match</span>
                 </div>
-                <div class="form-group" style="margin-top:8px;">
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="checkbox" id="chkEnglishOnly" onchange="onEnglishOnlyChange()">
-                        English only
-                    </label>
-                    <span class="set-desc" style="margin-left:22px;">Drop non-English audio tracks</span>
+                <div class="form-group">
+                    <label>Audio languages</label>
+                    <select id="selAudioLangMode" onchange="onAudioLangModeChange()">
+                        <option value="all">Keep all languages</option>
+                        <option value="langs">Keep selected languages</option>
+                    </select>
                 </div>
+                <div class="form-group" id="audioLangsGroup" style="display:none;">
+                    <label>Languages to keep</label>
+                    <input type="text" id="selAudioLangs" value="eng" placeholder="eng, spa, fre, ger..." oninput="onAudioLangModeChange()">
+                    <span class="set-desc">Comma-separated language codes</span>
+                </div>
+                <input type="hidden" id="chkEnglishOnly">
                 <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">TrueHD/Atmos, EAC3 and AC3 are always copied (passthrough). Expand files in the scanner to override per-stream.</p>
+            </div>
+            <div class="sidebar-section">
+                <h3>Subtitles</h3>
+                <div class="form-group">
+                    <label>Subtitle mode</label>
+                    <select id="selSubtitleMode" onchange="onSubtitleModeChange()">
+                        <option value="all">Keep all subtitles</option>
+                        <option value="langs">Keep selected languages</option>
+                        <option value="none">Discard all subtitles</option>
+                    </select>
+                </div>
+                <div class="form-group" id="subLangsGroup" style="display:none;">
+                    <label>Languages to keep</label>
+                    <input type="text" id="selSubtitleLangs" value="eng" placeholder="eng, spa, fre, ger..." oninput="onSubtitleModeChange()">
+                    <span class="set-desc">Comma-separated language codes</span>
+                </div>
+                <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">Expand files in the scanner to override per-stream.</p>
             </div>
         </aside>
 
@@ -789,7 +820,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="tab-content active" id="tab-scanner">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
                     <button class="btn btn-sm" onclick="clearScanCache()" title="Clear cached scan data to force full re-probe">Clear Cache</button>
-                    <button class="btn btn-sm" onclick="showDuplicates()" title="Find files with both original and encoded versions">Find Duplicates</button>
+                    <button class="btn btn-sm" id="btnFindDupes" onclick="showDuplicates()" title="Find files with both original and encoded versions" style="display:none;">Find Duplicates</button>
+                    <button class="btn btn-danger btn-sm" id="btnDeleteSelected" onclick="removeSelectedScanFiles()" style="display:none;">Delete Selected from Disk</button>
                     <span style="flex:1;"></span>
                     <button class="btn btn-danger btn-sm" id="btnCancelScan" onclick="cancelScan()" style="display:none">Cancel Scan</button>
                 </div>
@@ -812,6 +844,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <option value="bitrate_asc">Sort: Lowest bitrate</option>
                             <option value="res_desc">Sort: Highest res first</option>
                             <option value="res_asc">Sort: Lowest res first</option>
+                            <option value="duration_desc">Sort: Longest first</option>
+                            <option value="duration_asc">Sort: Shortest first</option>
                         </select>
                         <select id="filterTopN" onchange="applyFilters()">
                             <option value="0">Show: All</option>
@@ -839,6 +873,11 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <option value="dv8">Dolby Vision P8</option>
                             <option value="hdr10">HDR10</option>
                             <option value="hlg">HLG</option>
+                        </select>
+                        <select id="filterStatus" onchange="applyFilters()">
+                            <option value="">Status: All</option>
+                            <option value="candidate">Encode Candidate</option>
+                            <option value="encoded">Already Encoded</option>
                         </select>
                     </div>
                 </div>
@@ -901,6 +940,24 @@ tr.file-row:hover td { background: var(--bg-hover); }
 </div>
 
 <!-- Folder Browser Modal -->
+<!-- Custom confirm dialog -->
+<div class="modal-overlay" id="confirmModal" style="z-index:300;">
+    <div class="modal" style="width:750px;height:500px;">
+        <div class="modal-header" id="confirmHeader">
+            <h2 id="confirmTitle">Confirm</h2>
+        </div>
+        <div class="modal-body" style="padding:20px;flex:1;overflow-y:auto;">
+            <div id="confirmIcon" style="text-align:center;margin-bottom:12px;"></div>
+            <div id="confirmMessage" style="font-size:13px;color:var(--text-secondary);text-align:center;line-height:1.6;"></div>
+            <div id="confirmDetail" style="margin-top:12px;padding:10px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--text-muted);word-break:break-all;flex:1;overflow-y:auto;display:none;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn" id="confirmCancel" onclick="resolveConfirm(false)" style="font-size:13px;">Cancel</button>
+            <button class="btn" id="confirmOk" onclick="resolveConfirm(true)" style="font-size:13px;">Confirm</button>
+        </div>
+    </div>
+</div>
+
 <div class="modal-overlay" id="browserModal">
     <div class="modal">
         <div class="modal-header">
@@ -1866,7 +1923,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.2</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.3</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -1899,6 +1956,29 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.21.3 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Subtitle management</strong> &mdash; per-track include/exclude in scan results, sidebar language filter (keep all / keep selected / discard all), applied to all profiles</li>
+                                <li><strong>Audio language filter</strong> &mdash; replaced "English only" checkbox with language selector matching subtitle controls (keep all / keep selected languages)</li>
+                                <li><strong>Encoded file detection</strong> &mdash; RECODE metadata tag embedded in MKV container during encoding. Scan detects encoded files regardless of filename or suffix changes</li>
+                                <li><strong>Scan status filter</strong> &mdash; filter scan results by "Encode Candidate" or "Already Encoded"</li>
+                                <li><strong>Delete files from scan</strong> &mdash; delete individual or selected files from disk with themed two-step confirmation dialog</li>
+                                <li><strong>Duration column</strong> &mdash; movie length shown in scan results (sortable), queue, encoding, and history lists</li>
+                                <li><strong>Favicon</strong> &mdash; recode icon in browser tab</li>
+                                <li><strong>GPU scan at startup</strong> &mdash; capability tests run in background after server start, GUI available immediately with progress banner</li>
+                                <li><strong>GPU scan caching</strong> &mdash; remote GPU servers cache capability results, scan fresh on every restart</li>
+                                <li><strong>VRAM-based 4K guard</strong> &mdash; GPUs with less than 3GB VRAM automatically excluded from 4K jobs (prevents OOM on small vGPUs)</li>
+                                <li><strong>Vulkan software detection</strong> &mdash; startup detects llvmpipe fallback and logs warning with fix instructions</li>
+                                <li><strong>Mesa dependencies</strong> &mdash; installer includes mesa-dri-drivers, mesa-libEGL, mesa-libgbm, mesa-libGL, libXext for headless NVIDIA Vulkan</li>
+                                <li><strong>Swap-staged.sh</strong> &mdash; systemd ExecStartPre swaps .new files on all servers (fixed missing swap on local server)</li>
+                                <li><strong>DV P5 CUDA fix</strong> &mdash; all DV modes correctly skip hwaccel_output_format cuda to avoid auto_scale crash</li>
+                                <li><strong>Remote DV post-processing</strong> &mdash; RPU injection runs locally after remote encode (FUSE streaming too slow for RPU extraction)</li>
+                                <li><strong>Test mode protection</strong> &mdash; originals never deleted in test mode, RPU extraction limited to 5 minutes</li>
+                                <li><strong>Queue controls</strong> &mdash; always visible, Cancel All button for active encodes</li>
+                                <li><strong>Custom confirm dialog</strong> &mdash; themed modal replacing browser alerts for delete operations</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.21.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -2514,8 +2594,34 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <label class="set-chk"><input type="checkbox" id="setHdrOnly"> HDR only</label>
                             <label class="set-chk"><input type="checkbox" id="setDiscardLarger"> Discard if larger</label>
                             <label class="set-chk" style="color:var(--error);"><input type="checkbox" id="setDeleteOriginal"> Delete original</label>
-                            <label class="set-chk"><input type="checkbox" id="setEnglishOnly"> English only</label>
                         </div>
+                        <!-- Audio & Subtitle Language Settings -->
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+                            <div style="padding:10px;background:var(--bg-tertiary);border-radius:6px;">
+                                <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Audio Languages</div>
+                                <select id="setAudioLangMode" style="width:100%;margin-bottom:6px;" onchange="document.getElementById('setAudioLangsWrap').style.display=this.value==='langs'?'block':'none'">
+                                    <option value="all">Keep all languages</option>
+                                    <option value="langs">Keep selected languages</option>
+                                </select>
+                                <div id="setAudioLangsWrap" style="display:none;">
+                                    <input type="text" id="setAudioLangs" value="eng" placeholder="eng, spa, fre..." style="width:100%;font-size:11px;">
+                                    <span style="font-size:10px;color:var(--text-muted);">Comma-separated codes</span>
+                                </div>
+                            </div>
+                            <div style="padding:10px;background:var(--bg-tertiary);border-radius:6px;">
+                                <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Subtitle Languages</div>
+                                <select id="setSubtitleMode" style="width:100%;margin-bottom:6px;" onchange="document.getElementById('setSubLangsWrap').style.display=this.value==='langs'?'block':'none'">
+                                    <option value="all">Keep all subtitles</option>
+                                    <option value="langs">Keep selected languages</option>
+                                    <option value="none">Discard all subtitles</option>
+                                </select>
+                                <div id="setSubLangsWrap" style="display:none;">
+                                    <input type="text" id="setSubtitleLangsSet" value="eng" placeholder="eng, spa, fre..." style="width:100%;font-size:11px;">
+                                    <span style="font-size:10px;color:var(--text-muted);">Comma-separated codes</span>
+                                </div>
+                            </div>
+                        </div>
+                        <input type="hidden" id="setEnglishOnly">
                     </div>
 
                     <!-- Library Profiles -->
@@ -2756,6 +2862,7 @@ let state = {
 
 // Per-file audio config: { filepath: [ {index, include, codec, bitrate}, ...] }
 let audioConfig = {};
+let subtitleConfig = {};
 let browserPath = '/';
 let filteredResults = [];
 // Estimates: { filepath: { estimated_size, saved_pct, ... } or "loading" }
@@ -2780,6 +2887,7 @@ function connectWs() {
         const vBadge = document.getElementById('appVersionBadge');
         if (vBadge && vBadge._wasRestarting) { vBadge.textContent = vBadge._savedVersion || ''; vBadge.style.color = ''; vBadge._wasRestarting = false; }
         updateGpuServerStatus();
+        loadAndApplySettings();
     };
     ws.onclose = () => {
         state.connected = false;
@@ -3168,33 +3276,98 @@ async function recalcEstimates() {
    Audio Config Helpers
    ========================================================================= */
 function initAudioConfig(file) {
-    if (audioConfig[file.path]) return; // already initialized
-    const defCodec = getDefaultAudioCodec();
+    if (audioConfig[file.path]) return;
     const defBitrate = getDefaultAudioBitrate();
-    const engOnly = document.getElementById('chkEnglishOnly')?.checked || false;
+    const langMode = document.getElementById('selAudioLangMode')?.value || 'all';
+    const langs = langMode === 'langs' ? new Set((document.getElementById('selAudioLangs')?.value || 'eng').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)) : null;
     audioConfig[file.path] = (file.audio_streams || []).map(a => ({
         index: a.index,
-        include: engOnly ? (a.language === 'eng' || a.language === 'und') : true,
+        include: langs ? (langs.has(a.language) || a.language === 'und') : true,
         codec: 'auto',
         bitrate: defBitrate,
     }));
 }
 
-function onEnglishOnlyChange() {
-    const engOnly = document.getElementById('chkEnglishOnly').checked;
-    // Update all audio configs: disable non-English tracks, enable English ones
-    for (const fpath of Object.keys(audioConfig)) {
-        const file = state.scanResults.find(f => f.path === fpath);
-        if (!file) continue;
-        for (const cfg of audioConfig[fpath]) {
-            const stream = (file.audio_streams || []).find(a => a.index === cfg.index);
-            if (stream) {
-                cfg.include = engOnly ? (stream.language === 'eng' || stream.language === 'und') : true;
-            }
-        }
+function initSubtitleConfig(file) {
+    if (subtitleConfig[file.path]) return;
+    const subMode = document.getElementById('selSubtitleMode')?.value || 'all';
+    const langs = subMode === 'langs' ? new Set((document.getElementById('selSubtitleLangs')?.value || 'eng').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)) : null;
+    subtitleConfig[file.path] = (file.sub_streams || []).map(s => ({
+        index: s.index,
+        include: subMode === 'none' ? false : langs ? (langs.has(s.language) || s.language === 'und') : true,
+    }));
+}
+
+function onSubtitleToggle(path, idx, included) {
+    if (subtitleConfig[path] && subtitleConfig[path][idx]) {
+        subtitleConfig[path][idx].include = included;
     }
+}
+
+function toggleAllSubs(path, include) {
+    if (!subtitleConfig[path]) return;
+    subtitleConfig[path].forEach(s => s.include = include);
     applyFilters();
 }
+
+function onSubtitleModeChange() {
+    const mode = document.getElementById('selSubtitleMode').value;
+    document.getElementById('subLangsGroup').style.display = mode === 'langs' ? 'block' : 'none';
+    subtitleConfig = {};
+    applyFilters();
+}
+
+function getScannedLanguages(type) {
+    const langs = new Map(); // code -> count
+    for (const f of state.scanResults) {
+        const streams = type === 'audio' ? (f.audio_streams || []) : (f.sub_streams || []);
+        for (const s of streams) {
+            const lang = s.language || 'und';
+            langs.set(lang, (langs.get(lang) || 0) + 1);
+        }
+    }
+    // Sort by count descending
+    return [...langs.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function buildLangCheckboxes(containerId, type, onChange) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const langs = getScannedLanguages(type);
+    if (langs.length === 0) {
+        el.innerHTML = '<span style="color:var(--text-muted);font-size:11px;">Scan files first to see available languages</span>';
+        return;
+    }
+    const selected = getSelectedLangs(type);
+    el.innerHTML = langs.map(([code, count]) => {
+        const checked = selected.has(code) ? 'checked' : '';
+        const label = code === 'und' ? 'und (undefined)' : code;
+        return `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 0;font-size:12px;">
+            <input type="checkbox" ${checked} onchange="${onChange}" data-lang="${code}">
+            <span>${label}</span>
+            <span style="color:var(--text-muted);font-size:10px;">(${count})</span>
+        </label>`;
+    }).join('');
+}
+
+function getSelectedLangs(type) {
+    const containerId = type === 'audio' ? 'audioLangsList' : 'subLangsList';
+    const el = document.getElementById(containerId);
+    if (!el) return new Set(['eng']);
+    const checked = el.querySelectorAll('input[type=checkbox]:checked');
+    if (checked.length === 0) return new Set(['eng']); // default
+    return new Set([...checked].map(cb => cb.dataset.lang));
+}
+
+function onAudioLangModeChange() {
+    const mode = document.getElementById('selAudioLangMode').value;
+    document.getElementById('audioLangsGroup').style.display = mode === 'langs' ? 'block' : 'none';
+    audioConfig = {};
+    applyFilters();
+}
+
+// Legacy compatibility
+function onEnglishOnlyChange() { onAudioLangModeChange(); }
 
 function channelLabel(ch) {
     if (ch === 8) return '7.1';
@@ -3209,6 +3382,26 @@ function channelLabel(ch) {
    ========================================================================= */
 async function cancelScan() {
     try { await fetch('/api/scan/cancel', { method: 'POST' }); } catch {}
+}
+
+async function backfillManifests() {
+    const btn = document.getElementById('btnBackfill');
+    btn.disabled = true;
+    btn.textContent = 'Scanning...';
+    try {
+        const r = await fetch('/api/backfill-manifests', {method: 'POST'});
+        const data = await r.json();
+        if (data.ok) {
+            btn.textContent = `Done (${data.updated} found)`;
+            setTimeout(() => { btn.textContent = 'Build Manifests'; btn.disabled = false; }, 3000);
+        } else {
+            btn.textContent = data.error || 'Failed';
+            setTimeout(() => { btn.textContent = 'Build Manifests'; btn.disabled = false; }, 3000);
+        }
+    } catch(e) {
+        btn.textContent = 'Error';
+        setTimeout(() => { btn.textContent = 'Build Manifests'; btn.disabled = false; }, 3000);
+    }
 }
 
 async function clearScanCache() {
@@ -3271,6 +3464,7 @@ async function doScan() {
     document.getElementById('scanProgress').classList.add('active');
     document.getElementById('btnCancelScan').style.display = '';
     audioConfig = {}; // reset audio configs
+    subtitleConfig = {}; // reset subtitle configs
     try {
         const res = await fetch('/api/scan', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -3306,18 +3500,24 @@ function renderScanProgress(data) {
 function renderScanResults() {
     const files = state.scanResults;
     const badge = document.getElementById('badgeScanner');
+    const delBtn = document.getElementById('btnDeleteSelected');
+    const dupeBtn = document.getElementById('btnFindDupes');
     if (!files.length) {
         document.getElementById('scanResults').innerHTML = `<div class="empty-state"><div class="icon">${svgIcon('search', 48)}</div><h3>No encodable files found</h3><p>All files are either already H.265 or have existing output files.</p></div>`;
         document.getElementById('scanFilters').style.display = 'none';
+        if (delBtn) delBtn.style.display = 'none';
+        if (dupeBtn) dupeBtn.style.display = 'none';
         badge.style.display = 'none'; return;
     }
     badge.style.display = 'inline'; badge.textContent = files.length;
+    if (delBtn) delBtn.style.display = '';
+    if (dupeBtn) dupeBtn.style.display = '';
 
     // Show filters
     document.getElementById('scanFilters').style.display = 'block';
 
     // Init audio config for all files
-    files.forEach(f => initAudioConfig(f));
+    files.forEach(f => { initAudioConfig(f); initSubtitleConfig(f); });
 
     // Apply current filters
     applyFilters();
@@ -3451,9 +3651,108 @@ function toggleSelectAll(checked) {
     updateAddQueueBtn();
 }
 
+// Custom themed confirm dialog
+let _confirmResolve = null;
+function showConfirm({title, message, detail, okText, okColor, icon}) {
+    return new Promise(resolve => {
+        _confirmResolve = resolve;
+        document.getElementById('confirmTitle').textContent = title || 'Confirm';
+        document.getElementById('confirmMessage').innerHTML = message || '';
+        const detailEl = document.getElementById('confirmDetail');
+        if (detail) { detailEl.innerHTML = detail; detailEl.style.display = 'block'; }
+        else { detailEl.style.display = 'none'; }
+        const okBtn = document.getElementById('confirmOk');
+        okBtn.textContent = okText || 'Confirm';
+        okBtn.style.background = okColor || 'var(--error)';
+        okBtn.style.color = '#fff';
+        const iconEl = document.getElementById('confirmIcon');
+        iconEl.innerHTML = icon || '';
+        document.getElementById('confirmModal').classList.add('open');
+        okBtn.focus();
+    });
+}
+function resolveConfirm(val) {
+    document.getElementById('confirmModal').classList.remove('open');
+    if (_confirmResolve) { _confirmResolve(val); _confirmResolve = null; }
+}
+
 function updateAddQueueBtn() {
     const btn = document.getElementById('btnAddQueue');
     if (btn) btn.disabled = !document.querySelector('.file-select:checked');
+}
+
+async function removeScanFile(path) {
+    const fname = path.split('/').pop();
+    const warnIcon = `<div style="width:48px;height:48px;margin:0 auto;border-radius:50%;background:rgba(231,76,60,0.15);display:flex;align-items:center;justify-content:center;"><svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>`;
+    const fileDetail = `<div style="padding:4px 0;"><strong style="color:var(--text-primary);">${escHtml(fname)}</strong><br><span style="font-size:10px;color:var(--text-muted);">${escHtml(path)}</span></div>`;
+    const ok1 = await showConfirm({
+        title: 'Delete File',
+        message: `<strong style="color:var(--error);">This will permanently delete the file from disk.</strong>`,
+        detail: fileDetail,
+        okText: 'Delete',
+        okColor: 'var(--error)',
+        icon: warnIcon,
+    });
+    if (!ok1) return;
+    const ok2 = await showConfirm({
+        title: 'Final Warning',
+        message: `<strong style="color:var(--error);">Are you absolutely sure?</strong><br><br>This cannot be undone.`,
+        detail: fileDetail,
+        okText: 'Yes, Delete Permanently',
+        okColor: '#c0392b',
+        icon: warnIcon,
+    });
+    if (!ok2) return;
+    try {
+        const r = await fetch('/api/delete-file', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path})});
+        const data = await r.json();
+        if (data.ok) {
+            state.scanResults = state.scanResults.filter(f => f.path !== path);
+            applyFilters();
+        } else {
+            await showConfirm({title: 'Delete Failed', message: escHtml(data.error || 'Unknown error'), okText: 'OK', okColor: 'var(--bg-hover)'});
+        }
+    } catch(e) {
+        await showConfirm({title: 'Delete Failed', message: escHtml(e.message), okText: 'OK', okColor: 'var(--bg-hover)'});
+    }
+}
+
+async function removeSelectedScanFiles() {
+    const selected = Array.from(document.querySelectorAll('.file-select:checked')).map(cb => cb.dataset.path);
+    if (!selected.length) return;
+    const warnIcon = `<div style="width:48px;height:48px;margin:0 auto;border-radius:50%;background:rgba(231,76,60,0.15);display:flex;align-items:center;justify-content:center;"><svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>`;
+    const fnames = selected.map(p => p.split('/').pop()).join('<br>');
+    const ok1 = await showConfirm({
+        title: `Delete ${selected.length} File${selected.length > 1 ? 's' : ''}`,
+        message: `<strong style="color:var(--error);">This will permanently delete ${selected.length} file${selected.length > 1 ? 's' : ''} from disk.</strong>`,
+        detail: selected.map(p => `<div style="padding:4px 0;border-bottom:1px solid var(--border);"><strong style="color:var(--text-primary);">${escHtml(p.split('/').pop())}</strong><br><span style="font-size:10px;color:var(--text-muted);">${escHtml(p)}</span></div>`).join(''),
+        okText: 'Delete All',
+        okColor: 'var(--error)',
+        icon: warnIcon,
+    });
+    if (!ok1) return;
+    const ok2 = await showConfirm({
+        title: 'Final Warning',
+        message: `<strong style="color:var(--error);">Are you absolutely sure?</strong><br><br>${selected.length} file${selected.length > 1 ? 's' : ''} will be permanently deleted. This cannot be undone.`,
+        detail: selected.map(p => `<div style="padding:4px 0;border-bottom:1px solid var(--border);"><strong style="color:var(--text-primary);">${escHtml(p.split('/').pop())}</strong><br><span style="font-size:10px;color:var(--text-muted);">${escHtml(p)}</span></div>`).join(''),
+        okText: 'Yes, Delete All Permanently',
+        okColor: '#c0392b',
+        icon: warnIcon,
+    });
+    if (!ok2) return;
+    let deleted = 0, errors = [];
+    for (const path of selected) {
+        try {
+            const r = await fetch('/api/delete-file', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path})});
+            const data = await r.json();
+            if (data.ok) { deleted++; state.scanResults = state.scanResults.filter(f => f.path !== path); }
+            else errors.push(path.split('/').pop() + ': ' + (data.error || 'failed'));
+        } catch(e) { errors.push(path.split('/').pop() + ': ' + e.message); }
+    }
+    applyFilters();
+    if (errors.length) {
+        await showConfirm({title: 'Partial Failure', message: `Deleted ${deleted}/${selected.length} files.`, detail: errors.join('\n'), okText: 'OK', okColor: 'var(--bg-hover)'});
+    }
 }
 
 async function addSelectedToQueue() {
@@ -3461,11 +3760,13 @@ async function addSelectedToQueue() {
     if (!selected.length) return alert('No files selected');
     const settings = getSettings();
 
-    // Build audio config and file info from scan results (avoids re-probing)
+    // Build audio/subtitle config and file info from scan results (avoids re-probing)
     const acfg = {};
+    const scfg = {};
     const fileInfoMap = {};
     for (const fpath of selected) {
         if (audioConfig[fpath]) acfg[fpath] = audioConfig[fpath];
+        if (subtitleConfig[fpath]) scfg[fpath] = subtitleConfig[fpath];
         const scanFile = state.scanResults.find(f => f.path === fpath);
         if (scanFile) fileInfoMap[fpath] = scanFile;
     }
@@ -3473,7 +3774,7 @@ async function addSelectedToQueue() {
     try {
         const res = await fetch('/api/queue/add', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ files: selected, ...settings, audio_config: acfg, file_info: fileInfoMap }),
+            body: JSON.stringify({ files: selected, ...settings, audio_config: acfg, subtitle_config: scfg, file_info: fileInfoMap }),
         });
         const data = await res.json();
         // Show duplicate warning banner if any were skipped
@@ -3708,6 +4009,7 @@ function renderQueue() {
                     <span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${origHdrBadge}">${origHdr}</span>
                     <span class="badge badge-sm badge-size">${f.size_human}</span>
+                    <span class="badge badge-sm badge-sdr">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
                     <span class="badge badge-sm badge-audio">${audioLabel}</span>
                     <span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span>
                     <span class="badge badge-sm badge-codec">${hwLabel} ${vcLabel}</span>
@@ -3755,6 +4057,10 @@ async function pollSystemTranscodes() {
         const data = await res.json();
         systemTranscodes = data.transcodes || [];
     } catch(e) { systemTranscodes = []; }
+    // Show GPU scan banner if capability tests are running
+    const _gpuScanning = systemTranscodes.some(t => (t.input || '').includes('_captest_') || (t.input || '').includes('color=black') || (t.command || '').includes('_captest_'));
+    const _gpuB = document.getElementById('gpuScanBanner');
+    if (_gpuB) _gpuB.style.display = _gpuScanning ? 'flex' : 'none';
     renderEncoding();
     updateBadges();
 }
@@ -3847,6 +4153,7 @@ function renderEncoding() {
                         <span class="badge badge-sm badge-codec">${getHwLabel(job.settings)}</span>
                         <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(f.path)}">${escHtml(f.filename)}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySize-${job.id}">${f.size_human} → ${curSize}</span>
+                        <span style="font-size:11px;color:var(--text-muted);">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummaryPct-${job.id}">${p.phase === 'preparing' ? 'Preparing...' : _fmtPct(p.pct||0)}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySpeed-${job.id}">${p.phase === 'preparing' ? '' : (p.speed||'—')}</span>
                         ${job.paused ? '<span class="badge badge-sm badge-skip">Paused</span>' : ''}
@@ -4532,6 +4839,7 @@ function renderHistory() {
         detailHtml += `<span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>`;
         detailHtml += `<span class="badge badge-sm ${hOrigHdrBadge}">${hOrigHdr}</span>`;
         detailHtml += `<span class="badge badge-sm badge-size">${f.size_human}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-sdr">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>`;
         detailHtml += `<span class="badge badge-sm badge-audio">${hAudioLabel}</span>`;
         // Arrow + target badges
         detailHtml += `<span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span> `;
@@ -4861,6 +5169,11 @@ function applyFilters() {
     else if (hdr === 'hdr10') files = files.filter(f => (f.hdr_type || '') === 'HDR10');
     else if (hdr === 'hlg') files = files.filter(f => (f.hdr_type || '') === 'HLG');
 
+    // Status filter
+    const statusFilter = document.getElementById('filterStatus')?.value || '';
+    if (statusFilter === 'candidate') files = files.filter(f => !f.output_exists);
+    else if (statusFilter === 'encoded') files = files.filter(f => f.output_exists);
+
     // Sort — dropdown sort takes priority, then column sort, then default name sort
     const sort = document.getElementById('filterSort').value;
     const _br = f => (f.duration_secs && f.size_bytes) ? (f.size_bytes * 8 / f.duration_secs) : 0;
@@ -4870,6 +5183,8 @@ function applyFilters() {
     else if (sort === 'bitrate_asc') files.sort((a, b) => _br(a) - _br(b));
     else if (sort === 'res_desc') files.sort((a, b) => (b.width * b.height) - (a.width * a.height));
     else if (sort === 'res_asc') files.sort((a, b) => (a.width * a.height) - (b.width * b.height));
+    else if (sort === 'duration_desc') files.sort((a, b) => (b.duration_secs||0) - (a.duration_secs||0));
+    else if (sort === 'duration_asc') files.sort((a, b) => (a.duration_secs||0) - (b.duration_secs||0));
     else if (tableSort.column) {
         const dir = tableSort.dir === 'asc' ? 1 : -1;
         const col = tableSort.column;
@@ -4880,6 +5195,7 @@ function applyFilters() {
             if (col === 'resolution') return dir * ((a.width * a.height) - (b.width * b.height));
             if (col === 'hdr') { va = a.hdr_type; vb = b.hdr_type; return va < vb ? -dir : va > vb ? dir : 0; }
             if (col === 'size') return dir * (a.size_bytes - b.size_bytes);
+            if (col === 'duration') return dir * ((a.duration_secs||0) - (b.duration_secs||0));
             if (col === 'estimate') {
                 const ea = estimates[a.path]?.estimated_bytes || 0;
                 const eb = estimates[b.path]?.estimated_bytes || 0;
@@ -4949,7 +5265,7 @@ function renderScanResultsFiltered(files) {
     const container = document.getElementById('scanResults');
 
     // Init audio config
-    files.forEach(f => initAudioConfig(f));
+    files.forEach(f => { initAudioConfig(f); initSubtitleConfig(f); });
 
     // Calculate total size
     const totalSize = files.reduce((s, f) => s + f.size_bytes, 0);
@@ -5012,9 +5328,11 @@ function renderScanResultsFiltered(files) {
         ${sortTh('resolution', 'Res / Encoding')}
         ${sortTh('audio', 'Audio')}
         ${sortTh('size', 'Size')}
+        ${sortTh('duration', 'Duration')}
         ${sortTh('estimate', 'Estimated')}
         ${sortTh('suggestion', 'Savings')}
         <th>Status</th>
+        <th></th>
     </tr></thead><tbody>`;
 
     for (let fi = 0; fi < pageFiles.length; fi++) {
@@ -5022,7 +5340,7 @@ function renderScanResultsFiltered(files) {
         const f = pageFiles[fi];
         const hdrBadge = f.hdr_type.startsWith('Dolby Vision') ? 'badge-dv' : f.hdr_type === 'SDR' ? 'badge-sdr' : 'badge-hdr';
         const codecBadge = f.is_hevc ? 'badge-hevc' : 'badge-codec';
-        let statusText = f.is_hevc ? '<span class="badge badge-hevc" title="Already HEVC — re-encoding is optional">Optional</span>' : f.output_exists ? '<span class="badge badge-skip" title="An encoded version already exists">Recoded</span>' : '<span class="badge badge-codec" title="Ready to be encoded">Candidate</span>';
+        let statusText = f.output_exists ? '<span class="badge badge-done" title="Already encoded by Recode">Encoded</span>' : '<span class="badge badge-codec" title="Ready to be encoded">Candidate</span>';
         const audioStreams = f.audio_streams || [];
         const hasAudio = audioStreams.length > 0;
 
@@ -5067,7 +5385,7 @@ function renderScanResultsFiltered(files) {
 
         html += `<tr class="file-row">
             <td class="select-col"><input type="checkbox" class="file-select" data-path="${escHtml(f.path)}" data-idx="${realIdx}"></td>
-            <td class="expand-col">${hasAudio ? `<button class="expand-btn" onclick="toggleAudioRow(${realIdx})" id="expbtn-${realIdx}">${svgIcon('chevron-right', 12)}</button>` : ''}</td>
+            <td class="expand-col">${(hasAudio || (f.sub_streams||[]).length > 0) ? `<button class="expand-btn" onclick="toggleAudioRow(${realIdx})" id="expbtn-${realIdx}">${svgIcon('chevron-right', 12)}</button>` : ''}</td>
             <td class="file-cell">
                 <div class="file-name" title="${escHtml(f.path)}">${escHtml(f.filename)}</div>
             </td>
@@ -5080,14 +5398,16 @@ function renderScanResultsFiltered(files) {
             </td>
             <td class="audio-cell">${audioHtml}</td>
             <td class="size-stack"><span class="size-orig">${f.size_human}</span>${f.duration_secs && f.size_bytes ? `<div style="font-size:10px;color:var(--text-muted);">${(f.size_bytes * 8 / f.duration_secs / 1000000).toFixed(1)} Mbps</div>` : ''}</td>
+            <td style="white-space:nowrap;font-size:12px;">${f.duration_secs ? (() => { const h = Math.floor(f.duration_secs/3600); const m = Math.floor((f.duration_secs%3600)/60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; })() : ''}</td>
             <td>${estHtml}</td>
             <td>${sugHtml}</td>
             <td>${statusText}</td>
+            <td style="text-align:center;"><button class="btn btn-danger btn-sm" style="font-size:10px;padding:2px 6px;" onclick="removeScanFile('${escHtml(f.path)}')" title="Delete file from disk">${svgIcon('x-circle', 12)}</button></td>
         </tr>`;
 
-        if (hasAudio) {
-            html += `<tr class="audio-row" id="audiorow-${realIdx}"><td colspan="9"><div class="audio-panel">`;
-            html += `<h4>Audio Streams — ${escHtml(f.filename)}</h4>`;
+        if (hasAudio || (f.sub_streams||[]).length > 0) {
+            html += `<tr class="audio-row" id="audiorow-${realIdx}"><td colspan="10"><div class="audio-panel">`;
+            if (hasAudio) html += `<h4>Audio Streams — ${escHtml(f.filename)}</h4>`;
             for (const a of f.audio_streams) {
                 const cfg = audioConfig[f.path]?.[a.index] || { include: true, codec: 'auto', bitrate: '448k' };
                 const isPassthrough = (a.codec === 'truehd' || a.codec === 'eac3' || a.codec === 'ac3' || (a.title||'').toLowerCase().includes('atmos'));
@@ -5127,6 +5447,29 @@ function renderScanResultsFiltered(files) {
                         </select>
                     </div>
                 </div>`;
+            }
+            // Subtitle streams section
+            const subs = f.sub_streams || [];
+            if (subs.length > 0) {
+                html += `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">`;
+                html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <h4 style="margin:0;">Subtitle Streams</h4>
+                    <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;" onclick="toggleAllSubs('${escHtml(f.path)}', true)">Include All</button>
+                    <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;" onclick="toggleAllSubs('${escHtml(f.path)}', false)">Exclude All</button>
+                </div>`;
+                for (const s of subs) {
+                    const scfg = subtitleConfig[f.path]?.[s.index] || { include: true };
+                    const sdis = scfg.include ? '' : 'disabled';
+                    html += `<div class="audio-stream ${sdis}" style="padding:4px 8px;">
+                        <input type="checkbox" class="as-check" ${scfg.include ? 'checked' : ''} onchange="onSubtitleToggle('${escHtml(f.path)}', ${s.index}, this.checked)">
+                        <div class="as-info">
+                            <span class="badge badge-sm badge-sdr">${s.codec.toUpperCase()}</span>
+                            <span style="color:var(--text-secondary)">[${s.language}]</span>
+                            <span style="color:var(--text-muted);font-size:11px;">${escHtml(s.title || '')}</span>
+                        </div>
+                    </div>`;
+                }
+                html += `</div>`;
             }
             html += `</div></td></tr>`;
         }
@@ -5284,6 +5627,15 @@ async function openSettings() {
         document.getElementById('setDiscardLarger').checked = !!s.discard_larger;
         document.getElementById('setDeleteOriginal').checked = !!s.delete_original;
         document.getElementById('setEnglishOnly').checked = !!s.english_only;
+        // Audio/subtitle language settings
+        const alm = document.getElementById('setAudioLangMode');
+        if (alm) { alm.value = s.audio_lang_mode || 'all'; document.getElementById('setAudioLangsWrap').style.display = alm.value === 'langs' ? 'block' : 'none'; }
+        const al = document.getElementById('setAudioLangs');
+        if (al) al.value = s.audio_langs || 'eng';
+        const sm = document.getElementById('setSubtitleMode');
+        if (sm) { sm.value = s.subtitle_mode || 'all'; document.getElementById('setSubLangsWrap').style.display = sm.value === 'langs' ? 'block' : 'none'; }
+        const sl = document.getElementById('setSubtitleLangsSet');
+        if (sl) sl.value = s.subtitle_langs || 'eng';
         document.getElementById('setTestMode').checked = !!s.test_mode;
         document.getElementById('setEncodeSuffix').value = s.encode_suffix || '';
         // Remote Server (listener)
@@ -5929,6 +6281,10 @@ async function saveSettings() {
         discard_larger: document.getElementById('setDiscardLarger').checked,
         delete_original: document.getElementById('setDeleteOriginal').checked,
         english_only: document.getElementById('setEnglishOnly').checked,
+        audio_lang_mode: document.getElementById('setAudioLangMode')?.value || 'all',
+        audio_langs: document.getElementById('setAudioLangs')?.value || 'eng',
+        subtitle_mode: document.getElementById('setSubtitleMode')?.value || 'all',
+        subtitle_langs: document.getElementById('setSubtitleLangsSet')?.value || 'eng',
         test_mode: document.getElementById('setTestMode').checked,
         encode_suffix: document.getElementById('setEncodeSuffix').value.replace(/[^A-Za-z0-9_-]/g, '') || undefined,
         // General
@@ -6027,6 +6383,22 @@ function applySettingsToSidebar(s) {
     document.getElementById('selDefaultAudioCodec').value = s.audio_codec || 'libopus';
     updateBitrateOptions(document.getElementById('selDefaultAudioBitrate'), s.audio_codec || 'libopus', s.audio_bitrate || '448k');
     document.getElementById('chkEnglishOnly').checked = !!s.english_only;
+    // Audio language mode
+    const sideALM = document.getElementById('selAudioLangMode');
+    if (sideALM) {
+        sideALM.value = s.audio_lang_mode || 'all';
+        document.getElementById('audioLangsGroup').style.display = sideALM.value === 'langs' ? 'block' : 'none';
+        const al = document.getElementById('selAudioLangs');
+        if (al) al.value = s.audio_langs || 'eng';
+    }
+    // Subtitle mode
+    const sideSM = document.getElementById('selSubtitleMode');
+    if (sideSM) {
+        sideSM.value = s.subtitle_mode || 'all';
+        document.getElementById('subLangsGroup').style.display = sideSM.value === 'langs' ? 'block' : 'none';
+        const sl = document.getElementById('selSubtitleLangs');
+        if (sl) sl.value = s.subtitle_langs || 'eng';
+    }
     updateDeleteWarning();
     // Test mode banner
     document.getElementById('testModeBanner').style.display = s.test_mode ? 'block' : 'none';
@@ -6761,7 +7133,26 @@ function renderLibraryProfiles() {
                 <label class="set-chk"><input type="checkbox" ${p.hdr_only?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','hdr_only',this.checked)"> HDR only</label>
                 <label class="set-chk"><input type="checkbox" ${p.discard_larger?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','discard_larger',this.checked)"> Discard if larger</label>
                 <label class="set-chk" style="color:var(--error);"><input type="checkbox" ${p.delete_original?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','delete_original',this.checked)"> Delete original</label>
-                <label class="set-chk"><input type="checkbox" ${p.english_only?'checked':''} onchange="updateLibProfile('${escHtml(lpath)}','english_only',this.checked)"> English only</label>
+            </div>
+            <!-- Row 5: Audio & Subtitle Languages -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:11px;">Audio Languages</label>
+                    <select onchange="updateLibProfile('${escHtml(lpath)}','audio_lang_mode',this.value);this.nextElementSibling.style.display=this.value==='langs'?'block':'none'" style="font-size:12px;">
+                        <option value="all" ${(p.audio_lang_mode||'all')==='all'?'selected':''}>Keep all languages</option>
+                        <option value="langs" ${p.audio_lang_mode==='langs'?'selected':''}>Keep selected languages</option>
+                    </select>
+                    <input type="text" value="${escHtml(p.audio_langs||'eng')}" placeholder="eng, spa, fre..." style="font-size:11px;margin-top:4px;${p.audio_lang_mode==='langs'?'':'display:none;'}" onchange="updateLibProfile('${escHtml(lpath)}','audio_langs',this.value)">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:11px;">Subtitle Languages</label>
+                    <select onchange="updateLibProfile('${escHtml(lpath)}','subtitle_mode',this.value);this.nextElementSibling.style.display=this.value==='langs'?'block':'none'" style="font-size:12px;">
+                        <option value="all" ${(p.subtitle_mode||'all')==='all'?'selected':''}>Keep all subtitles</option>
+                        <option value="langs" ${p.subtitle_mode==='langs'?'selected':''}>Keep selected languages</option>
+                        <option value="none" ${p.subtitle_mode==='none'?'selected':''}>Discard all subtitles</option>
+                    </select>
+                    <input type="text" value="${escHtml(p.subtitle_langs||'eng')}" placeholder="eng, spa, fre..." style="font-size:11px;margin-top:4px;${p.subtitle_mode==='langs'?'':'display:none;'}" onchange="updateLibProfile('${escHtml(lpath)}','subtitle_langs',this.value)">
+                </div>
             </div>
         </div>`;
     }

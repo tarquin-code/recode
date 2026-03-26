@@ -83,9 +83,36 @@ pub async fn run(
     let gpu_limits: Arc<Mutex<Vec<(u32, u32)>>> = Arc::new(Mutex::new(vec![(0, 1)]));
     let mut gpu_capabilities: Vec<serde_json::Value> = Vec::new();
 
+    // Detect GPUs and capabilities once at startup (before connecting)
+    {
+        let new_encoders = crate::server::detect_encoders(&ffmpeg);
+        let has_hw = new_encoders.iter().any(|e| e.contains("nvenc") || e.contains("videotoolbox") || e.contains("vaapi") || e.contains("qsv"));
+        if has_hw || encoders.is_empty() {
+            encoders = new_encoders;
+        }
+        gpu_count = detect_gpu_count();
+        gpu_max_jobs_vec = read_gpu_max_jobs(gpu_count);
+        let total: usize = gpu_max_jobs_vec.iter().sum();
+        let effective = if total > 0 { total } else { max_jobs };
+        if effective > sem.available_permits() {
+            sem.add_permits(effective - sem.available_permits());
+        }
+        let mut lim = gpu_limits.lock().await;
+        *lim = gpu_max_jobs_vec.iter().map(|&m| (0u32, m as u32)).collect();
+        drop(lim);
+        info!("GPU connector: {} encoders={:?} max_jobs={} gpus={} per_gpu={:?}", name, encoders, effective, gpu_count, gpu_max_jobs_vec);
+
+        // Always scan GPU capabilities fresh on every startup
+        let has_nvenc = encoders.iter().any(|e| e.contains("nvenc"));
+        if has_nvenc {
+            info!("Running GPU capability tests...");
+            gpu_capabilities = crate::server::detect_gpu_capabilities(&ffmpeg, gpu_count);
+            info!("GPU capabilities: {:?}", gpu_capabilities);
+        }
+    }
+
     loop {
-        // Re-detect GPUs and encoders on each connection attempt (driver may become ready after boot)
-        // Once hardware encoders are found, keep them permanently
+        // Re-detect encoders on reconnect only if no hardware encoders found yet
         let already_has_hw = encoders.iter().any(|e| e.contains("nvenc") || e.contains("videotoolbox") || e.contains("vaapi") || e.contains("qsv"));
         if !already_has_hw {
             let new_encoders = crate::server::detect_encoders(&ffmpeg);
@@ -95,26 +122,18 @@ pub async fn run(
             }
         }
         let new_gpu_count = if gpu_count <= 1 { detect_gpu_count() } else { gpu_count };
-        if new_gpu_count > gpu_count || gpu_count <= 1 {
+        if new_gpu_count > gpu_count {
             gpu_count = new_gpu_count;
             gpu_max_jobs_vec = read_gpu_max_jobs(gpu_count);
             let total: usize = gpu_max_jobs_vec.iter().sum();
             let effective = if total > 0 { total } else { max_jobs };
-            // Resize semaphore by adding permits if needed
             if effective > sem.available_permits() + active_jobs.load(Ordering::Relaxed) as usize {
                 sem.add_permits(effective - sem.available_permits() - active_jobs.load(Ordering::Relaxed) as usize);
             }
             let mut lim = gpu_limits.lock().await;
             *lim = gpu_max_jobs_vec.iter().map(|&m| (0u32, m as u32)).collect();
             drop(lim);
-            info!("GPU connector: {} encoders={:?} max_jobs={} gpus={} per_gpu={:?}", name, encoders, effective, gpu_count, gpu_max_jobs_vec);
-            // Run GPU capability tests once (when GPU count changes)
-            let has_nvenc = encoders.iter().any(|e| e.contains("nvenc"));
-            if has_nvenc && gpu_capabilities.is_empty() {
-                info!("Running GPU capability tests...");
-                gpu_capabilities = crate::server::detect_gpu_capabilities(&ffmpeg, gpu_count);
-                info!("GPU capabilities: {:?}", gpu_capabilities);
-            }
+            info!("GPU count changed: {} → {}", gpu_count, new_gpu_count);
         }
         let effective_max: usize = gpu_max_jobs_vec.iter().sum::<usize>().max(max_jobs.min(1));
 
@@ -208,7 +227,7 @@ async fn connect_and_run(
             }
             msg = read_msg::<ReverseControlMsg, _>(&mut rx) => {
                 match msg? {
-                    ReverseControlMsg::JobAssignment { job_id, ffmpeg_args, input_files, output_path, connect_port } => {
+                    ReverseControlMsg::JobAssignment { job_id, ffmpeg_args, input_files, output_path, connect_port, post_commands } => {
                         let permit = match sem.clone().try_acquire_owned() {
                             Ok(p) => p,
                             Err(_) => {
@@ -270,6 +289,7 @@ async fn connect_and_run(
                             let (exit_code, stderr) = match execute_job(
                                 &addr, &sec, &ff, &td,
                                 &job_id, ffmpeg_args, input_files, &output_path, connect_port,
+                                post_commands,
                             ).await {
                                 Ok((ec, se)) => (ec, se),
                                 Err(e) => {
@@ -422,6 +442,7 @@ async fn execute_job(
     address: &str, secret: &str, ffmpeg: &str, tmp_dir: &str,
     job_id: &str, ffmpeg_args: Vec<String>, input_files: Vec<FileInfo>,
     output_path: &str, connect_port: u16,
+    post_commands: Vec<String>,
 ) -> Result<(i32, String)> {
     // Connect data channel to the client
     let host = address.split(':').next().unwrap_or(address);
@@ -450,7 +471,7 @@ async fn execute_job(
     #[cfg(feature = "fuse")]
     let exit_code = crate::server::run_fuse_job(
         &mut rx, &mut tx, ffmpeg, &ffmpeg_args, &input_files,
-        &job_dir, job_id, &data_addr,
+        &job_dir, job_id, &data_addr, &post_commands,
     ).await?;
 
     #[cfg(not(feature = "fuse"))]

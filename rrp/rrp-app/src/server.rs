@@ -159,7 +159,7 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
     if transfer_mode == TransferMode::Mount {
         let exit_code = run_fuse_job(
             &mut rx, &mut tx, ffmpeg, &ffmpeg_args, &input_files,
-            &job_dir, &job_id, &peer.ip().to_string(),
+            &job_dir, &job_id, &peer.ip().to_string(), &[],
         ).await?;
         let _ = write_tagged(&mut tx, TAG_CONTROL, &ControlMsg::JobComplete { exit_code }).await;
         let _ = tx.flush().await;
@@ -289,6 +289,7 @@ pub async fn run_fuse_job(
     job_dir: &PathBuf,
     job_id: &str,
     peer: &str,
+    post_commands: &[String],
 ) -> Result<i32> {
     let mount_dir = job_dir.join("mnt");
     std::fs::create_dir_all(&mount_dir)?;
@@ -497,7 +498,54 @@ pub async fn run_fuse_job(
         }
     };
 
-    // Step 2: Unmount FUSE (ffmpeg is dead, safe to unmount)
+    // Run post-commands while FUSE is still mounted (source files accessible)
+    let mut post_exit_code = exit_code;
+    if exit_code == 0 && !post_commands.is_empty() {
+        info!("Job {}: running {} post-command(s)", job_id, post_commands.len());
+        let stderr_file = std::fs::OpenOptions::new()
+            .create(true).append(true).open(&stderr_path).ok();
+        for (idx, cmd) in post_commands.iter().enumerate() {
+            // Rewrite placeholders and input file paths
+            let mut rewritten = cmd.clone();
+            rewritten = rewritten.replace("{JOBDIR}", &job_dir.to_string_lossy());
+            rewritten = rewritten.replace("{OUTPUT}", &output_local.to_string_lossy());
+            for f in input_files {
+                let mount_path = mount_dir.join(&f.virtual_name);
+                rewritten = rewritten.replace(&f.original_path, &mount_path.to_string_lossy());
+            }
+            info!("Job {} post-cmd {}/{}: {}",
+                job_id, idx + 1, post_commands.len(),
+                if rewritten.len() > 120 { format!("{}...", &rewritten[..120]) } else { rewritten.clone() });
+            let result = Command::new("sh")
+                .arg("-c")
+                .arg(&rewritten)
+                .stdout(Stdio::null())
+                .stderr(stderr_file.as_ref()
+                    .and_then(|f| f.try_clone().ok())
+                    .map(|f| Stdio::from(f))
+                    .unwrap_or(Stdio::null()))
+                .status()
+                .await;
+            match result {
+                Ok(status) if status.success() => {
+                    info!("Job {} post-cmd {}/{} complete", job_id, idx + 1, post_commands.len());
+                }
+                Ok(status) => {
+                    error!("Job {} post-cmd {}/{} failed (exit {:?})", job_id, idx + 1, post_commands.len(), status.code());
+                    post_exit_code = status.code().unwrap_or(1);
+                    break;
+                }
+                Err(e) => {
+                    error!("Job {} post-cmd {}/{} error: {}", job_id, idx + 1, post_commands.len(), e);
+                    post_exit_code = 1;
+                    break;
+                }
+            }
+        }
+    }
+    let exit_code = post_exit_code;
+
+    // Step 2: Unmount FUSE (ffmpeg + post-commands done, safe to unmount)
     tokio::time::sleep(Duration::from_secs(1)).await;
     fuse_unmount(&mount_dir);
     let _ = fuse_handle.join();

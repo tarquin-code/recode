@@ -2,7 +2,7 @@
 
 **GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.21.2-blue)
+![Version](https://img.shields.io/badge/version-2.21.3-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -30,8 +30,14 @@
 ### Audio
 - **Codec Options** — Passthrough, Opus, AAC, AC3, EAC3
 - **Per-Stream Control** — Configure codec and bitrate for each audio track individually
-- **Audio Filters** — All tracks, first only, English only, or specific language
+- **Language Filter** — Keep all or selected languages (comma-separated codes)
+- **Audio Type Filter** — All tracks, TrueHD/Atmos, EAC3, AC3, stereo, surround
 - **Bitrate Control** — Configurable per-codec bitrate (64k-640k)
+
+### Subtitles
+- **Per-Stream Control** — Include/exclude individual subtitle tracks
+- **Language Filter** — Keep all, keep selected languages, or discard all subtitles
+- **Profile Support** — Subtitle settings in default profile and per-library profiles
 
 ### Multi-GPU
 - **Auto Detection** — Automatically detects all NVIDIA GPUs

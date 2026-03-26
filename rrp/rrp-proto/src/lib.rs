@@ -182,6 +182,11 @@ pub enum ReverseControlMsg {
         input_files: Vec<FileInfo>,
         output_path: String,
         connect_port: u16,
+        /// Shell commands to run after ffmpeg completes (while FUSE mount is still active).
+        /// Supports placeholders: {JOBDIR} = job directory, {OUTPUT} = encoded output file.
+        /// Input file paths are rewritten to FUSE mount paths automatically.
+        #[serde(default)]
+        post_commands: Vec<String>,
     },
     /// GPU server → Client: accept/reject
     JobAccepted { job_id: String },
