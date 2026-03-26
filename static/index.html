@@ -6179,7 +6179,8 @@ async function checkForUpdates(btn, silent) {
 
 function showUpdateInfo(current, latest, notes, published, name) {
     const pubDate = published ? new Date(published).toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'}) : '';
-    const versionText = `v${latest} available` + (name ? ` — ${name}` : '');
+    const cleanName = name ? name.replace(/^v[\d.]+\s*[—–-]\s*/, '') : '';
+    const versionText = `v${latest} available` + (cleanName ? ` — ${cleanName}` : '');
     const pubText = pubDate ? `Released ${pubDate}` : '';
     const changelogText = notes || 'No release notes available.';
 
