@@ -1387,7 +1387,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <p>Available in the sidebar, default profile (Settings), and per-library profiles.</p>
 
                 <h4>Keep Only Audio Type</h4>
-                <p>Filters which audio streams are included by codec type. For example, set to "EAC3" to only keep EAC3 tracks and drop TrueHD, AAC, etc.</p>
+                <p>Filters which audio streams are included by codec type. Available options:</p>
+                <ul>
+                    <li><strong>All streams</strong> &mdash; Keep everything (default)</li>
+                    <li><strong>TrueHD / Atmos only</strong> &mdash; Keep only TrueHD tracks (highest quality)</li>
+                    <li><strong>EAC3 (DD+) only</strong> &mdash; Keep only Dolby Digital Plus tracks</li>
+                    <li><strong>AC3 (DD) only</strong> &mdash; Keep only Dolby Digital tracks</li>
+                    <li><strong>AAC only</strong> &mdash; Keep only AAC tracks</li>
+                    <li><strong>Stereo only</strong> &mdash; Keep only 2-channel tracks</li>
+                    <li><strong>Surround only (5.1+)</strong> &mdash; Keep only 5.1 and 7.1 tracks</li>
+                </ul>
 
                 <div class="warn-tip"><strong>Dolby Vision + Audio:</strong> When encoding DV content, use <strong>Passthrough</strong> for audio. Re-encoding audio (even to EAC3) can prevent devices like Fire Stick from triggering the DV playback pipeline.</div>
 
@@ -1432,7 +1441,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         </div>
                         <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--purple);">
                             <div style="font-weight:600;">Keep Original</div>
-                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Re-encodes video while preserving DV metadata through the encode. No DV stripping or conversion. DV P5 runs at ~1.2x speed (CUDA decode without output_format cuda due to DOVI config incompatibility).</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Re-encodes video while preserving DV metadata through the encode. No DV stripping or conversion. DV P5 is slower than other profiles (CUDA decode without output_format cuda due to DOVI config incompatibility).</div>
                         </div>
                         <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--warning);">
                             <div style="font-weight:600;">Convert to HDR10</div>
@@ -1440,7 +1449,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         </div>
                         <div style="padding:10px;background:var(--bg-input);border-radius:6px;border-left:3px solid var(--success);">
                             <div style="font-weight:600;">Convert to DV P8.4</div>
-                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Re-encodes video and converts DV metadata to Profile 8.4 via 4-step RPU pipeline. DV P5 uses Vulkan/libplacebo for color conversion. Also upgrades HDR10 content to DV P8.4. Works on both local and remote GPUs.</div>
+                            <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Re-encodes video and converts DV metadata to Profile 8.4 via 4-step RPU pipeline. DV P5 uses Vulkan/libplacebo for color conversion. Also upgrades HDR10 content to DV P8.4. For remote GPU encodes, RPU extraction/injection runs locally on the main server (source file must be on local disk).</div>
                         </div>
                     </div>
                 </div>
@@ -1742,7 +1751,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <ul>
                     <li>Preset, video codec, hardware (GPU/CPU), output resolution, speed</li>
                     <li>CQ, max bitrate, audio codec, audio bitrate, audio filter</li>
-                    <li>DV mode, skip 4K, HDR only, discard if larger, delete original, English only</li>
+                    <li>DV mode, skip 4K, HDR only, discard if larger, delete original, audio/subtitle language filters</li>
                 </ul>
                 <div class="tip">All settings are saved when you click Save in Settings. If a profile is missing a field (e.g. from an older version), it automatically inherits the Default profile's value.</div>
 
@@ -1871,6 +1880,19 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-interface">
                 <h3>Interface Guide</h3>
 
+                <h4>Delete Files from Disk</h4>
+                <p>You can permanently delete files directly from the scan results:</p>
+                <ul>
+                    <li><strong>Single file</strong> &mdash; Click the <span style="color:var(--error);">X</span> button on any row to delete that file</li>
+                    <li><strong>Bulk delete</strong> &mdash; Select files with checkboxes, then click <strong>"Delete Selected from Disk"</strong> (next to Find Duplicates)</li>
+                </ul>
+                <p>Both actions show a <strong>two-step confirmation dialog</strong> listing the full file paths before deleting. Files can only be deleted if they are under a configured allowed path (Settings &rarr; General &rarr; Allowed Paths).</p>
+                <div class="warn-tip"><strong>Warning:</strong> This permanently deletes the actual file from disk. This cannot be undone.</div>
+
+                <h4>Encoded File Detection</h4>
+                <p>During encoding, a <code>RECODE</code> metadata tag is embedded in the MKV container. When scanning, files with this tag show as <strong>"Encoded"</strong> (green badge). Files without it show as <strong>"Candidate"</strong> (blue badge).</p>
+                <p>The tag survives file renames, moves, copies, and suffix changes. Use the <strong>Status</strong> dropdown filter to show only candidates or already-encoded files.</p>
+
                 <h4>Scan Results Table</h4>
                 <div class="example-box">
                     <div class="example-title">Column reference</div>
@@ -1880,7 +1902,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         <div style="font-weight:600;color:var(--text-primary);">Est.</div><div style="color:var(--text-secondary);">Estimated output size with current settings</div>
                         <div style="font-weight:600;color:var(--text-primary);">Suggestion</div><div style="color:var(--text-secondary);">Predicted savings — green (high), yellow (moderate), blue (small)</div>
                         <div style="font-weight:600;color:var(--text-primary);">Audio</div><div style="color:var(--text-secondary);">Audio track count. Hover for codec details.</div>
-                        <div style="font-weight:600;color:var(--text-primary);">Status</div><div style="color:var(--text-secondary);">Candidate (ready to encode), Recoded (encoded version exists), Optional (already HEVC)</div>
+                        <div style="font-weight:600;color:var(--text-primary);">Status</div><div style="color:var(--text-secondary);">Candidate (ready to encode) or Encoded (has RECODE metadata tag from previous encode)</div>
                     </div>
                 </div>
                 <div class="tip">Click any column header to sort. Click again to reverse. Use the filter bar to search by name, filter by codec/HDR, or show top N files by size.</div>
@@ -2300,7 +2322,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <li>Pre-encode permission check for tmp and output directories with warning banner</li>
                                 <li>History items with duplicate IDs now expand independently</li>
                                 <li>Spinning recode icon between Original/Encoding cards and during scan</li>
-                                <li>Status column: Candidate / Recoded / Optional</li>
+                                <li>Status column: Candidate / Encoded (RECODE metadata tag detection)</li>
                                 <li>DV P5 &rarr; HDR10 works without libplacebo (strips DV, sets HDR10 metadata)</li>
                                 <li>DV P8.4 option disabled when libplacebo unavailable</li>
                                 <li>GPU dropdown hidden when no working GPU, encoder forced to CPU</li>
