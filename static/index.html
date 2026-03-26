@@ -219,7 +219,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .progress-card .file-detail { font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); margin-bottom: 16px; word-break: break-all; }
 .progress-bar-container { position: relative; height: 28px; background: var(--bg-primary); border-radius: 14px; overflow: hidden; margin-bottom: 16px; border: 1px solid var(--border); }
 .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent), var(--purple)); background-size: 200% 100%; border-radius: 14px; transition: width 0.5s ease; min-width: 0; }
-.progress-bar-fill.encoding { animation: shimmer 2s linear infinite; }
+.progress-bar-fill.encoding { background-size: 200% 100%; }
+.progress-bar-fill.encoding.pulse { animation: shimmer 2s linear; }
 .progress-bar-fill.preparing { animation: preparing-pulse 1.5s ease-in-out infinite; background: linear-gradient(90deg, var(--bg-tertiary), var(--accent-dim), var(--bg-tertiary)); background-size: 200% 100%; opacity: 0.6; }
 .progress-bar-fill.paused { animation: none; background: #666; }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
@@ -4466,9 +4467,17 @@ function renderProgress() {
         const isPreparing = p.phase === 'preparing';
         const estPct = isPreparing ? 0 : _estimatePct(p);
         if (fill) {
-            fill.style.width = isPreparing ? '100%' : estPct + '%';
+            const oldPct = parseFloat(fill.style.width) || 0;
+            const newPct = isPreparing ? 100 : estPct;
+            fill.style.width = newPct + '%';
             if (isPreparing) fill.classList.add('preparing');
             else fill.classList.remove('preparing');
+            // Pulse only when progress increases
+            if (newPct > oldPct && !isPreparing) {
+                fill.classList.remove('pulse');
+                void fill.offsetWidth; // force reflow to restart animation
+                fill.classList.add('pulse');
+            }
         }
         const barText = document.getElementById('encodeBarText-' + job.id);
         if (barText) barText.textContent = isPreparing ? 'Preparing...' : _fmtPct(estPct);
