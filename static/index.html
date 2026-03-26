@@ -857,6 +857,15 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <option value="br20">Top 20 highest bitrate</option>
                             <option value="br50">Top 50 highest bitrate</option>
                         </select>
+                        <select id="filterRes" onchange="applyFilters()">
+                            <option value="">Res: All</option>
+                            <option value="4k">4K</option>
+                            <option value="1440p">1440p</option>
+                            <option value="1080p">1080p</option>
+                            <option value="720p">720p</option>
+                            <option value="480p">480p</option>
+                            <option value="360p">360p &amp; below</option>
+                        </select>
                         <select id="filterCodec" onchange="applyFilters()">
                             <option value="">Codec: All</option>
                             <option value="hevc">HEVC only</option>
@@ -1997,7 +2006,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.3</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.4</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2030,6 +2039,18 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.21.4 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>macOS GPU Server app</strong> &mdash; native macOS app for Apple VideoToolbox encoding (M1/M2/M3/M4), menu bar tray icon, bundled ffmpeg/tools</li>
+                                <li><strong>VideoToolbox support</strong> &mdash; hevc_videotoolbox and h264_videotoolbox hardware encoding on Apple Silicon</li>
+                                <li><strong>Resolution filter</strong> &mdash; filter scan results by 4K, 1440p, 1080p, 720p, 480p, 360p</li>
+                                <li><strong>Profile language filters</strong> &mdash; audio and subtitle language settings now applied in webhook and folder watch paths</li>
+                                <li><strong>Vulkan GPU balancing</strong> &mdash; DV P5 Vulkan/libplacebo encodes distributed across GPUs on multi-GPU servers</li>
+                                <li><strong>GPU server dedup</strong> &mdash; listener removes stale entries when same server reconnects</li>
+                                <li><strong>VideoToolbox probe fix</strong> &mdash; encoder detection uses -allow_sw for VideoToolbox, -b:v for capability tests</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.21.3 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -5225,6 +5246,15 @@ function applyFilters() {
     // Search filter
     const search = (document.getElementById('filterSearch').value || '').toLowerCase().trim();
     if (search) files = files.filter(f => f.filename.toLowerCase().includes(search));
+
+    // Resolution filter (matches resolution_label() in Python)
+    const res = document.getElementById('filterRes')?.value || '';
+    if (res === '4k') files = files.filter(f => f.width >= 3840 || f.height >= 2160);
+    else if (res === '1440p') files = files.filter(f => (f.width >= 2560 || f.height >= 1440) && f.width < 3840 && f.height < 2160);
+    else if (res === '1080p') files = files.filter(f => (f.width >= 1920 || f.height >= 1080) && f.width < 2560 && f.height < 1440);
+    else if (res === '720p') files = files.filter(f => (f.width >= 1280 || f.height >= 720) && f.width < 1920 && f.height < 1080);
+    else if (res === '480p') files = files.filter(f => f.height >= 480 && f.width < 1280 && f.height < 720);
+    else if (res === '360p') files = files.filter(f => f.height < 480);
 
     // Codec filter
     const codec = document.getElementById('filterCodec').value;

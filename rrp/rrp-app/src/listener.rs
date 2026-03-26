@@ -337,6 +337,19 @@ async fn handle_control(
     let conn_id = format!("{}@{}", name, peer);
     let (job_tx, mut job_rx) = mpsc::channel::<ReverseControlMsg>(16);
 
+    // Remove stale entries for the same server name (previous connections)
+    {
+        let mut gpus = state.gpus.write().await;
+        let stale: Vec<String> = gpus.iter()
+            .filter(|(_, g)| g.name == name)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in stale {
+            info!("Removing stale connection for '{}': {}", name, k);
+            gpus.remove(&k);
+        }
+    }
+
     info!("GPU capabilities for '{}': {:?}", name, gpu_capabilities);
     state.gpus.write().await.insert(conn_id.clone(), ConnectedGpu {
         name: name.clone(), address: peer.ip().to_string(), encoders, encoder_type, os, arch, max_jobs, has_fuse,
