@@ -2797,7 +2797,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <span id="settingsUnsaved" style="font-size:11px;color:var(--warning);display:none;">Unsaved changes</span>
             <div style="display:flex;gap:8px;margin-left:auto;">
                 <button class="btn" onclick="closeSettings()">Close</button>
-                <button class="btn btn-primary" id="btnSaveSettings" onclick="saveSettings()">Save Settings</button>
+                <button class="btn btn-primary" id="btnSaveSettings" onclick="saveSettings()" disabled style="opacity:0.5;">Save Settings</button>
             </div>
         </div>
     </div>
@@ -5675,7 +5675,7 @@ async function openSettings() {
                     <span style="${capStyle}">${capSpan(caps['4k_sdr'], '4K')} ${capSpan(caps['4k_10bit'], '10bit')} ${capSpan(caps['4k_hdr'], 'HDR')}</span>
                 </div>` : '';
                 return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.4;' : ''}">
-                    <button class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="toggleGpu(${g.index}, ${!disabled});loadSettings();">${svgIcon('power', 14)}</button>
+                    <button class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="toggleGpu(${g.index}, ${!disabled});openSettings();">${svgIcon('power', 14)}</button>
                     <div style="flex:1;min-width:0;">
                         <div style="font-size:12px;font-weight:600;">GPU ${g.index} <span style="font-weight:400;color:var(--text-muted);">${escHtml(g.name)}</span></div>
                         <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${vram} VRAM</div>
@@ -5736,6 +5736,8 @@ async function openSettings() {
     window._settingsDirty = false;
     const unsaved = document.getElementById('settingsUnsaved');
     if (unsaved) unsaved.style.display = 'none';
+    const saveBtn = document.getElementById('btnSaveSettings');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.style.opacity = '0.5'; saveBtn.textContent = 'Save Settings'; }
     const modal = document.getElementById('settingsModal');
     if (!modal._changeListenerAdded) {
         modal.addEventListener('input', () => { markSettingsDirty(); });
@@ -5749,7 +5751,7 @@ function markSettingsDirty() {
     const unsaved = document.getElementById('settingsUnsaved');
     if (unsaved) unsaved.style.display = '';
     const btn = document.getElementById('btnSaveSettings');
-    if (btn && btn.textContent === 'Saved') { btn.textContent = 'Save Settings'; btn.style.background = ''; }
+    if (btn) { btn.disabled = false; btn.style.opacity = ''; btn.textContent = 'Save Settings'; btn.style.background = ''; }
 }
 
 function switchSettingsTab(name, el) {
@@ -6340,11 +6342,11 @@ async function saveSettings() {
             const unsaved = document.getElementById('settingsUnsaved');
             if (unsaved) unsaved.style.display = 'none';
             window._settingsDirty = false;
-            setTimeout(() => { btn.textContent = origText; btn.style.background = ''; btn.disabled = false; }, 1500);
+            setTimeout(() => { btn.textContent = 'Save Settings'; btn.style.background = ''; btn.disabled = true; btn.style.opacity = '0.5'; }, 1500);
         } else {
             btn.textContent = 'Failed';
             btn.style.background = 'var(--error)';
-            setTimeout(() => { btn.textContent = origText; btn.style.background = ''; btn.disabled = false; }, 2000);
+            setTimeout(() => { btn.textContent = 'Save Settings'; btn.style.background = ''; btn.disabled = false; btn.style.opacity = ''; }, 2000);
         }
     } catch(e) {
         btn.textContent = 'Error';
