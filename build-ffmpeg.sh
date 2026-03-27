@@ -1,5 +1,5 @@
 #!/bin/bash
-# Plex Re-Encoder — ffmpeg build script
+# Recode — ffmpeg build script
 # Builds ffmpeg with NVENC, libplacebo, Vulkan, libx265, libopus support
 # Run as root. Takes 15-30 minutes depending on your system.
 set -e

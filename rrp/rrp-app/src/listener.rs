@@ -514,7 +514,7 @@ async fn handle_data(
                     let mut file = tokio::fs::File::create(&output_path).await?;
                     let mut hasher = Sha256::new();
                     let mut remaining = total;
-                    let mut buf = vec![0u8; 256 * 1024];
+                    let mut buf = vec![0u8; CHUNK_SIZE];
                     while remaining > 0 {
                         let to_read = std::cmp::min(remaining as usize, buf.len());
                         let n = rx.read(&mut buf[..to_read]).await?;

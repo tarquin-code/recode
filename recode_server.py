@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# Plex Re-Encoder - recode_server.py
+# Recode - recode_server.py
 # Copyright (C) 2026 Tarquin Douglass
 #
 # This program is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Plex Re-Encoder Server v2.0.0
+Recode Server v2.0.0
 FastAPI backend for H.265 re-encoding with GPU acceleration,
 Dolby Vision conversion, and real-time WebSocket progress.
 
@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.21.4"
+VERSION = "2.21.5"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -4124,7 +4124,7 @@ async def encode_worker(worker_id: int):
 # FastAPI App
 # =============================================================================
 
-app = FastAPI(title="Plex Re-Encoder")
+app = FastAPI(title="Recode")
 
 # First-run detection — set to True if settings file doesn't exist OR has no setup_complete flag
 FIRST_RUN = not app_settings.get("setup_complete", False)

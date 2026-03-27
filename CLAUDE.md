@@ -1,7 +1,7 @@
 # Recode - Claude Code Instructions
 
 ## Project Overview
-Plex Re-Encoder — GPU-accelerated HEVC re-encoding web UI with Dolby Vision support, remote GPU servers via RRP (Recode Remote Protocol), and real-time WebSocket progress.
+Recode — GPU-accelerated HEVC re-encoding web UI with Dolby Vision support, remote GPU servers via RRP (Recode Remote Protocol), and real-time WebSocket progress.
 
 ## Architecture
 - **Backend**: Python (`recode_server.py`) — FastAPI + WebSocket, async encode queue
