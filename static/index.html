@@ -17,7 +17,7 @@
 
   Author:  Tarquin Douglass
   License: GPL-3.0-or-later
-  URL:     https://github.com/tarquin-code/plex-recencoder
+  URL:     https://github.com/tarquin-code/recode
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -1999,7 +1999,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
                 <h4>Installation</h4>
                 <p>One-liner install from GitHub:</p>
-                <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">wget -qO- https://github.com/tarquin-code/plex-recencoder/releases/latest/download/plex-recode.tar.gz | tar xz &amp;&amp; cd plex-recode &amp;&amp; sudo bash install.sh</div>
+                <div class="example-box" style="font-family:var(--font-mono);font-size:11px;">wget -qO- https://github.com/tarquin-code/recode/releases/latest/download/recode.tar.gz | tar xz &amp;&amp; cd recode &amp;&amp; sudo bash install.sh</div>
                 <p style="margin-top:8px;">The installer includes a <strong>bundled static ffmpeg</strong> for CPU encoding and <strong>RRP binaries</strong> for remote GPU encoding &mdash; no build step needed. GPU encoding requires building ffmpeg from source via the Setup Wizard (15-30 minutes). Supported distributions: Ubuntu, Debian, Fedora, RHEL/Alma/Rocky, openSUSE/SLES, Arch/Manjaro.</p>
             </div>
 
@@ -2296,7 +2296,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <li>Auto-updater handles root-owned files and subdirectories correctly</li>
                                 <li>Setup wizard: all buttons disabled during install, page reload recovery</li>
                                 <li>History badge only cycles statuses with values</li>
-                                <li>One-liner install: <code>wget -qO- .../plex-recode.tar.gz | tar xz &amp;&amp; cd plex-recode &amp;&amp; sudo bash install.sh</code></li>
+                                <li>One-liner install: <code>wget -qO- .../recode.tar.gz | tar xz &amp;&amp; cd recode &amp;&amp; sudo bash install.sh</code></li>
                             </ul>
                         </div>
                         <div>
@@ -2334,7 +2334,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <li>Fix: resize strips CUDA hwaccel and uses software scale + GPU encode</li>
                                 <li>Upscale warning shown when target is larger than source</li>
                                 <li>Speed preset (pX) shown in all preset dropdowns</li>
-                                <li>GitHub repo URL updated to tarquin-code/plex-recencoder</li>
+                                <li>GitHub repo URL updated to tarquin-code/recode</li>
                                 <li>ffmpeg build: adds /usr/local/lib to ldconfig path (fixes libplacebo.so not found on RHEL)</li>
                                 <li>ffmpeg build: RHEL/Alma package names fixed, enables CRB/EPEL, pip fallback for meson</li>
                                 <li>GPU detection: uses nvidia-smi name when available, lspci -vmm fallback, auto-updates PCI IDs</li>

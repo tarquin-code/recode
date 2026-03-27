@@ -18,7 +18,7 @@
 #
 # Author:  Tarquin Douglass
 # License: GPL-3.0-or-later
-# URL:     https://github.com/tarquin-code/plex-recencoder
+# URL:     https://github.com/tarquin-code/recode
 # Usage:   sudo bash install.sh [--user <username>]
 #
 set -e

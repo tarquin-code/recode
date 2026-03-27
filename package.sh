@@ -10,20 +10,20 @@ VERSION=$(grep -oP 'VERSION = "\K[^"]+' /opt/Recode/recode_server.py)
 sed -i "s|version-[0-9.]*-blue|version-${VERSION}-blue|" /opt/Recode/README.md
 
 DIST_DIR="/tmp/recode-dist"
-TARBALL="/tmp/plex-recode-v${VERSION}.tar.gz"
+TARBALL="/tmp/recode-v${VERSION}.tar.gz"
 PROD_DIR="/opt/Recode-Prod"
 
 echo "Packaging Recode v${VERSION}..."
 
 rm -rf "$DIST_DIR"
-mkdir -p "${DIST_DIR}/plex-recode/static"
+mkdir -p "${DIST_DIR}/recode/static"
 
 # Build Python binary via PyInstaller
 echo "Building recode binary with PyInstaller..."
 cd /opt/Recode
 pyinstaller --onefile \
   --name recode \
-  --distpath "${DIST_DIR}/plex-recode/bin" \
+  --distpath "${DIST_DIR}/recode/bin" \
   --workpath /tmp/recode-pybuild \
   --specpath /tmp/recode-pybuild \
   --hidden-import uvicorn.logging \
@@ -51,18 +51,18 @@ pyinstaller --onefile \
   --clean \
   recode_server.py >/dev/null 2>&1 || { echo "PyInstaller build failed!"; exit 1; }
 rm -rf /tmp/recode-pybuild
-echo "  recode binary: $(du -h "${DIST_DIR}/plex-recode/bin/recode" | awk '{print $1}')"
+echo "  recode binary: $(du -h "${DIST_DIR}/recode/bin/recode" | awk '{print $1}')"
 
 # Write version file
-echo "$VERSION" > "${DIST_DIR}/plex-recode/VERSION"
+echo "$VERSION" > "${DIST_DIR}/recode/VERSION"
 
 # Core app files
-cp /opt/Recode/static/index.html "${DIST_DIR}/plex-recode/static/"
-cp /opt/Recode/static/setup.html "${DIST_DIR}/plex-recode/static/"
-cp /opt/Recode/install.sh "${DIST_DIR}/plex-recode/"
-cp /opt/Recode/build-ffmpeg.sh "${DIST_DIR}/plex-recode/"
-cp /opt/Recode/LICENSE "${DIST_DIR}/plex-recode/"
-cp /opt/Recode/README.md "${DIST_DIR}/plex-recode/"
+cp /opt/Recode/static/index.html "${DIST_DIR}/recode/static/"
+cp /opt/Recode/static/setup.html "${DIST_DIR}/recode/static/"
+cp /opt/Recode/install.sh "${DIST_DIR}/recode/"
+cp /opt/Recode/build-ffmpeg.sh "${DIST_DIR}/recode/"
+cp /opt/Recode/LICENSE "${DIST_DIR}/recode/"
+cp /opt/Recode/README.md "${DIST_DIR}/recode/"
 
 # Update dovi_tool if not present in bin/
 if [[ ! -f "/opt/Recode/bin/dovi_tool" || -L "/opt/Recode/bin/dovi_tool" ]]; then
@@ -98,18 +98,18 @@ if [[ ! -f "/opt/Recode/bin/mkvmerge" || -L "/opt/Recode/bin/mkvmerge" ]]; then
         ./mkvtoolnix.AppImage --appimage-extract >/dev/null 2>&1
         if [[ -f "squashfs-root/usr/bin/mkvmerge" ]]; then
             # Create wrapper scripts that set LD_LIBRARY_PATH
-            MKVLIB_DIR="${DIST_DIR}/plex-recode/lib/mkvtoolnix"
+            MKVLIB_DIR="${DIST_DIR}/recode/lib/mkvtoolnix"
             mkdir -p "$MKVLIB_DIR"
             cp squashfs-root/usr/bin/mkvmerge squashfs-root/usr/bin/mkvextract squashfs-root/usr/bin/mkvpropedit "$MKVLIB_DIR/"
             cp -a squashfs-root/usr/lib/*.so* "$MKVLIB_DIR/" 2>/dev/null || true
             for tool in mkvmerge mkvextract mkvpropedit; do
-                cat > "${DIST_DIR}/plex-recode/bin/${tool}" << WRAPPER
+                cat > "${DIST_DIR}/recode/bin/${tool}" << WRAPPER
 #!/bin/bash
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="\${SCRIPT_DIR}/../lib/mkvtoolnix"
 LD_LIBRARY_PATH="\${LIB_DIR}:\${LD_LIBRARY_PATH}" exec "\${LIB_DIR}/${tool}" "\$@"
 WRAPPER
-                chmod +x "${DIST_DIR}/plex-recode/bin/${tool}"
+                chmod +x "${DIST_DIR}/recode/bin/${tool}"
             done
             echo "  mkvtoolnix downloaded from AppImage"
         fi
@@ -122,47 +122,47 @@ fi
 
 # Bundle all binaries from /opt/Recode/bin/ (except nvidia-smi which is driver-specific)
 echo "Bundling binaries..."
-mkdir -p "${DIST_DIR}/plex-recode/bin"
+mkdir -p "${DIST_DIR}/recode/bin"
 for binary in ffmpeg ffprobe recode-remote dovi_tool mediainfo mkvmerge mkvextract mkvpropedit; do
     if [[ -f "/opt/Recode/bin/${binary}" && ! -L "/opt/Recode/bin/${binary}" ]]; then
-        cp "/opt/Recode/bin/${binary}" "${DIST_DIR}/plex-recode/bin/${binary}"
-        chmod +x "${DIST_DIR}/plex-recode/bin/${binary}"
+        cp "/opt/Recode/bin/${binary}" "${DIST_DIR}/recode/bin/${binary}"
+        chmod +x "${DIST_DIR}/recode/bin/${binary}"
         echo "  ${binary}: bundled"
     elif [[ -f "/opt/Recode/bin/${binary}" ]]; then
         echo "  ${binary}: skipped (symlink)"
     fi
 done
-if [[ -f "${DIST_DIR}/plex-recode/bin/ffmpeg" ]]; then
-    FFMPEG_VER=$("${DIST_DIR}/plex-recode/bin/ffmpeg" -version 2>/dev/null | head -1 || echo "unknown")
+if [[ -f "${DIST_DIR}/recode/bin/ffmpeg" ]]; then
+    FFMPEG_VER=$("${DIST_DIR}/recode/bin/ffmpeg" -version 2>/dev/null | head -1 || echo "unknown")
     echo "  ffmpeg version: ${FFMPEG_VER}"
 fi
 
 # Bundle macOS ARM64 binaries if available
 if [[ -d "/opt/Recode/bin/MacOS-arm64" ]]; then
     echo "Bundling macOS ARM64 binaries..."
-    mkdir -p "${DIST_DIR}/plex-recode/macos"
-    cp -a /opt/Recode/bin/MacOS-arm64/* "${DIST_DIR}/plex-recode/macos/"
-    for f in "${DIST_DIR}/plex-recode/macos/"*; do
+    mkdir -p "${DIST_DIR}/recode/macos"
+    cp -a /opt/Recode/bin/MacOS-arm64/* "${DIST_DIR}/recode/macos/"
+    for f in "${DIST_DIR}/recode/macos/"*; do
         [[ -f "$f" ]] && chmod +x "$f" && echo "  $(basename "$f"): bundled ($(du -h "$f" | awk '{print $1}'))"
     done
 fi
 
 # Create tarball
 cd "$DIST_DIR"
-tar -czf "$TARBALL" plex-recode/
+tar -czf "$TARBALL" recode/
 rm -rf "$DIST_DIR"
 
 # Copy to Recode-Prod (versioned + fixed "latest" name)
 mkdir -p "$PROD_DIR"
 cp -f "$TARBALL" "$PROD_DIR/"
-cp -f "$TARBALL" "$PROD_DIR/plex-recode.tar.gz"
+cp -f "$TARBALL" "$PROD_DIR/recode.tar.gz"
 
 echo ""
-echo "Package created: ${PROD_DIR}/plex-recode-v${VERSION}.tar.gz"
-echo "Latest copy:     ${PROD_DIR}/plex-recode.tar.gz"
+echo "Package created: ${PROD_DIR}/recode-v${VERSION}.tar.gz"
+echo "Latest copy:     ${PROD_DIR}/recode.tar.gz"
 echo "Size: $(du -h "$TARBALL" | awk '{print $1}')"
 echo ""
 echo "Installation:"
-echo "  tar -xzf plex-recode.tar.gz"
-echo "  cd plex-recode"
+echo "  tar -xzf recode.tar.gz"
+echo "  cd recode"
 echo "  sudo bash install.sh"

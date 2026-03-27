@@ -24,7 +24,7 @@ Dolby Vision conversion, and real-time WebSocket progress.
 
 Author:  Tarquin Douglass
 License: GPL-3.0-or-later
-URL:     https://github.com/tarquin-code/plex-recencoder
+URL:     https://github.com/tarquin-code/recode
 """
 
 import asyncio
@@ -5353,7 +5353,7 @@ async def update_check():
     """Check GitHub for a newer version."""
     try:
         r = http_requests.get(
-            "https://api.github.com/repos/tarquin-code/plex-recencoder/releases/latest",
+            "https://api.github.com/repos/tarquin-code/recode/releases/latest",
             timeout=10, headers={"Accept": "application/vnd.github.v3+json"})
         if r.status_code != 200:
             return {"update_available": False, "error": f"GitHub API returned {r.status_code}"}
