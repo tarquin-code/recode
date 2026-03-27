@@ -173,7 +173,7 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
             let local_path = job_dir.join(&fi.virtual_name);
             let mut file = tokio::fs::File::create(&local_path).await?;
             let mut remaining = fi.size;
-            let mut buf = vec![0u8; 256 * 1024];
+            let mut buf = vec![0u8; CHUNK_SIZE];
             while remaining > 0 {
                 let to_read = std::cmp::min(remaining as usize, buf.len());
                 let n = rx.read(&mut buf[..to_read]).await?;
@@ -253,7 +253,7 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
             write_msg(&mut tx, &total).await?;
             let mut file = tokio::fs::File::open(&output_local).await?;
             let mut hasher = Sha256::new();
-            let mut buf = vec![0u8; 256 * 1024];
+            let mut buf = vec![0u8; CHUNK_SIZE];
             loop {
                 let n = file.read(&mut buf).await?;
                 if n == 0 { break; }
@@ -562,7 +562,7 @@ pub async fn run_fuse_job(
         write_tagged(tx, STREAM_OUTPUT, &total).await?;
         let mut file = tokio::fs::File::open(&output_local).await?;
         let mut hasher = Sha256::new();
-        let mut buf = vec![0u8; 256 * 1024];
+        let mut buf = vec![0u8; CHUNK_SIZE];
         loop {
             let n = file.read(&mut buf).await?;
             if n == 0 { break; }

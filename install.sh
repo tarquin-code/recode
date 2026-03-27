@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Plex Re-Encoder - install.sh
+# Recode - install.sh
 # Copyright (C) 2026 Tarquin Douglass
 #
 # This program is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-APP_NAME="Plex Re-Encoder"
+APP_NAME="Recode"
 APP_DIR="/opt/Recode"
 SERVICE_NAME="recode"
 PORT=9877
@@ -62,7 +62,7 @@ info() { echo -e "${CYAN}[i]${NC} $1"; }
 
 echo ""
 _VER="v${APP_VERSION}"
-_TITLE="Plex Re-Encoder Installer"
+_TITLE="Recode Installer"
 _W=38
 _tp=$(( (_W - ${#_TITLE}) / 2 )); _ts=$(( _W - ${#_TITLE} - _tp ))
 _vp=$(( (_W - ${#_VER}) / 2 )); _vs=$(( _W - ${#_VER} - _vp ))
@@ -418,7 +418,7 @@ log "Permissions set to ${RUN_USER}:${RUN_GROUP}"
 # Allow plex user to run package managers and build scripts as root (for web UI tool installs)
 SUDOERS_FILE="/etc/sudoers.d/recode"
 cat > "$SUDOERS_FILE" << SUDOEOF
-# Plex Re-Encoder — allow tool installation and service restart from web UI
+# Recode — allow tool installation and service restart from web UI
 ${RUN_USER} ALL=(ALL) NOPASSWD: ALL
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
@@ -434,7 +434,7 @@ log "Using Python: ${EXEC_START}"
 
 cat > "$SERVICE_FILE" << EOF
 [Unit]
-Description=Plex Re-Encoder Web UI
+Description=Recode Web UI
 After=network.target
 
 [Service]

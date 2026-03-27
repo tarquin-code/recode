@@ -1,8 +1,8 @@
-# Plex Re-Encoder
+# Recode
 
 **GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.21.4-blue)
+![Version](https://img.shields.io/badge/version-2.21.5-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 

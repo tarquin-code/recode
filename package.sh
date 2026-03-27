@@ -1,5 +1,5 @@
 #!/bin/bash
-# Package Plex Re-Encoder for distribution
+# Package Recode for distribution
 set -e
 
 # Read version from recode_server.py — use as-is (set version before running package.sh)
@@ -13,7 +13,7 @@ DIST_DIR="/tmp/recode-dist"
 TARBALL="/tmp/plex-recode-v${VERSION}.tar.gz"
 PROD_DIR="/opt/Recode-Prod"
 
-echo "Packaging Plex Re-Encoder v${VERSION}..."
+echo "Packaging Recode v${VERSION}..."
 
 rm -rf "$DIST_DIR"
 mkdir -p "${DIST_DIR}/plex-recode/static"

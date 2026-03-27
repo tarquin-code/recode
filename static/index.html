@@ -1,5 +1,5 @@
 <!--
-  Plex Re-Encoder - index.html
+  Recode - index.html
   Copyright (C) 2026 Tarquin Douglass
 
   This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300b4d8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a9 9 0 1 1-6.219-8.56'/><polyline points='21 3 21 9 15 9'/></svg>">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Plex Re-Encoder</title>
+<title>Recode</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -90,7 +90,7 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: v
 
 header { background: var(--bg-secondary); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
 .header-left { display: flex; align-items: center; gap: 12px; }
-.logo { font-size: 20px; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.logo { font-size: 20px; font-weight: 400; color: #fff; }
 .logo-sub { font-size: 12px; color: var(--text-muted); font-weight: 400; }
 .status-indicators { display: flex; gap: 12px; align-items: center; }
 .status-dot { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
@@ -544,7 +544,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
     <header>
         <div class="header-left">
             <div>
-                <div class="logo">Plex Re-Encoder <span id="appVersionBadge" style="font-size:11px;font-weight:400;color:var(--text-muted);vertical-align:middle;"></span></div>
+                <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;vertical-align:middle;margin-right:4px;display:inline-block;position:relative;top:-2px;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="21 3 21 9 15 9"/></svg>Recode <span id="appVersionBadge" style="font-size:11px;font-weight:400;color:var(--text-muted);vertical-align:middle;"></span></div>
                 <div class="logo-sub" id="appVersion">H.265 GPU/CPU encode with HDR &amp; Dolby Vision</div>
             </div>
         </div>
@@ -1981,7 +1981,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <p>Shows aggregate statistics across all completed encodes — total files, space saved, average compression ratio, and total encoding time.</p>
 
                 <h4>Auto-Updates</h4>
-                <p>Plex Re-Encoder checks GitHub for new releases automatically once per day. When a new version is detected:</p>
+                <p>Recode checks GitHub for new releases automatically once per day. When a new version is detected:</p>
                 <ul>
                     <li>A blue banner appears below the header &mdash; click it to view the changelog and update</li>
                     <li>The banner persists across page reloads until dismissed or the update is applied</li>
@@ -2006,8 +2006,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <!-- ABOUT -->
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
-                    <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Plex Re-Encoder</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.4</div>
+                    <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Recode</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.5</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2015,7 +2015,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </div>
 
                 <h4>About</h4>
-                <p>Plex Re-Encoder is a web-based tool for batch re-encoding media libraries to HEVC (H.265) using GPU-accelerated encoding (NVENC) or CPU encoding (libx265). It integrates with Plex Media Server for library scanning, automatic webhook-triggered encoding, and post-encode library rescans.</p>
+                <p>Recode is a web-based tool for batch re-encoding media libraries to HEVC (H.265) using GPU-accelerated encoding (NVENC) or CPU encoding (libx265). It integrates with Plex Media Server for library scanning, automatic webhook-triggered encoding, and post-encode library rescans.</p>
 
                 <h4>System Information</h4>
                 <div id="aboutSystemInfo" style="margin-bottom:16px;">
@@ -2040,6 +2040,15 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.21.5 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Renamed to Recode</strong> &mdash; application renamed from Plex Re-Encoder to Recode across all UI, documentation, installer, setup wizard, and GitHub repository</li>
+                                <li><strong>New branding</strong> &mdash; header logo icon, clean white non-bold heading, setup wizard updated to match</li>
+                                <li><strong>8MB file transfer chunks</strong> &mdash; increased RRP file transfer buffer from 256KB to 8MB for more reliable large file transfers</li>
+                                <li><strong>Settings save fix</strong> &mdash; saving settings no longer kills active encodes; only restarts listener when config actually changes</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.21.4 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
