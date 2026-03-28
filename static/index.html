@@ -2007,7 +2007,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Recode</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.21.5</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.22.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2040,6 +2040,20 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.22.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>macOS GPU Server app</strong> &mdash; native macOS app with tray icon, spinning animation during encodes, dock progress badge, system graphs, and per-job detail in tray menu</li>
+                                <li><strong>macOS FUSE fixes</strong> &mdash; <code>diskutil unmount force</code>, <code>nobrowse</code>/<code>defer_permissions</code>/<code>noappledouble</code> mount options, output sent before unmount to prevent stalls</li>
+                                <li><strong>HDR10 N/A fix</strong> &mdash; MaxCLL/MaxFALL values of &ldquo;N/A&rdquo; from ffprobe no longer crash the DV P8.4 RPU generation pipeline</li>
+                                <li><strong>4K GPU guard fix</strong> &mdash; files with non-standard widths (e.g. 3780px) now correctly detected as 4K and excluded from small VRAM GPUs</li>
+                                <li><strong>Cancel duplicate fix</strong> &mdash; cancelling a job no longer creates two entries in the failed list</li>
+                                <li><strong>Daily cache scan</strong> &mdash; background scan pre-warms the file cache daily so directory scans are instant. Configurable hour in Settings &rarr; General</li>
+                                <li><strong>Watchdog fix</strong> &mdash; remote listener jobs no longer killed as zombies by the job watchdog</li>
+                                <li><strong>GPU capability caching</strong> &mdash; capability test results cached for 24h on remote GPU servers, instant startup on subsequent launches</li>
+                                <li><strong>macOS app icon</strong> &mdash; proper squircle icon with Recode logo, DMG installer package</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.21.5 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -2785,6 +2799,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     </div>
                 </div>
 
+
                 <!-- GPU Config -->
                 <div class="set-section" id="setTab-remote-gpu">
                     <div class="set-section-title">GPU Config</div>
@@ -2873,6 +2888,19 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;">
                             <label class="set-chk"><input type="checkbox" id="setAutoStartQueue"> Auto-start queue on restart</label>
                             <label class="set-chk" style="color:orange;font-weight:600;"><input type="checkbox" id="setTestMode"> Test mode (5 min encodes)</label>
+                        </div>
+                    </div>
+
+                    <!-- Daily Cache Scan -->
+                    <div style="padding-top:16px;border-top:1px solid var(--border);margin-bottom:20px;">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:6px;">Daily Cache Scan</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">Pre-warm the scan cache daily so directory scans are instant. Only probes new or changed files.</div>
+                        <div style="display:flex;gap:20px;align-items:center;">
+                            <label class="set-chk" style="font-size:13px;"><input type="checkbox" id="setDailyScanEnabled"> Enable daily scan</label>
+                            <div class="form-group" style="margin-bottom:0;width:120px;">
+                                <label>Scan Hour</label>
+                                <select id="setDailyScanHour" style="padding:6px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;"></select>
+                            </div>
                         </div>
                     </div>
 
@@ -5832,6 +5860,12 @@ async function openSettings() {
         document.getElementById('setWatchEnabled').checked = !!s.watch_enabled;
         document.getElementById('setWatchInterval').value = s.watch_interval || 300;
         document.getElementById('setWatchPaths').value = (s.watch_paths || []).join('\n');
+        // Daily scan
+        document.getElementById('setDailyScanEnabled').checked = s.daily_scan_enabled !== false;
+        const hourSel = document.getElementById('setDailyScanHour');
+        hourSel.innerHTML = '';
+        for (let h = 0; h < 24; h++) { const o = document.createElement('option'); o.value = h; o.textContent = `${h.toString().padStart(2,'0')}:00`; hourSel.appendChild(o); }
+        hourSel.value = s.daily_scan_hour ?? 3;
         // Library profiles
         libraryProfiles = s.library_profiles || {};
         // Backfill missing keys in existing profiles so webhooks/folder-watch use correct values
@@ -6427,6 +6461,9 @@ async function saveSettings() {
         watch_enabled: document.getElementById('setWatchEnabled').checked,
         watch_interval: parseInt(document.getElementById('setWatchInterval').value) || 300,
         watch_paths: document.getElementById('setWatchPaths').value.split('\n').map(s => s.trim()).filter(Boolean),
+        // Daily scan
+        daily_scan_enabled: document.getElementById('setDailyScanEnabled').checked,
+        daily_scan_hour: parseInt(document.getElementById('setDailyScanHour').value) || 3,
         // Remote Server (listener)
         remote_client_enabled: document.getElementById('setRemoteServerEnabled').checked,
         remote_client_port: parseInt(document.getElementById('setRemoteServerPort').value) || 9879,

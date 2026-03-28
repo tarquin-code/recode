@@ -64,7 +64,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.21.5"
+VERSION = "2.22.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -344,6 +344,9 @@ APP_DEFAULTS = {
     "remote_client_enabled": False,
     "remote_client_port": 9879,
     "remote_client_secret": "",
+    # Daily background cache scan — pre-warm cache so user scans are instant
+    "daily_scan_enabled": True,
+    "daily_scan_hour": 3,  # Hour of day (0-23) to run the scan
 }
 
 def load_settings() -> dict:
@@ -762,13 +765,19 @@ async def get_file_info(path: str) -> Optional[FileInfo]:
         if "dolby" in sdt and not has_dovi:
             has_dovi = True
         elif "content light level" in sdt:
-            hdr10_metadata["max_cll"] = int(sd.get("max_content", 0))
-            hdr10_metadata["max_fall"] = int(sd.get("max_average", 0))
+            try:
+                v = sd.get("max_content", 0)
+                hdr10_metadata["max_cll"] = int(v) if str(v) not in ("N/A", "") else 0
+                v = sd.get("max_average", 0)
+                hdr10_metadata["max_fall"] = int(v) if str(v) not in ("N/A", "") else 0
+            except Exception:
+                pass
         elif "mastering display" in sdt:
             try:
                 max_lum = sd.get("max_luminance", "1000/1")
                 min_lum = sd.get("min_luminance", "1/10000")
-                # Parse fractions like "4000/1" and "1/200"
+                if str(max_lum) == "N/A": max_lum = "1000/1"
+                if str(min_lum) == "N/A": min_lum = "1/10000"
                 mn, md = min_lum.split("/")
                 xn, xd = max_lum.split("/")
                 hdr10_metadata["min_lum"] = round(int(mn) / int(md), 4)
@@ -2399,7 +2408,7 @@ async def encode_worker(worker_id: int):
             if jid not in encode_queue.jobs or encode_queue.jobs[jid].status != JobStatus.QUEUED:
                 continue
             candidate = encode_queue.jobs[jid]
-            job_is_4k = candidate.file_info.get("width", 0) >= 3800
+            job_is_4k = candidate.file_info.get("width", 0) >= 3000 or candidate.file_info.get("height", 0) >= 2000
             job_encoder = candidate.settings.get("encoder", "gpu")
             job_target = candidate.settings.get("gpu_target", "auto")
 
@@ -2497,7 +2506,7 @@ async def encode_worker(worker_id: int):
                 if gpu_target == "auto" or not gpu_target.startswith("remote"):
                     gpu_target = "auto"
             is_cpu_job = encoder == "cpu" or next_job.settings.get("use_cpu", False)
-            _job_is_4k = next_job.file_info.get("width", 0) >= 3800
+            _job_is_4k = next_job.file_info.get("width", 0) >= 3000 or next_job.file_info.get("height", 0) >= 2000
             _job_is_hdr = next_job.file_info.get("is_hdr", False) or next_job.file_info.get("hdr_type", "SDR") != "SDR"
             _job_is_10bit = "10" in (next_job.file_info.get("pix_fmt", "") or "")
 
@@ -2774,15 +2783,17 @@ async def encode_worker(worker_id: int):
                 return
 
             encode_queue.queue_order = [j for j in encode_queue.queue_order if j != job.id]
-            log_lines = encode_queue.ffmpeg_logs.get(job.id, [])[-100:]
-            encode_queue.history.append({
-                "id": job.id, "file_info": info, "settings": job.settings,
-                "status": job.status,
-                "error": job.error, "started_at": job.started_at,
-                "finished_at": job.finished_at, "result": job.result or {},
-                "log": log_lines,
-            })
-            _record_encode_stat(job.status, job.result or {}, job.started_at, job.finished_at)
+            # Only add to history if cancel_job hasn't already cleaned this up
+            if job.id in encode_queue.active_jobs:
+                log_lines = encode_queue.ffmpeg_logs.get(job.id, [])[-100:]
+                encode_queue.history.append({
+                    "id": job.id, "file_info": info, "settings": job.settings,
+                    "status": job.status,
+                    "error": job.error, "started_at": job.started_at,
+                    "finished_at": job.finished_at, "result": job.result or {},
+                    "log": log_lines,
+                })
+                _record_encode_stat(job.status, job.result or {}, job.started_at, job.finished_at)
             encode_queue.active_jobs.pop(job.id, None)
             encode_queue.ffmpeg_procs.pop(job.id, None)
             encode_queue.ffmpeg_logs.pop(job.id, None)
@@ -3178,7 +3189,8 @@ async def encode_worker(worker_id: int):
                         if frame_count == 0:
                             try: frn, frd = frame_rate_str.split("/"); fps = float(frn) / float(frd)
                             except Exception: fps = 23.976
-                            dur = float(probe_parts[2]) if len(probe_parts) > 2 and probe_parts[2].strip() else info.get("duration_secs", 0)
+                            try: dur = float(probe_parts[2]) if len(probe_parts) > 2 and probe_parts[2].strip() not in ("", "N/A") else info.get("duration_secs", 0)
+                            except (ValueError, TypeError): dur = info.get("duration_secs", 0)
                             frame_count = int(dur * fps) or 1000
 
                         hdr_meta = info.get("hdr10_metadata", {})
@@ -4966,7 +4978,7 @@ async def job_watchdog():
                 continue  # paused jobs are fine
             if j.status == JobStatus.ENCODING:
                 # Remote listener jobs have no local proc — skip watchdog for them
-                if j.settings.get("_remote_server_idx", -1) >= 0:
+                if j.settings.get("_remote_server_idx", -1) >= 0 or j.settings.get("_remote_gpu_name"):
                     continue
                 proc = encode_queue.ffmpeg_procs.get(jid)
                 if proc is None:
@@ -5261,6 +5273,7 @@ async def startup():
     asyncio.create_task(job_watchdog())
     global watch_task
     watch_task = asyncio.create_task(folder_watcher())
+    asyncio.create_task(daily_cache_scan())
     # Clear cached online status for remote servers (will be refreshed by status check)
     for srv in app_settings.get("remote_gpu_servers", []):
         srv.pop("_online", None)
@@ -6659,6 +6672,183 @@ async def get_job_log(job_id: str):
         if h.get("id") == job_id:
             return {"log": h.get("log", [])}
     return {"log": []}
+
+
+# =============================================================================
+# Daily Background Cache Scan
+# =============================================================================
+
+_daily_scan_running = False
+
+async def daily_cache_scan():
+    """Background task that pre-warms the scan cache daily.
+    Scans all directories under allowed_paths + library_paths,
+    probing only new/changed files (cache hits are free).
+    """
+    global _daily_scan_running
+    # Wait for startup to complete
+    await asyncio.sleep(30)
+
+    while True:
+        try:
+            if not app_settings.get("daily_scan_enabled", True):
+                await asyncio.sleep(3600)
+                continue
+
+            # Calculate sleep until next scan hour
+            import datetime
+            now = datetime.datetime.now()
+            scan_hour = app_settings.get("daily_scan_hour", 3)
+            next_run = now.replace(hour=scan_hour, minute=0, second=0, microsecond=0)
+            if next_run <= now:
+                next_run += datetime.timedelta(days=1)
+            wait_secs = (next_run - now).total_seconds()
+
+            # On first run, if cache is empty, scan immediately
+            try:
+                conn = get_cache_db()
+                count = conn.execute("SELECT COUNT(*) FROM file_cache").fetchone()[0]
+                conn.close()
+                if count == 0:
+                    wait_secs = 0
+                    log.info("Daily scan: cache empty, running initial scan now")
+            except Exception:
+                pass
+
+            if wait_secs > 0:
+                log.info(f"Daily scan: next run at {next_run.strftime('%H:%M')} ({wait_secs/3600:.1f}h)")
+                await asyncio.sleep(wait_secs)
+
+            # Collect directories to scan
+            paths = set()
+            for p in app_settings.get("allowed_paths", ["/mnt"]):
+                if os.path.isdir(p):
+                    paths.add(p)
+            for p in app_settings.get("library_paths", []):
+                if os.path.isdir(p):
+                    paths.add(p)
+            # Also include library profile paths
+            for p in app_settings.get("library_profiles", {}).keys():
+                if os.path.isdir(p):
+                    paths.add(p)
+            # Include watch paths
+            for p in app_settings.get("watch_paths", []):
+                if os.path.isdir(p):
+                    paths.add(p)
+
+            if not paths:
+                log.info("Daily scan: no directories configured, skipping")
+                await asyncio.sleep(3600)
+                continue
+
+            _daily_scan_running = True
+            log.info(f"Daily scan: starting cache refresh for {len(paths)} directory root(s)")
+            total_files = 0
+            total_probed = 0
+            total_cached = 0
+            start_time = time.time()
+
+            try:
+                cache_conn = get_cache_db()
+            except Exception:
+                cache_conn = None
+                _daily_scan_running = False
+                await asyncio.sleep(3600)
+                continue
+
+            sem = asyncio.Semaphore(8)  # Lower concurrency than interactive scan
+
+            for scan_path in sorted(paths):
+                if not app_settings.get("daily_scan_enabled", True):
+                    break
+
+                # Collect video files
+                video_files = []
+                for root, _, files in os.walk(scan_path):
+                    for f in files:
+                        ext = os.path.splitext(f)[1].lower()
+                        if ext in VIDEO_EXTENSIONS:
+                            video_files.append(os.path.join(root, f))
+
+                if not video_files:
+                    continue
+
+                # Load cached rows for this path
+                cached_rows = {}
+                if cache_conn:
+                    try:
+                        for row in cache_conn.execute("SELECT path, mtime, size_bytes FROM file_cache WHERE path LIKE ?",
+                                                       (scan_path.replace("%", "%%") + "%",)):
+                            cached_rows[row["path"]] = row
+                    except Exception:
+                        pass
+
+                # Determine which files need probing
+                files_to_probe = []
+                cached_count = 0
+                for filepath in video_files:
+                    cached = cached_rows.get(filepath)
+                    if cached:
+                        try:
+                            st = os.stat(filepath)
+                            if st.st_mtime == cached["mtime"] and st.st_size == cached["size_bytes"]:
+                                cached_count += 1
+                                continue
+                        except OSError:
+                            pass
+                    files_to_probe.append(filepath)
+
+                total_files += len(video_files)
+                total_cached += cached_count
+                total_probed += len(files_to_probe)
+
+                if not files_to_probe:
+                    continue
+
+                log.info(f"Daily scan: {scan_path} — {len(files_to_probe)} to probe, {cached_count} cached")
+
+                # Probe files
+                async def probe_and_cache(filepath):
+                    async with sem:
+                        if not app_settings.get("daily_scan_enabled", True):
+                            return
+                        info = await get_file_info(filepath)
+                        if info and cache_conn:
+                            suggestion = compute_suggestion(info)
+                            save_to_cache(cache_conn, info, suggestion)
+
+                tasks = [probe_and_cache(f) for f in files_to_probe]
+                await asyncio.gather(*tasks)
+
+                # Clean stale entries
+                if cache_conn:
+                    try:
+                        current = set(video_files)
+                        stale = set(cached_rows.keys()) - current
+                        if stale:
+                            cache_conn.executemany("DELETE FROM file_cache WHERE path = ?",
+                                                    [(p,) for p in stale])
+                            cache_conn.commit()
+                    except Exception:
+                        pass
+
+            if cache_conn:
+                try:
+                    cache_conn.close()
+                except Exception:
+                    pass
+
+            elapsed = time.time() - start_time
+            log.info(f"Daily scan complete: {total_files} files, {total_probed} probed, {total_cached} cached ({elapsed:.0f}s)")
+            _daily_scan_running = False
+
+            # Sleep until tomorrow
+            await asyncio.sleep(60)
+
+        except Exception as e:
+            log.error(f"Daily scan error: {e}")
+            _daily_scan_running = False
+            await asyncio.sleep(3600)
 
 
 # =============================================================================

@@ -102,12 +102,33 @@ pub async fn run(
         drop(lim);
         info!("GPU connector: {} encoders={:?} max_jobs={} gpus={} per_gpu={:?}", name, encoders, effective, gpu_count, gpu_max_jobs_vec);
 
-        // Always scan GPU capabilities fresh on every startup
+        // GPU capability tests — use cached results if <24h old, otherwise re-scan
         let has_hw_encoder = encoders.iter().any(|e| e.contains("nvenc") || e.contains("videotoolbox") || e.contains("vaapi") || e.contains("qsv"));
         if has_hw_encoder {
-            info!("Running GPU capability tests...");
-            gpu_capabilities = crate::server::detect_gpu_capabilities(&ffmpeg, gpu_count);
-            info!("GPU capabilities: {:?}", gpu_capabilities);
+            let cache_file = format!("{}/gpu_capabilities_cache.json", tmp_dir);
+            let mut use_cache = false;
+            if let Ok(meta) = std::fs::metadata(&cache_file) {
+                let age = meta.modified().ok().and_then(|m| m.elapsed().ok());
+                if let Some(age) = age {
+                    if age.as_secs() < 86400 {
+                        if let Ok(data) = std::fs::read_to_string(&cache_file) {
+                            if let Ok(cached) = serde_json::from_str::<Vec<serde_json::Value>>(&data) {
+                                if !cached.is_empty() {
+                                    info!("Using cached GPU capabilities ({:.0}h old)", age.as_secs() as f64 / 3600.0);
+                                    gpu_capabilities = cached;
+                                    use_cache = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !use_cache {
+                info!("Running GPU capability tests...");
+                gpu_capabilities = crate::server::detect_gpu_capabilities(&ffmpeg, gpu_count);
+                info!("GPU capabilities: {:?}", gpu_capabilities);
+                let _ = std::fs::write(&cache_file, serde_json::to_string(&gpu_capabilities).unwrap_or_default());
+            }
         }
     }
 
