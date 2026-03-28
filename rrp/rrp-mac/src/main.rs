@@ -72,29 +72,42 @@ struct TrayMenuItems {
     job_client: tray_icon::menu::MenuItem,
 }
 
-fn build_tray_menu() {
+fn build_tray_menu(encoding: bool) {
     use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
     unsafe {
         if let Some(ref tray) = TRAY {
             let menu = Menu::new();
             let status_item = MenuItem::new("Recode GPU Server", false, None);
-            let job_title = MenuItem::new("No active encodes", false, None);
-            let job_name = MenuItem::new("", false, None);
-            let job_encoder = MenuItem::new("", false, None);
-            let job_progress = MenuItem::new("", false, None);
-            let job_speed = MenuItem::new("", false, None);
-            let job_output = MenuItem::new("", false, None);
-            let job_client = MenuItem::new("", false, None);
+            let job_title = MenuItem::new(if encoding { "Encoding..." } else { "No active encodes" }, false, None);
 
             let _ = menu.append(&status_item);
             let _ = menu.append(&job_title);
-            let _ = menu.append(&PredefinedMenuItem::separator());
-            let _ = menu.append(&job_name);
-            let _ = menu.append(&job_progress);
-            let _ = menu.append(&job_speed);
-            let _ = menu.append(&job_output);
-            let _ = menu.append(&job_encoder);
-            let _ = menu.append(&job_client);
+
+            // Only add job detail items when encoding
+            let (job_name, job_progress, job_speed, job_output, job_encoder, job_client);
+            if encoding {
+                let _ = menu.append(&PredefinedMenuItem::separator());
+                job_name = MenuItem::new("", false, None);
+                job_progress = MenuItem::new("", false, None);
+                job_speed = MenuItem::new("", false, None);
+                job_output = MenuItem::new("", false, None);
+                job_encoder = MenuItem::new("", false, None);
+                job_client = MenuItem::new("", false, None);
+                let _ = menu.append(&job_name);
+                let _ = menu.append(&job_progress);
+                let _ = menu.append(&job_speed);
+                let _ = menu.append(&job_output);
+                let _ = menu.append(&job_encoder);
+                let _ = menu.append(&job_client);
+            } else {
+                job_name = MenuItem::new("", false, None);
+                job_progress = MenuItem::new("", false, None);
+                job_speed = MenuItem::new("", false, None);
+                job_output = MenuItem::new("", false, None);
+                job_encoder = MenuItem::new("", false, None);
+                job_client = MenuItem::new("", false, None);
+            }
+
             let _ = menu.append(&PredefinedMenuItem::separator());
             let _ = menu.append(&MenuItem::with_id("show", "Show Window", true, None));
             let _ = menu.append(&MenuItem::with_id("quit", "Quit", true, None));
@@ -248,7 +261,7 @@ fn update_tray_menu_items(jobs: &[JobLog], transcodes: &[Transcode], connected: 
 
     }
 }
-const VERSION: &str = "2.22.0";
+const VERSION: &str = "2.22.1";
 
 // ── Recode Design System (exact CSS values) ────────────────────────────────
 const BG_PRIMARY: egui::Color32 = egui::Color32::from_rgb(13, 17, 23);
@@ -361,6 +374,108 @@ struct App {
     sys_stats: SystemStats, stats_tick: Instant,
     tray_frame: usize, tray_tick: Instant, tray_was_encoding: bool,
     tray_menu_hash: u64,
+    fuse_installed: bool, fuse_checked: bool,
+    update_available: Arc<Mutex<Option<(String, String)>>>, update_checked: bool,
+}
+
+/// Check GitHub for a newer version. Returns (new_version, dmg_url) or None.
+fn check_for_update() -> Option<(String, String)> {
+    let output = Command::new("curl")
+        .args(["-sL", "--max-time", "10",
+               "https://api.github.com/repos/tarquin-code/recode/releases/latest"])
+        .output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let tag = json["tag_name"].as_str()?.trim_start_matches('v').to_string();
+
+    // Compare versions
+    let current_parts: Vec<u32> = VERSION.split('.').filter_map(|s| s.parse().ok()).collect();
+    let remote_parts: Vec<u32> = tag.split('.').filter_map(|s| s.parse().ok()).collect();
+    let is_newer = remote_parts.iter().zip(current_parts.iter())
+        .find(|(r, c)| r != c)
+        .map(|(r, c)| r > c)
+        .unwrap_or(remote_parts.len() > current_parts.len());
+
+    if !is_newer { return None; }
+
+    // Find DMG asset URL
+    let dmg_url = json["assets"].as_array()?.iter()
+        .filter_map(|a| a["browser_download_url"].as_str())
+        .find(|u| u.ends_with(".dmg"))
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| json["html_url"].as_str().unwrap_or("").to_string());
+
+    Some((tag, dmg_url))
+}
+
+fn download_and_install_update(dmg_url: &str) {
+    let dmg_path = "/tmp/Recode-GPU-Server-update.dmg";
+    // Download DMG
+    let _ = Command::new("curl").args(["-sL", "-o", dmg_path, dmg_url]).output();
+    // Mount DMG
+    let _ = Command::new("hdiutil").args(["attach", dmg_path, "-nobrowse", "-quiet"]).output();
+    // Find mounted volume and copy app
+    if let Ok(o) = Command::new("ls").arg("/Volumes/Recode GPU Server/").output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        if text.contains("Recode GPU Server.app") {
+            // Close current app, copy new one, reopen
+            let app_path = if let Ok(exe) = std::env::current_exe() {
+                exe.parent()
+                    .and_then(|p| p.parent())
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            } else { String::new() };
+            if !app_path.is_empty() && app_path.ends_with(".app") {
+                // Use a script that waits for us to exit, copies, and relaunches
+                let script = format!(
+                    "sleep 2; rm -rf '{}'; cp -a '/Volumes/Recode GPU Server/Recode GPU Server.app' '{}'; hdiutil detach '/Volumes/Recode GPU Server' -quiet; rm -f {}; open '{}'",
+                    app_path, app_path, dmg_path, app_path
+                );
+                let _ = Command::new("bash").args(["-c", &script]).spawn();
+                std::process::exit(0);
+            }
+        }
+    }
+    // Cleanup on failure
+    let _ = Command::new("hdiutil").args(["detach", "/Volumes/Recode GPU Server", "-quiet"]).output();
+    let _ = std::fs::remove_file(dmg_path);
+}
+
+fn check_macfuse_installed() -> bool {
+    // Check for macFUSE filesystem bundle
+    if std::path::Path::new("/Library/Filesystems/macfuse.fs").exists() {
+        return true;
+    }
+    // Check for kernel extension
+    if let Ok(o) = Command::new("kextstat").output() {
+        if String::from_utf8_lossy(&o.stdout).contains("macfuse") {
+            return true;
+        }
+    }
+    false
+}
+
+fn install_macfuse() {
+    // Download macFUSE .pkg and run installer
+    let url = "https://github.com/osxfuse/osxfuse/releases/latest";
+    // Try to find the latest .pkg URL
+    if let Ok(o) = Command::new("curl").args(["-sL", "-o", "/dev/null", "-w", "%{url_effective}",
+        "https://github.com/osxfuse/osxfuse/releases/latest"]).output() {
+        let _redirect_url = String::from_utf8_lossy(&o.stdout).to_string();
+    }
+    // Simpler: use brew if available, otherwise open download page
+    if let Ok(o) = Command::new("which").arg("brew").output() {
+        if o.status.success() {
+            // brew install macfuse
+            let _ = Command::new("open").args(["-a", "Terminal",
+                "bash -c 'echo Installing macFUSE...; brew install --cask macfuse; echo Done. Please reboot.; read'"
+            ]).output();
+            return;
+        }
+    }
+    // Fallback: open the macFUSE releases page
+    let _ = Command::new("open").arg(url).output();
 }
 
 /// Aggressive cleanup of all stale Recode processes and mounts.
@@ -430,10 +545,19 @@ impl App {
             sys_stats: SystemStats::default(), stats_tick: Instant::now(),
             tray_frame: 0, tray_tick: Instant::now(), tray_was_encoding: false,
             tray_menu_hash: 0,
+            fuse_installed: false, fuse_checked: false,
+            update_available: Arc::new(Mutex::new(None)), update_checked: false,
         }
     }
     fn start(&mut self) {
         if self.running || self.settings.address.is_empty() || self.settings.secret.is_empty() { return; }
+        if !self.fuse_installed {
+            self.fuse_installed = check_macfuse_installed(); // re-check in case just installed
+            if !self.fuse_installed {
+                self.log("Cannot start — macFUSE is not installed");
+                return;
+            }
+        }
         // Quick cleanup before starting
         let _ = Command::new("pkill").args(["-9", "-f", "recode-remote connect"]).output();
         std::thread::sleep(Duration::from_millis(300));
@@ -1095,6 +1219,25 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             self.visible = true;
         }
+        // Startup checks (first frame only)
+        if !self.fuse_checked {
+            self.fuse_checked = true;
+            self.fuse_installed = check_macfuse_installed();
+            if !self.fuse_installed {
+                self.log("WARNING: macFUSE is not installed — encoding will not work");
+            }
+        }
+        if !self.update_checked {
+            self.update_checked = true;
+            let logs = self.logs.clone();
+            let update_result = self.update_available.clone();
+            std::thread::spawn(move || {
+                if let Some((ver, url)) = check_for_update() {
+                    logs.lock().unwrap().push(format!("{} Update available: v{}", ts(), ver));
+                    *update_result.lock().unwrap() = Some((ver, url));
+                }
+            });
+        }
         if self.settings.auto_start && !self.started { self.started = true; self.start(); }
         // Repaint frequently when encoding (for tray animation), otherwise every 1s
         let encoding = !self.transcodes.is_empty();
@@ -1125,11 +1268,17 @@ impl eframe::App for App {
                 let status = self.status.lock().unwrap().clone();
                 update_tray_menu_items(&self.job_logs, &self.transcodes, status.connected, self.running);
             }
+            if !self.tray_was_encoding {
+                // Transition to encoding — rebuild menu with job detail rows
+                build_tray_menu(true);
+            }
             self.tray_was_encoding = true;
         } else if !encoding && self.tray_was_encoding {
             update_tray_icon(TRAY_STATIC);
             update_tray_tooltip("Recode GPU Server — Idle");
             update_dock_progress(0.0);
+            // Transition to idle — rebuild menu without job detail rows
+            build_tray_menu(false);
             let status = self.status.lock().unwrap().clone();
             update_tray_menu_items(&self.job_logs, &self.transcodes, status.connected, self.running);
             self.tray_was_encoding = false;
@@ -1240,6 +1389,64 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(
             egui::Frame::new().fill(BG_PRIMARY).inner_margin(egui::Margin::same(16))
         ).show(ctx, |ui| {
+            // macFUSE warning banner
+            if !self.fuse_installed {
+                let banner = egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(60, 30, 10))
+                    .stroke(egui::Stroke::new(1.0, WARNING))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(12, 8));
+                banner.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("⚠").color(WARNING).size(16.0));
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("macFUSE is not installed").color(WARNING).size(12.0).strong());
+                            ui.label(egui::RichText::new("macFUSE is required for FUSE file streaming. Encoding will not work without it.").color(TEXT_SECONDARY).size(10.0));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(egui::Button::new(egui::RichText::new("Install macFUSE").color(egui::Color32::WHITE).size(11.0))
+                                .fill(WARNING).corner_radius(4.0)).clicked() {
+                                install_macfuse();
+                            }
+                            if ui.add(egui::Button::new(egui::RichText::new("Re-check").color(TEXT_SECONDARY).size(10.0))
+                                .corner_radius(4.0)).clicked() {
+                                self.fuse_installed = check_macfuse_installed();
+                            }
+                        });
+                    });
+                });
+                ui.add_space(8.0);
+            }
+            // Update available banner
+            let update_info = self.update_available.lock().unwrap().clone();
+            if let Some((ref ver, ref url)) = update_info {
+                let banner = egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(15, 40, 60))
+                    .stroke(egui::Stroke::new(1.0, ACCENT))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(12, 8));
+                banner.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("⬆").color(ACCENT).size(16.0));
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(format!("Update available: v{}", ver)).color(ACCENT).size(12.0).strong());
+                            ui.label(egui::RichText::new(format!("Current: v{}", VERSION)).color(TEXT_MUTED).size(10.0));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let url_clone = url.clone();
+                            if ui.add(egui::Button::new(egui::RichText::new("Update Now").color(egui::Color32::WHITE).size(11.0))
+                                .fill(ACCENT).corner_radius(4.0)).clicked() {
+                                download_and_install_update(&url_clone);
+                            }
+                            if ui.add(egui::Button::new(egui::RichText::new("Later").color(TEXT_MUTED).size(10.0))
+                                .corner_radius(4.0)).clicked() {
+                                *self.update_available.lock().unwrap() = None;
+                            }
+                        });
+                    });
+                });
+                ui.add_space(8.0);
+            }
             egui::ScrollArea::vertical().show(ui, |ui| {
                 match self.panel {
                     Panel::Encoding => self.ui_encoding(ui, &status),
@@ -1630,61 +1837,83 @@ impl App {
     }
 
     fn ui_settings(&mut self, ui: &mut egui::Ui) {
-        // Section title with description (matching web UI pattern)
-        ui.label(egui::RichText::new("Connection Settings").color(TEXT_PRIMARY).size(15.0).strong());
-        ui.label(egui::RichText::new("Configure how this Mac connects to the Recode encoding server.").color(TEXT_SECONDARY).size(11.0));
-        ui.add_space(8.0);
+        // Helper: styled text input field with label
+        fn field(ui: &mut egui::Ui, label: &str, hint: &str, value: &mut String, password: bool) -> bool {
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(label).color(TEXT_SECONDARY).size(11.0));
+            ui.add_space(2.0);
+            let te = egui::TextEdit::singleline(value)
+                .hint_text(egui::RichText::new(hint).color(TEXT_MUTED))
+                .font(egui::FontId::monospace(12.0))
+                .text_color(TEXT_PRIMARY)
+                .desired_width(f32::INFINITY)
+                .margin(egui::Margin::symmetric(10, 6))
+                .password(password);
+            let frame = egui::Frame::new()
+                .fill(BG_INPUT)
+                .stroke(egui::Stroke::new(1.0, BORDER_SUBTLE))
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::same(0));
+            let mut changed = false;
+            frame.show(ui, |ui| {
+                if ui.add(te).changed() { changed = true; }
+            });
+            ui.add_space(4.0);
+            changed
+        }
 
-        // Connection card — 2-column grid with label above control (like web UI)
+        section_label(ui, "CONNECTION");
         card!(ui, |ui| {
             ui.columns(2, |cols| {
-                // Column 1
-                cols[0].label(egui::RichText::new("Server address").color(TEXT_MUTED).size(10.0));
-                if cols[0].add(egui::TextEdit::singleline(&mut self.draft.address).hint_text("host:port")).changed() { self.dirty = true; }
-                cols[0].add_space(6.0);
-                cols[0].label(egui::RichText::new("Secret").color(TEXT_MUTED).size(10.0));
-                if cols[0].add(egui::TextEdit::singleline(&mut self.draft.secret).password(true)).changed() { self.dirty = true; }
-
-                // Column 2
-                cols[1].label(egui::RichText::new("Display name").color(TEXT_MUTED).size(10.0));
-                if cols[1].add(egui::TextEdit::singleline(&mut self.draft.name)).changed() { self.dirty = true; }
-                cols[1].add_space(6.0);
-                cols[1].label(egui::RichText::new("Max concurrent jobs").color(TEXT_MUTED).size(10.0));
-                if cols[1].add(egui::Slider::new(&mut self.draft.max_jobs, 1..=8)).changed() { self.dirty = true; }
+                if field(&mut cols[0], "Server Address", "e.g. 192.168.1.100:9879", &mut self.draft.address, false) { self.dirty = true; }
+                if field(&mut cols[0], "Secret", "Shared secret key", &mut self.draft.secret, true) { self.dirty = true; }
+                if field(&mut cols[1], "Display Name", "e.g. Mac Studio", &mut self.draft.name, false) { self.dirty = true; }
+                cols[1].add_space(2.0);
+                cols[1].label(egui::RichText::new("Max Concurrent Jobs").color(TEXT_SECONDARY).size(11.0));
+                cols[1].add_space(2.0);
+                if cols[1].add(egui::Slider::new(&mut self.draft.max_jobs, 1..=8).text("jobs")).changed() { self.dirty = true; }
+                cols[1].add_space(4.0);
             });
         });
 
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new("Paths").color(TEXT_PRIMARY).size(15.0).strong());
-        ui.label(egui::RichText::new("Paths to tools used for encoding.").color(TEXT_SECONDARY).size(11.0));
-        ui.add_space(8.0);
-
+        ui.add_space(6.0);
+        section_label(ui, "PATHS");
         card!(ui, |ui| {
             ui.columns(2, |cols| {
-                cols[0].label(egui::RichText::new("FFmpeg path").color(TEXT_MUTED).size(10.0));
-                if cols[0].add(egui::TextEdit::singleline(&mut self.draft.ffmpeg_path)).changed() { self.dirty = true; }
-
-                cols[1].label(egui::RichText::new("Temp directory").color(TEXT_MUTED).size(10.0));
-                if cols[1].add(egui::TextEdit::singleline(&mut self.draft.tmp_dir)).changed() { self.dirty = true; }
+                if field(&mut cols[0], "FFmpeg Path", "/path/to/ffmpeg", &mut self.draft.ffmpeg_path, false) { self.dirty = true; }
+                if field(&mut cols[1], "Temp Directory", "/tmp/recode/rrp", &mut self.draft.tmp_dir, false) { self.dirty = true; }
             });
         });
 
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new("General").color(TEXT_PRIMARY).size(15.0).strong());
-        ui.add_space(4.0);
-
+        ui.add_space(6.0);
+        section_label(ui, "GENERAL");
         card!(ui, |ui| {
-            if ui.checkbox(&mut self.draft.auto_start, egui::RichText::new("Auto-connect on launch").color(TEXT_SECONDARY).size(12.0)).changed() { self.dirty = true; }
-            ui.label(egui::RichText::new("Automatically connects to the server when the app starts.").color(TEXT_MUTED).size(10.0));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let label = if self.draft.auto_start { "On" } else { "Off" };
+                let color = if self.draft.auto_start { ACCENT } else { TEXT_MUTED };
+                // Toggle switch
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(36.0, 20.0), egui::Sense::click());
+                let bg = if self.draft.auto_start { ACCENT } else { egui::Color32::from_rgb(60, 65, 72) };
+                ui.painter().rect_filled(rect, 10.0, bg);
+                let knob_x = if self.draft.auto_start { rect.right() - 10.0 } else { rect.left() + 10.0 };
+                ui.painter().circle_filled(egui::pos2(knob_x, rect.center().y), 7.0, egui::Color32::WHITE);
+                if resp.clicked() { self.draft.auto_start = !self.draft.auto_start; self.dirty = true; }
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Auto-connect on launch").color(TEXT_PRIMARY).size(12.0));
+                ui.label(egui::RichText::new(label).color(color).size(10.0));
+            });
+            ui.label(egui::RichText::new("Automatically connect to the encoding server when the app starts.").color(TEXT_MUTED).size(10.0));
+            ui.add_space(4.0);
         });
 
         // Save button
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             let btn_fill = if self.dirty { ACCENT } else { TEXT_MUTED };
-            let btn_text = if self.dirty { "Save Settings" } else { "Saved" };
+            let btn_text = if self.dirty { "Save Settings" } else { "Settings Saved" };
             if ui.add_enabled(self.dirty, egui::Button::new(egui::RichText::new(format!("  {}  ", btn_text)).color(egui::Color32::WHITE).size(12.0))
-                .fill(btn_fill).corner_radius(6.0).min_size(egui::vec2(120.0, 32.0))).clicked() {
+                .fill(btn_fill).corner_radius(6.0).min_size(egui::vec2(140.0, 34.0))).clicked() {
                 self.settings = self.draft.clone();
                 self.settings.save();
                 self.dirty = false;
@@ -1692,7 +1921,7 @@ impl App {
             }
             if self.dirty {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("\u{26A0}  Unsaved changes").color(WARNING).size(11.0));
+                ui.label(egui::RichText::new("Unsaved changes").color(WARNING).size(11.0));
             }
         });
     }
@@ -1720,7 +1949,7 @@ fn main() -> eframe::Result<()> {
         .build()
         .unwrap();
     unsafe { TRAY = Some(tray_instance); }
-    build_tray_menu();
+    build_tray_menu(false);
 
     // Handle menu events in background (match by string ID since menu items get recreated)
     std::thread::spawn(move || {
