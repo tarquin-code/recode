@@ -7,9 +7,248 @@ use std::time::{Duration, Instant};
 use tray_icon::{TrayIconBuilder, menu::{Menu, MenuEvent, MenuItem}};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate objc;
+
 static QUIT_FLAG: AtomicBool = AtomicBool::new(false);
 static SHOW_FLAG: AtomicBool = AtomicBool::new(false);
-const VERSION: &str = "0.1.0";
+
+const TRAY_FRAME_SIZE: usize = 22 * 22 * 4;
+const TRAY_FRAME_COUNT: usize = 36;
+const TRAY_FRAMES: &[u8] = include_bytes!("tray_frames.bin");
+const TRAY_STATIC: &[u8] = include_bytes!("tray_icon.bin");
+
+// Global tray handle (main thread only, wrapped in UnsafeCell)
+static mut TRAY: Option<tray_icon::TrayIcon> = None;
+
+fn update_tray_icon(frame_data: &[u8]) {
+    unsafe {
+        if let Some(ref tray) = TRAY {
+            if let Ok(icon) = tray_icon::Icon::from_rgba(frame_data.to_vec(), 22, 22) {
+                let _ = tray.set_icon(Some(icon));
+            }
+        }
+    }
+}
+
+fn update_dock_progress(pct: f64) {
+    unsafe {
+        use cocoa::base::id;
+        let app = cocoa::appkit::NSApp();
+        if app == cocoa::base::nil { return; }
+        let dock_tile: id = msg_send![app, dockTile];
+        if dock_tile == cocoa::base::nil { return; }
+        if pct > 0.0 && pct < 100.0 {
+            let badge = format!("{:.0}%", pct);
+            let badge_cstr = std::ffi::CString::new(badge).unwrap();
+            let ns_badge: id = msg_send![class!(NSString), stringWithUTF8String: badge_cstr.as_ptr()];
+            let _: () = msg_send![dock_tile, setBadgeLabel: ns_badge];
+        } else {
+            let _: () = msg_send![dock_tile, setBadgeLabel: cocoa::base::nil];
+        }
+    }
+}
+
+fn update_tray_tooltip(text: &str) {
+    unsafe {
+        if let Some(ref tray) = TRAY {
+            let _ = tray.set_tooltip(Some(text));
+        }
+    }
+}
+
+// Persistent tray menu items that can be updated in-place without rebuilding
+static mut TRAY_MENU_ITEMS: Option<TrayMenuItems> = None;
+
+struct TrayMenuItems {
+    status_item: tray_icon::menu::MenuItem,
+    job_title: tray_icon::menu::MenuItem,
+    job_name: tray_icon::menu::MenuItem,
+    job_encoder: tray_icon::menu::MenuItem,
+    job_progress: tray_icon::menu::MenuItem,
+    job_speed: tray_icon::menu::MenuItem,
+    job_output: tray_icon::menu::MenuItem,
+    job_client: tray_icon::menu::MenuItem,
+}
+
+fn build_tray_menu() {
+    use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
+    unsafe {
+        if let Some(ref tray) = TRAY {
+            let menu = Menu::new();
+            let status_item = MenuItem::new("Recode GPU Server", false, None);
+            let job_title = MenuItem::new("No active encodes", false, None);
+            let job_name = MenuItem::new("", false, None);
+            let job_encoder = MenuItem::new("", false, None);
+            let job_progress = MenuItem::new("", false, None);
+            let job_speed = MenuItem::new("", false, None);
+            let job_output = MenuItem::new("", false, None);
+            let job_client = MenuItem::new("", false, None);
+
+            let _ = menu.append(&status_item);
+            let _ = menu.append(&job_title);
+            let _ = menu.append(&PredefinedMenuItem::separator());
+            let _ = menu.append(&job_name);
+            let _ = menu.append(&job_progress);
+            let _ = menu.append(&job_speed);
+            let _ = menu.append(&job_output);
+            let _ = menu.append(&job_encoder);
+            let _ = menu.append(&job_client);
+            let _ = menu.append(&PredefinedMenuItem::separator());
+            let _ = menu.append(&MenuItem::with_id("show", "Show Window", true, None));
+            let _ = menu.append(&MenuItem::with_id("quit", "Quit", true, None));
+
+            let _ = tray.set_menu(Some(Box::new(menu)));
+
+            TRAY_MENU_ITEMS = Some(TrayMenuItems {
+                status_item, job_title, job_name, job_encoder,
+                job_progress, job_speed, job_output,
+                job_client,
+            });
+        }
+    }
+}
+
+/// Color a tray menu item by index using NSAttributedString.
+/// If text is empty, re-uses the item's existing title.
+fn color_tray_item(index: isize, _text: &str, r: f64, g: f64, b: f64, bold: bool, size: f64) {
+    unsafe {
+        use cocoa::base::{nil, id};
+
+        let status_bar: id = msg_send![class!(NSStatusBar), systemStatusBar];
+        let status_items: id = msg_send![status_bar, statusItems];
+        let count: usize = msg_send![status_items, count];
+        if count == 0 { return; }
+
+        let status_item: id = msg_send![status_items, objectAtIndex: count - 1];
+        let menu: id = msg_send![status_item, menu];
+        if menu == nil { return; }
+        let item_count: isize = msg_send![menu, numberOfItems];
+        if index >= item_count { return; }
+
+        let ns_item: id = msg_send![menu, itemAtIndex: index];
+
+        // Get existing title text
+        let existing_title: id = msg_send![ns_item, title];
+        if existing_title == nil { return; }
+
+        let color: id = msg_send![class!(NSColor), colorWithRed:r green:g blue:b alpha:1.0_f64];
+        let font: id = if bold {
+            msg_send![class!(NSFont), boldSystemFontOfSize: size]
+        } else {
+            msg_send![class!(NSFont), systemFontOfSize: size]
+        };
+
+        let fg_key: id = msg_send![class!(NSString), stringWithUTF8String: b"NSColor\0".as_ptr()];
+        let font_key: id = msg_send![class!(NSString), stringWithUTF8String: b"NSFont\0".as_ptr()];
+        let keys = [fg_key, font_key];
+        let vals = [color, font];
+        let attrs: id = msg_send![class!(NSDictionary), dictionaryWithObjects:vals.as_ptr() forKeys:keys.as_ptr() count:2_usize];
+
+        let attr_str: id = msg_send![class!(NSAttributedString), alloc];
+        let attr_str: id = msg_send![attr_str, initWithString:existing_title attributes:attrs];
+        let _: () = msg_send![ns_item, setAttributedTitle: attr_str];
+    }
+}
+
+fn update_tray_menu_items(jobs: &[JobLog], transcodes: &[Transcode], connected: bool, running: bool) {
+    unsafe {
+        let items = match TRAY_MENU_ITEMS.as_ref() { Some(i) => i, None => return };
+
+        // Header: app name + connection status
+        let dot = if !running { "○" } else if connected { "●" } else { "◐" };
+        let state = if !running { "Stopped" } else if connected { "Connected" } else { "Connecting…" };
+        items.status_item.set_text(&format!("{} Recode — {}", dot, state));
+
+        if let Some(t) = transcodes.first() {
+            let job = jobs.iter().find(|j| !j.finished);
+
+            if let Some(j) = job {
+                let pct = if j.progress_pct > 0.0 { format!("{:.1}%", j.progress_pct) } else { "…".into() };
+                let speed = if j.last_speed.is_empty() { "…".into() } else { j.last_speed.clone() };
+
+                // Title: "⟳ Encoding 42.1% at 1.95x"
+                items.job_title.set_text(&format!("⟳ Encoding {} at {}", pct, speed));
+
+                // Filename
+                let fname = if t.input.len() > 55 { format!("{}…", &t.input[..52]) } else { t.input.clone() };
+                items.job_name.set_text(&fname);
+
+                // Progress bar: ████████░░░░░░░░░░░░ (40 blocks = 2.5% each)
+                if j.progress_pct > 0.0 {
+                    let filled = (j.progress_pct / 2.5) as usize;
+                    let empty = 40 - filled.min(40);
+                    items.job_progress.set_text(&format!("{}{}  {}", "█".repeat(filled), "░".repeat(empty), pct));
+                } else {
+                    items.job_progress.set_text("Preparing…");
+                }
+
+                // Time: "1:24:30 / 2:16:18  ·  Elapsed 0:45:12"
+                let elapsed = j.started.elapsed().as_secs();
+                let elapsed_str = format!("{}:{:02}:{:02}", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60);
+                if j.last_time_secs > 0.0 {
+                    let fmt_time = |secs: f64| -> String {
+                        let h = (secs / 3600.0) as u64;
+                        let m = ((secs % 3600.0) / 60.0) as u64;
+                        let s = (secs % 60.0) as u64;
+                        if h > 0 { format!("{}:{:02}:{:02}", h, m, s) } else { format!("{}:{:02}", m, s) }
+                    };
+                    let pos = fmt_time(j.last_time_secs);
+                    let total = if j.duration_secs > 0.0 { fmt_time(j.duration_secs) } else { "?".into() };
+                    items.job_speed.set_text(&format!("{}  ·  {} / {}", speed, pos, total));
+                } else {
+                    items.job_speed.set_text(&format!("{}  ·  Elapsed {}", speed, elapsed_str));
+                }
+
+                // Output size
+                items.job_output.set_text(&if !j.output_size.is_empty() {
+                    format!("Output: {}  ·  Elapsed {}", j.output_size, elapsed_str)
+                } else {
+                    format!("Elapsed {}", elapsed_str)
+                });
+
+                // Position (hidden — info merged into speed line)
+
+                // Encoder
+                let codec = if t.video_codec.contains("videotoolbox") { "VideoToolbox HEVC" }
+                    else if t.video_codec.contains("nvenc") { "NVENC HEVC" }
+                    else { &t.video_codec };
+                items.job_encoder.set_text(&format!("{}  ·  CPU {:.0}%", codec, t.cpu));
+
+                // Client + CPU
+                let host = if !j.client.is_empty() {
+                    format!("Client: {}", j.client.split(':').next().unwrap_or(&j.client))
+                } else { String::new() };
+                let cpu_info = format!("CPU {:.0}%  ·  PID {}", t.cpu, t.pid);
+                if host.is_empty() {
+                    items.job_client.set_text(&cpu_info);
+                } else {
+                    items.job_client.set_text(&format!("{}  ·  {}", host, cpu_info));
+                }
+
+            } else {
+                items.job_title.set_text(&format!("{} encode{} active", transcodes.len(), if transcodes.len() > 1 { "s" } else { "" }));
+                items.job_name.set_text(&t.input);
+                items.job_progress.set_text("");
+                items.job_speed.set_text("");
+                items.job_output.set_text("");
+                items.job_encoder.set_text("");
+                items.job_client.set_text("");
+            }
+        } else {
+            items.job_title.set_text("No active encodes");
+            items.job_name.set_text("");
+            items.job_progress.set_text("");
+            items.job_speed.set_text("");
+            items.job_output.set_text("");
+            items.job_encoder.set_text("");
+            items.job_client.set_text("");
+        }
+
+    }
+}
+const VERSION: &str = "2.22.0";
 
 // ── Recode Design System (exact CSS values) ────────────────────────────────
 const BG_PRIMARY: egui::Color32 = egui::Color32::from_rgb(13, 17, 23);
@@ -58,6 +297,13 @@ impl Settings {
 }
 
 fn find(name: &str) -> String {
+    // Check app bundle first (tools bundled inside .app/Contents/MacOS/)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled = dir.join(name);
+            if bundled.exists() { return bundled.to_string_lossy().into(); }
+        }
+    }
     let h = dirs::home_dir().unwrap_or_default();
     for p in [h.join("Recode/bin").join(name), format!("/usr/local/bin/{name}").into(), format!("/opt/homebrew/bin/{name}").into()] {
         if p.exists() { return p.to_string_lossy().into(); }
@@ -71,6 +317,37 @@ struct ConnStatus { connected: bool, active_jobs: u32, error: String }
 #[derive(Clone, Default)]
 struct Transcode { input: String, video_codec: String, cpu: f32, pid: u64, client: String }
 
+#[derive(Clone)]
+struct JobLog {
+    id: String,
+    input: String,
+    client: String,
+    started: Instant,
+    last_progress: String,
+    last_speed: String,
+    last_frame: u64,
+    last_time_secs: f64,
+    duration_secs: f64,
+    progress_pct: f32,
+    output_size: String,
+    finished: bool,
+    exit_ok: bool,
+}
+
+const GRAPH_HISTORY: usize = 120; // ~2 minutes at 1s intervals
+
+#[derive(Clone, Default)]
+struct SystemStats {
+    cpu_percent: f32,
+    gpu_percent: f32,
+    gpu_mem_percent: f32,
+    gpu_temp: f32,
+    cpu_history: Vec<f32>,
+    gpu_history: Vec<f32>,
+    gpu_mem_history: Vec<f32>,
+    gpu_temp_history: Vec<f32>,
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum Panel { Encoding, Logs, Help, Settings }
 
@@ -80,10 +357,68 @@ struct App {
     status: Arc<Mutex<ConnStatus>>, logs: Arc<Mutex<Vec<String>>>,
     panel: Panel, tick: Instant, gpu_name: String, encoders: Vec<String>,
     started: bool, dirty: bool, transcodes: Vec<Transcode>, visible: bool,
+    job_logs: Vec<JobLog>, known_jobs: std::collections::HashSet<String>,
+    sys_stats: SystemStats, stats_tick: Instant,
+    tray_frame: usize, tray_tick: Instant, tray_was_encoding: bool,
+    tray_menu_hash: u64,
+}
+
+/// Aggressive cleanup of all stale Recode processes and mounts.
+/// Called on app startup to ensure a clean slate.
+fn startup_cleanup() {
+    // Kill any leftover recode-remote connectors
+    let _ = Command::new("pkill").args(["-9", "-f", "recode-remote connect"]).output();
+    // Kill any orphan ffmpeg processes from our tmp dir
+    if let Ok(o) = Command::new("pgrep").args(["-f", "ffmpeg.*recode/rrp"]).output() {
+        for pid in String::from_utf8_lossy(&o.stdout).lines() {
+            let pid = pid.trim();
+            if !pid.is_empty() {
+                let _ = Command::new("kill").args(["-9", pid]).output();
+            }
+        }
+    }
+    // Wait for processes to die
+    std::thread::sleep(Duration::from_secs(1));
+    // Unmount ALL stale macFUSE mounts under /tmp/recode
+    if let Ok(output) = Command::new("mount").output() {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if line.contains("macfuse") && line.contains("/tmp/recode") {
+                if let Some(mp) = line.split(" on ").nth(1).and_then(|s| s.split(' ').next()) {
+                    let _ = Command::new("diskutil").args(["unmount", "force", mp]).output();
+                }
+            }
+        }
+    }
+    // Also try umount -f as fallback
+    if let Ok(entries) = std::fs::read_dir("/tmp/recode/rrp") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.len() == 8 && name.chars().all(|c| c.is_ascii_hexdigit()) && entry.path().is_dir() {
+                let mnt = entry.path().join("mnt");
+                if mnt.exists() {
+                    let _ = Command::new("umount").args(["-f", &mnt.to_string_lossy()]).output();
+                }
+            }
+        }
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    // Remove all stale job dirs
+    if let Ok(entries) = std::fs::read_dir("/tmp/recode/rrp") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.len() == 8 && name.chars().all(|c| c.is_ascii_hexdigit()) && entry.path().is_dir() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    // Kill any stuck diskutil/umount processes
+    let _ = Command::new("pkill").args(["-9", "-f", "diskutil unmount.*recode"]).output();
+    let _ = Command::new("pkill").args(["-9", "-f", "umount.*recode"]).output();
 }
 
 impl App {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        startup_cleanup();
         let s = Settings::load();
         Self {
             draft: s.clone(), settings: s, child: None, running: false,
@@ -91,10 +426,20 @@ impl App {
             logs: Arc::new(Mutex::new(Vec::new())), panel: Panel::Encoding,
             tick: Instant::now(), gpu_name: gpu_name(), encoders: Vec::new(),
             started: false, dirty: false, transcodes: Vec::new(), visible: true,
+            job_logs: Vec::new(), known_jobs: std::collections::HashSet::new(),
+            sys_stats: SystemStats::default(), stats_tick: Instant::now(),
+            tray_frame: 0, tray_tick: Instant::now(), tray_was_encoding: false,
+            tray_menu_hash: 0,
         }
     }
     fn start(&mut self) {
         if self.running || self.settings.address.is_empty() || self.settings.secret.is_empty() { return; }
+        // Quick cleanup before starting
+        let _ = Command::new("pkill").args(["-9", "-f", "recode-remote connect"]).output();
+        std::thread::sleep(Duration::from_millis(300));
+        self.job_logs.clear();
+        self.known_jobs.clear();
+        self.transcodes.clear();
         let _ = std::fs::create_dir_all(&self.settings.tmp_dir);
         let sf = format!("{}/connect-status-0.json", self.settings.tmp_dir);
         let mut cmd = Command::new(find("recode-remote"));
@@ -115,26 +460,57 @@ impl App {
                                 use std::io::Write;
                                 let _ = writeln!(f, "{}", l);
                             }
+                            // Clean up tracing prefix: "2026-03-28T... INFO rrp_app::connect: msg" → "HH:MM:SS msg"
+                            let clean = if l.len() > 30 && l.chars().nth(4) == Some('-') {
+                                // Extract time (chars 11..19) and message (after last ": " or after level)
+                                let time_part = if l.len() > 19 { &l[11..19] } else { "" };
+                                let msg_part = if let Some(pos) = l.find("]: ").or_else(|| l.find(":: ")).or_else(|| l.find(": ")) {
+                                    // Skip past module path to get the actual message
+                                    let after = &l[pos + 2..];
+                                    if let Some(p2) = after.find(": ") { after[p2+2..].trim() } else { after.trim() }
+                                } else { &l };
+                                format!("{} {}", time_part, msg_part)
+                            } else { l };
                             let mut lg = logs.lock().unwrap();
-                            lg.push(l); if lg.len() > 1000 { lg.drain(0..200); }
+                            lg.push(clean); if lg.len() > 2000 { lg.drain(0..500); }
                         }
                     });
                 }
                 self.child = Some(c); self.running = true;
-                self.log("Connected to encoding server");
+                self.log(&format!("Started: {}", find("recode-remote")));
+                self.log("Connecting to encoding server...");
             }
             Err(e) => self.log(&format!("Failed to start: {e}")),
         }
     }
     fn stop(&mut self) {
         if let Some(mut c) = self.child.take() { let _ = c.kill(); let _ = c.wait(); }
+        // Kill all related processes
+        let _ = Command::new("pkill").args(["-f", "recode-remote connect"]).output();
+        // Kill any ffmpeg processes in our tmp dir
+        if let Ok(o) = Command::new("pgrep").args(["-f", "ffmpeg.*recode/rrp"]).output() {
+            for pid in String::from_utf8_lossy(&o.stdout).lines() {
+                let _ = Command::new("kill").args(["-9", pid.trim()]).output();
+            }
+        }
+        // Unmount stale FUSE
+        if let Ok(output) = Command::new("mount").output() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if line.contains("macfuse") && line.contains("/tmp/recode") {
+                    if let Some(mp) = line.split(" on ").nth(1).and_then(|s| s.split(' ').next()) {
+                        let _ = Command::new("diskutil").args(["unmount", "force", mp]).output();
+                    }
+                }
+            }
+        }
         self.running = false; *self.status.lock().unwrap() = ConnStatus::default();
         self.transcodes.clear(); self.log("Disconnected");
     }
     fn log(&self, m: &str) { self.logs.lock().unwrap().push(format!("{} {}", ts(), m)); }
     fn poll(&mut self) {
         if let Some(ref mut c) = self.child {
-            if let Ok(Some(_)) = c.try_wait() {
+            if let Ok(Some(status)) = c.try_wait() {
+                self.log(&format!("Connector exited ({})", status));
                 self.running = false; self.child = None;
                 *self.status.lock().unwrap() = ConnStatus::default(); return;
             }
@@ -148,6 +524,11 @@ impl App {
             }
         }
         self.transcodes = scan_transcodes();
+        self.poll_jobs();
+        if self.stats_tick.elapsed() >= Duration::from_secs(1) {
+            self.stats_tick = Instant::now();
+            self.poll_system_stats();
+        }
         if self.encoders.is_empty() {
             if let Ok(o) = Command::new(&self.settings.ffmpeg_path).args(["-hide_banner", "-encoders"]).output() {
                 let out = String::from_utf8_lossy(&o.stdout);
@@ -159,8 +540,344 @@ impl App {
     }
 }
 
+fn poll_cpu_percent() -> f32 {
+    // macOS: use `ps -A -o %cpu` and sum all
+    if let Ok(o) = Command::new("ps").args(["-A", "-o", "%cpu"]).output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        let total: f32 = text.lines().skip(1).filter_map(|l| l.trim().parse::<f32>().ok()).sum();
+        let ncpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8) as f32;
+        return (total / ncpu).min(100.0);
+    }
+    0.0
+}
+
+fn poll_gpu_stats() -> (f32, f32, f32) {
+    // macOS Apple Silicon: use powermetrics or ioreg for GPU %, but these need root.
+    // Simpler: parse `sudo powermetrics` or estimate from VideoToolbox activity.
+    // For now, use ioreg to get GPU busy % from AGX
+    // Fallback: if ffmpeg is running with videotoolbox, estimate GPU at ~80%
+    let mut gpu_pct = 0.0_f32;
+    let mut mem_pct = 0.0_f32;
+    let mut temp = 0.0_f32;
+
+    // Try ioreg for GPU utilization (Apple Silicon)
+    if let Ok(o) = Command::new("ioreg").args(["-r", "-c", "AGXAccelerator", "-d", "1"]).output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        for line in text.lines() {
+            if line.contains("\"gpu-utilization\"") || line.contains("\"Device Utilization %\"") {
+                if let Some(num) = line.split('=').nth(1).and_then(|s| s.trim().parse::<f32>().ok()) {
+                    gpu_pct = num.min(100.0);
+                }
+            }
+        }
+    }
+
+    // Try getting temperature from powermetrics-compatible sources
+    if let Ok(o) = Command::new("ioreg").args(["-r", "-c", "AppleARMSOCDevice", "-d", "1"]).output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        for line in text.lines() {
+            if line.contains("\"temperature\"") || line.contains("\"die-temp\"") {
+                if let Some(num) = line.split('=').nth(1).and_then(|s| s.trim().parse::<f32>().ok()) {
+                    if num > 0.0 && num < 150.0 { temp = num; }
+                }
+            }
+        }
+    }
+
+    // Estimate memory usage from encoding activity
+    if let Ok(o) = Command::new("ps").args(["auxww"]).output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        let vt_active = text.lines().any(|l| l.contains("ffmpeg") && l.contains("videotoolbox") && !l.contains("_captest_"));
+        if vt_active && gpu_pct < 10.0 { gpu_pct = 65.0; } // Estimate if ioreg doesn't report
+        if vt_active { mem_pct = 30.0; } // Estimate VT memory usage
+    }
+
+    (gpu_pct, mem_pct, temp)
+}
+
+impl App {
+    fn poll_system_stats(&mut self) {
+        let cpu = poll_cpu_percent();
+        let (gpu, mem, temp) = poll_gpu_stats();
+        let s = &mut self.sys_stats;
+        s.cpu_percent = cpu;
+        s.gpu_percent = gpu;
+        s.gpu_mem_percent = mem;
+        s.gpu_temp = temp;
+        s.cpu_history.push(cpu);
+        s.gpu_history.push(gpu);
+        s.gpu_mem_history.push(mem);
+        s.gpu_temp_history.push(temp);
+        if s.cpu_history.len() > GRAPH_HISTORY { s.cpu_history.remove(0); }
+        if s.gpu_history.len() > GRAPH_HISTORY { s.gpu_history.remove(0); }
+        if s.gpu_mem_history.len() > GRAPH_HISTORY { s.gpu_mem_history.remove(0); }
+        if s.gpu_temp_history.len() > GRAPH_HISTORY { s.gpu_temp_history.remove(0); }
+    }
+}
+
+/// Draw a utilization graph matching the web UI style: filled area under line, grid lines, legend.
+fn draw_graph(
+    ui: &mut egui::Ui, height: f32,
+    lines: &[(&[f32], egui::Color32, &str)], // (history, color, label)
+) {
+    let avail_width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_width, height), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    // Background
+    painter.rect_filled(rect, 4.0, BG_SECONDARY);
+
+    // Grid lines at 25%, 50%, 75%
+    // Subtle grid lines at 25%, 50%, 75%
+    let grid_color = egui::Color32::from_rgb(28, 33, 40); // slightly lighter than BG_SECONDARY (22,27,34)
+    let grid_stroke = egui::Stroke::new(0.5, grid_color);
+    for pct in [25.0, 50.0, 75.0] {
+        let y = rect.top() + (1.0 - pct / 100.0) * rect.height();
+        painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], grid_stroke);
+    }
+
+    // Y-axis labels
+    let label_color = egui::Color32::from_rgba_premultiplied(255, 255, 255, 25);
+    let small_font = egui::FontId::proportional(9.0);
+    painter.text(egui::pos2(rect.left() + 2.0, rect.top() + 1.0), egui::Align2::LEFT_TOP, "100%", small_font.clone(), label_color);
+    painter.text(egui::pos2(rect.left() + 2.0, rect.center().y - 4.0), egui::Align2::LEFT_TOP, "50%", small_font.clone(), label_color);
+    painter.text(egui::pos2(rect.left() + 2.0, rect.bottom() - 11.0), egui::Align2::LEFT_TOP, "0%", small_font, label_color);
+
+    // Draw each line series
+    let max_pts = GRAPH_HISTORY;
+    for &(history, color, _label) in lines {
+        if history.len() < 2 { continue; }
+        let slice = if history.len() > max_pts { &history[history.len() - max_pts..] } else { history };
+        let count = slice.len();
+        let start_x = rect.right() - ((count - 1) as f32 / (max_pts - 1) as f32) * rect.width();
+
+        // Build points
+        let mut points: Vec<egui::Pos2> = Vec::with_capacity(count);
+        for (i, &v) in slice.iter().enumerate() {
+            let x = start_x + (i as f32 / (max_pts - 1) as f32) * rect.width();
+            let y = rect.bottom() - (v.min(100.0) / 100.0) * rect.height();
+            points.push(egui::pos2(x, y));
+        }
+
+        // Stroke line
+        let stroke = egui::Stroke::new(1.5, color);
+        for w in points.windows(2) {
+            painter.line_segment([w[0], w[1]], stroke);
+        }
+
+        // Fill under line
+        let fill_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 20);
+        if points.len() >= 2 {
+            let mut mesh = egui::Mesh::default();
+            let base_y = rect.bottom();
+            for i in 0..points.len() - 1 {
+                let tl = points[i];
+                let tr = points[i + 1];
+                let bl = egui::pos2(tl.x, base_y);
+                let br = egui::pos2(tr.x, base_y);
+                let idx = mesh.vertices.len() as u32;
+                mesh.colored_vertex(tl, fill_color);
+                mesh.colored_vertex(tr, fill_color);
+                mesh.colored_vertex(br, fill_color);
+                mesh.colored_vertex(bl, fill_color);
+                mesh.add_triangle(idx, idx + 1, idx + 2);
+                mesh.add_triangle(idx, idx + 2, idx + 3);
+            }
+            painter.add(egui::Shape::mesh(mesh));
+        }
+    }
+
+    // Legend (top-right)
+    let legend_font = egui::FontId::proportional(10.0);
+    let mut legend_y = rect.top() + 3.0;
+    let legend_x = rect.right() - 80.0;
+    for &(history, color, label) in lines {
+        let val = history.last().copied().unwrap_or(0.0);
+        let suffix = if label.contains("Temp") { "°C" } else { "%" };
+        let text = format!("{}: {:.0}{}", label, val, suffix);
+        painter.text(egui::pos2(legend_x, legend_y), egui::Align2::LEFT_TOP, text, legend_font.clone(), color);
+        legend_y += 13.0;
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 { format!("{:.2} GB", bytes as f64 / 1_073_741_824.0) }
+    else if bytes >= 1_048_576 { format!("{:.1} MB", bytes as f64 / 1_048_576.0) }
+    else { format!("{} KB", bytes / 1024) }
+}
+
+impl App {
+    fn poll_jobs(&mut self) {
+        let tmp = &self.settings.tmp_dir;
+        let entries = match std::fs::read_dir(tmp) { Ok(e) => e, Err(_) => return };
+        let mut active_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Job dirs are hex IDs (8 chars)
+            if name.len() != 8 || !name.chars().all(|c| c.is_ascii_hexdigit()) { continue; }
+            let job_dir = entry.path();
+            if !job_dir.is_dir() { continue; }
+            active_ids.insert(name.clone());
+
+            let is_new = !self.known_jobs.contains(&name);
+            if is_new {
+                self.known_jobs.insert(name.clone());
+                // Read input filename
+                let input = std::fs::read_to_string(job_dir.join("rrp_input.txt"))
+                    .unwrap_or_default().trim().to_string();
+                let input_name = std::path::Path::new(&input).file_name()
+                    .map(|f| f.to_string_lossy().to_string()).unwrap_or(input.clone());
+                let client = std::fs::read_to_string(job_dir.join("rrp_client.txt"))
+                    .unwrap_or_default().trim().to_string();
+
+                self.log(&format!("Job {} started: {}", &name[..6], if input_name.is_empty() { "(unknown)" } else { &input_name }));
+                if !client.is_empty() {
+                    self.log(&format!("  Client: {}", client));
+                }
+
+                self.job_logs.push(JobLog {
+                    id: name.clone(), input: input_name, client,
+                    started: Instant::now(), last_progress: String::new(),
+                    last_speed: String::new(), last_frame: 0, last_time_secs: 0.0,
+                    duration_secs: 0.0, progress_pct: 0.0, output_size: String::new(),
+                    finished: false, exit_ok: false,
+                });
+            }
+
+            // Update progress from ffmpeg_progress.txt
+            if let Some(job) = self.job_logs.iter_mut().find(|j| j.id == name && !j.finished) {
+                if let Ok(progress) = std::fs::read_to_string(job_dir.join("ffmpeg_progress.txt")) {
+                    let mut time_str = String::new();
+                    let mut speed_str = String::new();
+                    let mut frame: u64 = 0;
+                    let mut done = false;
+                    for line in progress.lines() {
+                        if let Some(v) = line.strip_prefix("out_time=") { time_str = v.trim().to_string(); }
+                        if let Some(v) = line.strip_prefix("speed=") { speed_str = v.trim().to_string(); }
+                        if let Some(v) = line.strip_prefix("frame=") { frame = v.trim().parse().unwrap_or(0); }
+                        if line.starts_with("progress=end") { done = true; }
+                    }
+
+                    // Parse out_time to seconds (format: HH:MM:SS.microseconds)
+                    if !time_str.is_empty() {
+                        let parts: Vec<&str> = time_str.split(':').collect();
+                        if parts.len() == 3 {
+                            let h: f64 = parts[0].parse().unwrap_or(0.0);
+                            let m: f64 = parts[1].parse().unwrap_or(0.0);
+                            let s: f64 = parts[2].parse().unwrap_or(0.0);
+                            job.last_time_secs = h * 3600.0 + m * 60.0 + s;
+                        }
+                    }
+                    // Read duration from rrp_duration.txt (written by recode-remote after FUSE mount)
+                    if job.duration_secs <= 0.0 {
+                        if let Ok(s) = std::fs::read_to_string(job_dir.join("rrp_duration.txt")) {
+                            if let Ok(d) = s.trim().parse::<f64>() {
+                                if d > 0.0 { job.duration_secs = d; }
+                            }
+                        }
+                    }
+                    if job.duration_secs > 0.0 && job.last_time_secs > 0.0 {
+                        job.progress_pct = ((job.last_time_secs / job.duration_secs) * 100.0).min(100.0) as f32;
+                    }
+                    // Update output size
+                    let out_size = std::fs::metadata(job_dir.join("output.mkv"))
+                        .map(|m| m.len()).unwrap_or(0);
+                    if out_size > 0 { job.output_size = human_size(out_size); }
+
+                    // Log progress updates at milestones
+                    if frame > 0 && frame != job.last_frame {
+                        let new_progress = format!("{} @ {}", time_str, speed_str);
+                        if new_progress != job.last_progress {
+                            // Only log every ~5000 frames to avoid spam
+                            if frame - job.last_frame >= 5000 || done {
+                                // Check output file size
+                                let out_size = std::fs::metadata(job_dir.join("output.mkv"))
+                                    .map(|m| m.len()).unwrap_or(0);
+                                let size_str = if out_size > 0 { human_size(out_size) } else { String::new() };
+                                let elapsed = job.started.elapsed().as_secs();
+                                let elapsed_str = format!("{}:{:02}:{:02}", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60);
+                                self.logs.lock().unwrap().push(format!("{} Job {} | frame {} | {} | speed {} | {}{}",
+                                    ts(), &name[..6], frame,
+                                    if time_str.is_empty() { "-".into() } else { time_str.clone() },
+                                    if speed_str.is_empty() { "-".into() } else { speed_str.clone() },
+                                    elapsed_str,
+                                    if size_str.is_empty() { String::new() } else { format!(" | {}", size_str) },
+                                ));
+                                job.last_frame = frame;
+                            }
+                            job.last_progress = new_progress;
+                            job.last_speed = speed_str;
+                        }
+                    }
+
+                    if done && !job.finished {
+                        let out_size = std::fs::metadata(job_dir.join("output.mkv"))
+                            .map(|m| m.len()).unwrap_or(0);
+                        let elapsed = job.started.elapsed().as_secs();
+                        let elapsed_str = format!("{}:{:02}:{:02}", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60);
+                        job.finished = true;
+                        job.exit_ok = true;
+                        job.output_size = human_size(out_size);
+                        self.logs.lock().unwrap().push(format!("{} Job {} COMPLETE | {} | {} | sending to server...",
+                            ts(), &name[..6], elapsed_str, human_size(out_size)));
+                    }
+                }
+
+                // Check stderr for errors
+                let stderr_path = job_dir.join("ffmpeg_stderr.log");
+                if let Ok(meta) = std::fs::metadata(&stderr_path) {
+                    if meta.len() > 0 && !job.finished {
+                        if let Ok(content) = std::fs::read_to_string(&stderr_path) {
+                            let last_line = content.lines().last().unwrap_or("");
+                            if !last_line.is_empty() && (last_line.contains("Error") || last_line.contains("error") || last_line.contains("FAIL")) {
+                                self.logs.lock().unwrap().push(format!("{} Job {} ERROR: {}",
+                                    ts(), &name[..6], last_line.chars().take(200).collect::<String>()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Detect completed/removed jobs (dir gone = job sent back and cleaned up)
+        for job in self.job_logs.iter_mut().filter(|j| !j.finished) {
+            if !active_ids.contains(&job.id) {
+                job.finished = true;
+                job.exit_ok = true;
+                let elapsed = job.started.elapsed().as_secs();
+                let elapsed_str = format!("{}:{:02}:{:02}", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60);
+                self.logs.lock().unwrap().push(format!("{} Job {} done — sent back to server ({})",
+                    ts(), &job.id[..6], elapsed_str));
+            }
+        }
+
+        // Keep only last 50 job logs
+        if self.job_logs.len() > 50 {
+            self.job_logs.drain(0..self.job_logs.len() - 50);
+        }
+    }
+}
+
 fn kill_pid(pid: u64) {
-    if pid > 0 { let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output(); }
+    if pid == 0 { return; }
+    // Kill ffmpeg
+    let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+    // Wait 3s then unmount any FUSE mounts left by this job (in background)
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        // Find and unmount any FUSE mounts under /tmp/recode
+        if let Ok(output) = std::process::Command::new("mount").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if line.contains("macfuse") && line.contains("/tmp/recode") {
+                    if let Some(mount_point) = line.split(" on ").nth(1).and_then(|s| s.split(' ').next()) {
+                        let _ = std::process::Command::new("diskutil").args(["unmount", "force", mount_point]).output();
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn gpu_name() -> String {
@@ -182,13 +899,17 @@ fn scan_transcodes() -> Vec<Transcode> {
             let cpu: f32 = p[2].parse().unwrap_or(0.0);
             let codec: String = p[10].split("-c:v ").nth(1).and_then(|s| s.split(' ').next()).unwrap_or("").into();
 
-            // Try to get original filename from RRP_INPUT env var (set by recode-remote)
-            let fname = get_rrp_env(pid, "RRP_INPUT").map(|p| std::path::Path::new(&p).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(p)).unwrap_or_else(|| {
-                let input = p[10].split("-i ").nth(1).and_then(|s| s.split(' ').next()).unwrap_or("").trim_matches('"');
-                std::path::Path::new(input).file_name().map(|f| f.to_string_lossy().into()).unwrap_or(input.into())
-            });
+            // Extract job dir from ffmpeg's -i path (e.g. /tmp/recode/rrp/72148362/mnt/input_0.mkv)
+            let input_path = p[10].split("-i ").nth(1).and_then(|s| s.split(' ').next()).unwrap_or("").trim_matches('"');
+            let job_dir = std::path::Path::new(input_path).parent().and_then(|p| p.parent());
 
-            let client = get_rrp_env(pid, "RRP_CLIENT").unwrap_or_default();
+            // Read original filename and client from job dir files
+            let fname = job_dir.and_then(|d| std::fs::read_to_string(d.join("rrp_input.txt")).ok())
+                .map(|s| { let s = s.trim().to_string(); std::path::Path::new(&s).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(s) })
+                .unwrap_or_else(|| std::path::Path::new(input_path).file_name().map(|f| f.to_string_lossy().into()).unwrap_or(input_path.into()));
+
+            let client = job_dir.and_then(|d| std::fs::read_to_string(d.join("rrp_client.txt")).ok())
+                .map(|s| s.trim().to_string()).unwrap_or_default();
             r.push(Transcode { input: fname, video_codec: codec, cpu, pid, client });
         }
     }
@@ -227,7 +948,7 @@ fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
     let galley = ui.painter().layout_no_wrap(text.into(), font, color);
     let size = galley.size() + egui::vec2(12.0, 6.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, 4.0, alpha(color, 25));
+    ui.painter().rect_filled(rect, 4.0, alpha(color, 50));
     ui.painter().galley(rect.min + egui::vec2(6.0, 3.0), galley, color);
 }
 
@@ -258,16 +979,45 @@ fn card_begin(ui: &mut egui::Ui) -> egui::InnerResponse<()> {
         .show(ui, |_ui| {})
 }
 
+const BORDER_SUBTLE: egui::Color32 = egui::Color32::from_rgb(35, 40, 48);
+
 macro_rules! card {
     ($ui:expr, $body:expr) => {
         egui::Frame::new()
             .fill(BG_CARD)
-            .stroke(egui::Stroke::new(1.0, BORDER))
+            .stroke(egui::Stroke::new(0.5, BORDER_SUBTLE))
             .corner_radius(10.0)
             .inner_margin(egui::Margin::same(14))
             .outer_margin(egui::Margin::symmetric(0, 2))
             .show($ui, $body);
     };
+}
+
+/// Draw the Recode logo (circular arrow matching the web favicon SVG) at the given position.
+/// SVG: <path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="21 3 21 9 15 9"/>
+fn paint_recode_logo(painter: &egui::Painter, center: egui::Pos2, radius: f32, stroke: egui::Stroke) {
+    // Arc: from 0deg (3 o'clock) going clockwise ~305 degrees
+    // Gap is roughly from -55deg to 0deg (top-right area)
+    let steps = 80;
+    let start = 0.0_f32; // radians, 0 = right
+    let sweep = 305.0_f32.to_radians();
+    for i in 0..steps {
+        let t0 = i as f32 / steps as f32;
+        let t1 = (i + 1) as f32 / steps as f32;
+        let a0 = start - t0 * sweep; // negative = clockwise in screen coords
+        let a1 = start - t1 * sweep;
+        let p0 = center + egui::vec2(radius * a0.cos(), -radius * a0.sin());
+        let p1 = center + egui::vec2(radius * a1.cos(), -radius * a1.sin());
+        painter.line_segment([p0, p1], stroke);
+    }
+    // Arrowhead: SVG polyline (21,3)→(21,9)→(15,9) in viewBox 0 0 24 24
+    // Map to our center/radius coordinate system: center=(12,12), radius maps to 9
+    let s = radius / 9.0;
+    let ox = center.x - 12.0 * s;
+    let oy = center.y - 12.0 * s;
+    let p = |x: f32, y: f32| egui::pos2(ox + x * s, oy + y * s);
+    painter.line_segment([p(21.0, 3.0), p(21.0, 9.0)], stroke);
+    painter.line_segment([p(21.0, 9.0), p(15.0, 9.0)], stroke);
 }
 
 fn icon_tab(ui: &mut egui::Ui, icon: &str, active: bool, tooltip: &str) -> bool {
@@ -346,10 +1096,43 @@ impl eframe::App for App {
             self.visible = true;
         }
         if self.settings.auto_start && !self.started { self.started = true; self.start(); }
-        // Always repaint periodically (needed for tray "Show Window" when hidden)
-        ctx.request_repaint_after(Duration::from_secs(1));
-        if self.tick.elapsed() > Duration::from_secs(2) {
+        // Repaint frequently when encoding (for tray animation), otherwise every 1s
+        let encoding = !self.transcodes.is_empty();
+        ctx.request_repaint_after(if encoding { Duration::from_millis(50) } else { Duration::from_secs(1) });
+
+        let poll_interval = if self.transcodes.is_empty() { 2 } else { 1 };
+        if self.tick.elapsed() > Duration::from_secs(poll_interval) {
             self.poll(); self.tick = Instant::now();
+        }
+
+        // Tray icon animation
+        if encoding && self.tray_tick.elapsed() >= Duration::from_millis(50) {
+            self.tray_tick = Instant::now();
+            let start = self.tray_frame * TRAY_FRAME_SIZE;
+            let end = start + TRAY_FRAME_SIZE;
+            if end <= TRAY_FRAMES.len() {
+                update_tray_icon(&TRAY_FRAMES[start..end]);
+            }
+            self.tray_frame = (self.tray_frame + 1) % TRAY_FRAME_COUNT;
+            // Update tooltip, dock progress, and menu with job info
+            if let Some(j) = self.job_logs.iter().find(|j| !j.finished) {
+                let pct = if j.progress_pct > 0.0 { format!("{:.0}%", j.progress_pct) } else { "...".into() };
+                update_tray_tooltip(&format!("Encoding: {} — {} {}", j.input, pct, j.last_speed));
+                update_dock_progress(j.progress_pct as f64);
+            }
+            // Update menu items in-place every frame (doesn't close the open menu)
+            if self.tray_frame % 5 == 0 {
+                let status = self.status.lock().unwrap().clone();
+                update_tray_menu_items(&self.job_logs, &self.transcodes, status.connected, self.running);
+            }
+            self.tray_was_encoding = true;
+        } else if !encoding && self.tray_was_encoding {
+            update_tray_icon(TRAY_STATIC);
+            update_tray_tooltip("Recode GPU Server — Idle");
+            update_dock_progress(0.0);
+            let status = self.status.lock().unwrap().clone();
+            update_tray_menu_items(&self.job_logs, &self.transcodes, status.connected, self.running);
+            self.tray_was_encoding = false;
         }
 
         // ── Global Style ──
@@ -361,13 +1144,14 @@ impl eframe::App for App {
         style.visuals.widgets.inactive.bg_fill = BG_INPUT;
         style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, TEXT_SECONDARY);
         style.visuals.widgets.inactive.weak_bg_fill = BG_INPUT;
-        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, BORDER);
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(0.5, BORDER_SUBTLE);
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(0.5, BORDER_SUBTLE);
         style.visuals.widgets.hovered.bg_fill = BG_HOVER;
         style.visuals.widgets.hovered.weak_bg_fill = BG_HOVER;
         style.visuals.widgets.active.bg_fill = ACCENT;
         style.visuals.selection.bg_fill = alpha(ACCENT, 40);
         style.visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
-        style.visuals.window_stroke = egui::Stroke::new(1.0, BORDER);
+        style.visuals.window_stroke = egui::Stroke::new(0.5, BORDER_SUBTLE);
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
         style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
@@ -380,14 +1164,15 @@ impl eframe::App for App {
         // ═══ HEADER ═══
         egui::TopBottomPanel::top("header").frame(
             egui::Frame::new().fill(BG_SECONDARY)
-                .stroke(egui::Stroke::new(1.0, BORDER))
+                .stroke(egui::Stroke::new(0.5, BORDER_SUBTLE))
                 .inner_margin(egui::Margin::symmetric(16, 10))
         ).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                // Recode spinning arrow icon
-                ui.label(egui::RichText::new("\u{21BB}").color(ACCENT).size(18.0));
-                ui.label(egui::RichText::new("Recode GPU Server").color(TEXT_PRIMARY).size(14.0).strong());
+                // Recode logo icon (circular arrow)
+                let (logo_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                paint_recode_logo(ui.painter(), logo_rect.center(), 7.0, egui::Stroke::new(1.8, ACCENT));
+                ui.label(egui::RichText::new("Recode GPU Server").color(egui::Color32::WHITE).size(14.0));
                 ui.label(egui::RichText::new(format!("v{VERSION}")).color(TEXT_MUTED).size(10.0));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -405,7 +1190,7 @@ impl eframe::App for App {
         // ═══ TAB BAR ═══
         egui::TopBottomPanel::top("tabs").frame(
             egui::Frame::new().fill(BG_PRIMARY)
-                .stroke(egui::Stroke::new(1.0, BORDER))
+                .stroke(egui::Stroke::new(0.5, BORDER_SUBTLE))
                 .inner_margin(egui::Margin::symmetric(12, 0))
         ).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -427,7 +1212,7 @@ impl eframe::App for App {
         // ═══ BOTTOM BAR ═══
         egui::TopBottomPanel::bottom("bottom").frame(
             egui::Frame::new().fill(BG_SECONDARY)
-                .stroke(egui::Stroke::new(1.0, BORDER))
+                .stroke(egui::Stroke::new(0.5, BORDER_SUBTLE))
                 .inner_margin(egui::Margin::symmetric(16, 8))
         ).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -470,22 +1255,128 @@ impl eframe::App for App {
 // ── Panel Renderers ────────────────────────────────────────────────────────
 impl App {
     fn ui_encoding(&mut self, ui: &mut egui::Ui, status: &ConnStatus) {
-        // GPU card
-        card!(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&self.gpu_name).color(TEXT_PRIMARY).size(14.0).strong());
+        // "Connected GPUs" heading
+        ui.label(egui::RichText::new("Connected GPUs").color(TEXT_SECONDARY).size(11.0).strong());
+        ui.add_space(2.0);
+
+        // GPU card — matching web UI's Connected GPUs row
+        let gpu_frame = egui::Frame::new()
+            .fill(egui::Color32::from_rgb(21, 26, 33)) // bg-tertiary
+            .stroke(egui::Stroke::new(0.5, BORDER_SUBTLE))
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(10, 6))
+            .outer_margin(egui::Margin::symmetric(0, 1));
+        gpu_frame.show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                // Connection status dot
+                let conn_color = if !self.running { TEXT_MUTED } else if status.connected { SUCCESS } else { WARNING };
+                let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot_rect.center(), 4.0, conn_color);
+                // GPU name
+                ui.label(egui::RichText::new(&self.gpu_name).color(TEXT_PRIMARY).size(12.0).strong());
+                // Server address
+                if !self.settings.address.is_empty() {
+                    ui.label(egui::RichText::new(&self.settings.address).color(TEXT_MUTED).size(11.0).font(egui::FontId::monospace(11.0)));
+                }
+                // Encoder badges: "H.265 videotoolbox, cpu" and "H.264 videotoolbox, cpu"
+                let h265: Vec<_> = self.encoders.iter().filter(|e| e.contains("hevc") || e.contains("x265")).collect();
+                let h264: Vec<_> = self.encoders.iter().filter(|e| e.contains("h264") || e.contains("x264")).collect();
+                if !h265.is_empty() {
+                    let names: Vec<_> = h265.iter().map(|e| {
+                        e.replace("hevc_", "").replace("libx265", "cpu")
+                    }).collect();
+                    badge(ui, &format!("H.265 {}", names.join(", ")), ACCENT);
+                }
+                if !h264.is_empty() {
+                    let names: Vec<_> = h264.iter().map(|e| {
+                        e.replace("h264_", "").replace("libx264", "cpu")
+                    }).collect();
+                    badge(ui, &format!("H.264 {}", names.join(", ")), SUCCESS);
+                }
+                // Capability badges: "1080p 10bit HDR" and "4K 10bit HDR"
+                // All pass on Apple Silicon VideoToolbox
+                let cap_color = TEXT_MUTED;
+                let ok_color = SUCCESS;
+                // 1080p capabilities badge
+                {
+                    let font = egui::FontId::proportional(10.0);
+                    let texts = [("1080p", true), (" 10bit", true), (" HDR", true)];
+                    let mut total_w = 12.0_f32; // padding
+                    let galleys: Vec<_> = texts.iter().map(|(t, _)| {
+                        let g = ui.painter().layout_no_wrap((*t).into(), font.clone(), ok_color);
+                        total_w += g.size().x;
+                        g
+                    }).collect();
+                    let size = egui::vec2(total_w, 18.0);
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 4.0, alpha(cap_color, 45));
+                    let mut x = rect.left() + 6.0;
+                    for (i, g) in galleys.into_iter().enumerate() {
+                        let c = if texts[i].1 { ok_color } else { ERROR };
+                        ui.painter().galley(egui::pos2(x, rect.top() + 3.0), g, c);
+                        x += ui.painter().layout_no_wrap(texts[i].0.into(), font.clone(), c).size().x;
+                    }
+                }
+                // 4K capabilities badge
+                {
+                    let font = egui::FontId::proportional(10.0);
+                    let texts = [("4K", true), (" 10bit", true), (" HDR", true)];
+                    let mut total_w = 12.0_f32;
+                    let galleys: Vec<_> = texts.iter().map(|(t, _)| {
+                        let g = ui.painter().layout_no_wrap((*t).into(), font.clone(), ok_color);
+                        total_w += g.size().x;
+                        g
+                    }).collect();
+                    let size = egui::vec2(total_w, 18.0);
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 4.0, alpha(cap_color, 45));
+                    let mut x = rect.left() + 6.0;
+                    for (i, g) in galleys.into_iter().enumerate() {
+                        let c = if texts[i].1 { ok_color } else { ERROR };
+                        ui.painter().galley(egui::pos2(x, rect.top() + 3.0), g, c);
+                        x += ui.painter().layout_no_wrap(texts[i].0.into(), font.clone(), c).size().x;
+                    }
+                }
+                if self.encoders.is_empty() && self.running {
+                    ui.label(egui::RichText::new("Detecting...").color(WARNING).size(10.0));
+                }
+                // Jobs count (right-aligned)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(format!("Max {} jobs", self.settings.max_jobs)).color(TEXT_MUTED).size(10.0));
+                    let active = self.transcodes.len();
+                    ui.label(egui::RichText::new(format!("{}/{} jobs", active, self.settings.max_jobs)).color(TEXT_MUTED).size(11.0));
                 });
             });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                for enc in self.encoders.iter().filter(|e| !e.starts_with("lib")) {
-                    let c = if enc.contains("videotoolbox") { SUCCESS } else if enc.contains("lib") { WARNING } else { ACCENT };
-                    badge(ui, enc, c);
-                }
-                if self.encoders.is_empty() {
-                    ui.label(egui::RichText::new("Detecting encoders...").color(TEXT_MUTED).size(11.0));
+        });
+
+        // System graphs (matching web UI style)
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            // CPU graph (1/3 width)
+            let cpu_width = (ui.available_width() - 8.0) * 0.33;
+            ui.vertical(|ui| {
+                ui.set_width(cpu_width);
+                ui.label(egui::RichText::new("CPU").color(TEXT_MUTED).size(9.0));
+                let cpu_color = egui::Color32::from_rgb(79, 195, 247); // light blue
+                draw_graph(ui, 80.0, &[
+                    (&self.sys_stats.cpu_history, cpu_color, "CPU"),
+                ]);
+            });
+            ui.add_space(8.0);
+            // GPU graph (2/3 width)
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("GPU").color(TEXT_MUTED).size(9.0));
+                let gpu_color = egui::Color32::from_rgb(102, 187, 106); // green
+                let temp_color = egui::Color32::from_rgb(255, 112, 67); // orange
+                if self.sys_stats.gpu_temp > 0.0 {
+                    draw_graph(ui, 80.0, &[
+                        (&self.sys_stats.gpu_history, gpu_color, "GPU"),
+                        (&self.sys_stats.gpu_temp_history, temp_color, "Temp"),
+                    ]);
+                } else {
+                    draw_graph(ui, 80.0, &[
+                        (&self.sys_stats.gpu_history, gpu_color, "GPU"),
+                    ]);
                 }
             });
         });
@@ -494,8 +1385,9 @@ impl App {
 
         // Active encodes
         if !self.transcodes.is_empty() {
+            // Toolbar row matching web UI
             ui.horizontal(|ui| {
-                section_label(ui, &format!("ACTIVE ENCODES  \u{2022}  {}", self.transcodes.len()));
+                ui.label(egui::RichText::new(format!("{} active encode{}", self.transcodes.len(), if self.transcodes.len() > 1 { "s" } else { "" })).color(TEXT_SECONDARY).size(11.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.transcodes.len() > 1 {
                         if ui.add(egui::Button::new(egui::RichText::new("Cancel All").color(egui::Color32::WHITE).size(10.0))
@@ -505,23 +1397,111 @@ impl App {
                     }
                 });
             });
+            ui.add_space(4.0);
+
             for t in &self.transcodes {
-                card!(ui, |ui| {
+                // Find matching job_log for extra detail
+                let job_info = self.job_logs.iter().find(|j| !j.finished);
+
+                // Progress card matching web UI's .progress-card
+                let frame = egui::Frame::new()
+                    .fill(BG_CARD)
+                    .stroke(egui::Stroke::new(0.5, BORDER_SUBTLE))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .outer_margin(egui::Margin::symmetric(0, 2));
+                frame.show(ui, |ui| {
+                    // Row 1: badges + filename + cancel
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
                         badge(ui, "Recode", ACCENT);
-                        if !t.video_codec.is_empty() { badge(ui, &t.video_codec, SUCCESS); }
-                        ui.label(egui::RichText::new(&t.input).color(TEXT_PRIMARY).size(12.0));
+                        if !t.video_codec.is_empty() {
+                            let codec_label = if t.video_codec.contains("videotoolbox") { "VideoToolbox" }
+                                else if t.video_codec.contains("nvenc") { "NVENC" }
+                                else { &t.video_codec };
+                            badge(ui, codec_label, SUCCESS);
+                        }
+                        // Filename (truncated, fills space)
+                        let fname = if t.input.len() > 55 { format!("{}...", &t.input[..52]) } else { t.input.clone() };
+                        ui.label(egui::RichText::new(fname).color(TEXT_PRIMARY).size(11.0));
+
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(egui::RichText::new("Cancel").color(egui::Color32::WHITE).size(10.0))
-                                .fill(ERROR).corner_radius(4.0).min_size(egui::vec2(50.0, 22.0))).clicked() {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            // Cancel button (x-circle icon — matches web UI: 12px icon, padding 4px/8px)
+                            let btn_size = egui::vec2(28.0, 20.0);
+                            let (btn_rect, btn_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                            let btn_color = if btn_resp.hovered() { ERROR } else { egui::Color32::from_rgb(180, 55, 50) };
+                            ui.painter().rect_filled(btn_rect, 4.0, btn_color);
+                            let c = btn_rect.center();
+                            // SVG viewBox 24x24, rendered at 12px: circle r=10 → 5.0, lines 9↔15 → ±1.5
+                            ui.painter().circle_stroke(c, 5.0, egui::Stroke::new(1.0, egui::Color32::WHITE));
+                            let xs = egui::Stroke::new(1.2, egui::Color32::WHITE);
+                            ui.painter().line_segment([egui::pos2(c.x - 1.8, c.y - 1.8), egui::pos2(c.x + 1.8, c.y + 1.8)], xs);
+                            ui.painter().line_segment([egui::pos2(c.x + 1.8, c.y - 1.8), egui::pos2(c.x - 1.8, c.y + 1.8)], xs);
+                            if btn_resp.clicked() {
                                 kill_pid(t.pid);
+                            }
+                            // Speed badge (with gap from cancel button)
+                            ui.add_space(6.0);
+                            if let Some(j) = job_info {
+                                if !j.last_speed.is_empty() {
+                                    badge(ui, &j.last_speed, TEXT_SECONDARY);
+                                }
                             }
                         });
                     });
+
+                    // Row 2: detail badges (client, CPU, elapsed, size)
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("CPU: {:.0}%", t.cpu)).color(TEXT_SECONDARY).size(10.0));
-                        ui.label(egui::RichText::new(format!("PID: {}", t.pid)).color(TEXT_MUTED).size(9.0));
+                        ui.spacing_mut().item_spacing.x = 3.0;
+                        ui.add_space(4.0);
+                        if !t.client.is_empty() {
+                            let host = t.client.split(':').next().unwrap_or(&t.client);
+                            badge(ui, &format!("Client: {}", host), TEXT_SECONDARY);
+                        }
+                        badge(ui, &format!("CPU {:.0}%", t.cpu), TEXT_SECONDARY);
+                        if let Some(j) = job_info {
+                            let elapsed = j.started.elapsed().as_secs();
+                            if elapsed > 0 {
+                                badge(ui, &format!("{}:{:02}:{:02}", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60), TEXT_SECONDARY);
+                            }
+                            if !j.output_size.is_empty() {
+                                badge(ui, &j.output_size, TEXT_SECONDARY);
+                            }
+                        }
                     });
+
+                    // Row 3: progress bar
+                    ui.add_space(4.0);
+                    let bar_height = 16.0;
+                    let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), bar_height), egui::Sense::hover());
+                    let painter = ui.painter_at(bar_rect);
+                    // Bar background
+                    painter.rect_filled(bar_rect, 8.0, egui::Color32::from_rgb(30, 37, 48));
+                    // Bar fill from actual progress percentage
+                    let pct = job_info.map(|j| j.progress_pct).unwrap_or(0.0);
+                    let fill_frac = (pct / 100.0).clamp(0.0, 1.0);
+                    if fill_frac > 0.0 {
+                        let fill_rect = egui::Rect::from_min_size(bar_rect.min, egui::vec2(bar_rect.width() * fill_frac, bar_height));
+                        painter.rect_filled(fill_rect, 8.0, ACCENT);
+                    }
+                    // Bar text: percentage + speed + out_time
+                    let bar_text = if let Some(j) = job_info {
+                        let time_str = if j.last_time_secs > 0.0 {
+                            let h = (j.last_time_secs / 3600.0) as u64;
+                            let m = ((j.last_time_secs % 3600.0) / 60.0) as u64;
+                            let s = (j.last_time_secs % 60.0) as u64;
+                            if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+                        } else { String::new() };
+                        if j.progress_pct > 0.0 {
+                            format!("{:.1}%  ·  {}  ·  {}", j.progress_pct, time_str, j.last_speed)
+                        } else if j.last_time_secs > 0.0 {
+                            format!("{}  ·  {}  ·  {}", time_str, j.last_speed, j.output_size)
+                        } else if j.last_frame > 0 {
+                            format!("frame {}  ·  {}", j.last_frame, j.last_speed)
+                        } else { "Encoding...".into() }
+                    } else { "Encoding...".into() };
+                    painter.text(bar_rect.center(), egui::Align2::CENTER_CENTER, bar_text, egui::FontId::proportional(9.0), egui::Color32::WHITE);
                 });
             }
         } else {
@@ -547,9 +1527,39 @@ impl App {
         }
     }
 
-    fn ui_logs(&self, ui: &mut egui::Ui) {
-        section_label(ui, "CONNECTOR LOGS");
+    fn ui_logs(&mut self, ui: &mut egui::Ui) {
+        // Active jobs summary
+        let active: Vec<_> = self.job_logs.iter().filter(|j| !j.finished).collect();
+        if !active.is_empty() {
+            section_label(ui, "ACTIVE JOBS");
+            for job in &active {
+                card!(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&job.id[..6]).color(ACCENT).size(11.0).font(egui::FontId::monospace(11.0)));
+                        ui.label(egui::RichText::new(&job.input).color(TEXT_PRIMARY).size(11.0));
+                    });
+                    ui.horizontal(|ui| {
+                        if !job.client.is_empty() {
+                            ui.label(egui::RichText::new(format!("Client: {}", job.client)).color(TEXT_MUTED).size(10.0));
+                        }
+                        if !job.last_speed.is_empty() {
+                            ui.label(egui::RichText::new(format!("Speed: {}", job.last_speed)).color(TEXT_SECONDARY).size(10.0));
+                        }
+                        let elapsed = job.started.elapsed().as_secs();
+                        ui.label(egui::RichText::new(format!("Elapsed: {}:{:02}:{:02}", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)).color(TEXT_MUTED).size(10.0));
+                    });
+                });
+            }
+        }
+
+        section_label(ui, "LOG");
         card!(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button(egui::RichText::new("Clear").color(TEXT_SECONDARY).size(10.0)).clicked() {
+                    self.logs.lock().unwrap().clear();
+                }
+                ui.label(egui::RichText::new(format!("{} entries", self.logs.lock().unwrap().len())).color(TEXT_MUTED).size(10.0));
+            });
             egui::ScrollArea::vertical().max_height(ui.available_height() - 20.0).stick_to_bottom(true).show(ui, |ui| {
                 let logs = self.logs.lock().unwrap();
                 if logs.is_empty() {
@@ -558,7 +1568,9 @@ impl App {
                 for line in logs.iter() {
                     let c = if line.contains("ERROR") || line.contains("error") || line.contains("fail") { ERROR }
                         else if line.contains("WARN") || line.contains("warn") { WARNING }
-                        else if line.contains("INFO") || line.contains("info") { TEXT_MUTED }
+                        else if line.contains("COMPLETE") || line.contains("done") { SUCCESS }
+                        else if line.contains("Job ") && line.contains("started") { ACCENT }
+                        else if line.contains("Job ") && line.contains("frame") { TEXT_SECONDARY }
                         else { TEXT_MUTED };
                     ui.label(egui::RichText::new(line).color(c).size(10.0).font(egui::FontId::monospace(10.0)));
                 }
@@ -569,7 +1581,11 @@ impl App {
     fn ui_help(&self, ui: &mut egui::Ui) {
         section_label(ui, "ABOUT");
         card!(ui, |ui| {
-            ui.label(egui::RichText::new("Recode GPU Server").color(TEXT_PRIMARY).size(16.0).strong());
+            ui.horizontal(|ui| {
+                let (logo_rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                paint_recode_logo(ui.painter(), logo_rect.center(), 8.0, egui::Stroke::new(2.0, ACCENT));
+                ui.label(egui::RichText::new("Recode GPU Server").color(egui::Color32::WHITE).size(16.0));
+            });
             ui.label(egui::RichText::new(format!("Version {VERSION}")).color(TEXT_MUTED).size(11.0));
             ui.add_space(6.0);
             ui.label(egui::RichText::new(
@@ -688,93 +1704,86 @@ impl App {
 fn main() -> eframe::Result<()> {
     // System tray
     let menu = Menu::new();
-    let show_item = MenuItem::new("Show Window", true, None);
-    let quit_item = MenuItem::new("Quit", true, None);
-    menu.append(&show_item).unwrap();
-    menu.append(&quit_item).unwrap();
+    // Initial placeholder — build_tray_menu() replaces this immediately after
+    menu.append(&MenuItem::with_id("show", "Show Window", true, None)).unwrap();
+    menu.append(&MenuItem::with_id("quit", "Quit", true, None)).unwrap();
 
-    // Tray icon: native-rendered ↻ character (22x22 RGBA, generated by Swift)
-    let icon_data: Vec<u8> = vec![0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,113,136,255,0,156,188,255,0,151,182,255,0,151,181,255,
-0,151,182,255,0,155,186,255,1,121,145,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,12,47,59,255,0,150,181,255,
-0,191,229,255,0,187,225,255,0,187,225,255,0,192,231,255,0,148,178,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,1,151,181,255,0,186,224,255,0,183,220,255,0,188,226,255,0,145,175,255,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,62,77,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,158,190,255,0,187,224,255,0,186,223,255,0,188,226,255,0,145,174,255,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,128,154,255,0,177,213,255,12,68,84,255,21,23,30,255,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,133,161,255,0,190,229,255,0,171,205,255,0,155,187,255,0,192,230,255,
-0,145,175,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,157,189,255,0,192,230,255,
-0,159,192,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,22,29,255,8,75,92,255,0,184,221,255,0,186,223,255,9,91,111,255,
-13,40,50,255,0,150,181,255,0,150,181,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,23,30,255,
-9,65,79,255,0,175,211,255,0,190,228,255,6,109,131,255,21,22,28,255,0,0,0,0,0,0,0,0,0,0,0,0,4,134,161,255,0,193,231,255,
-2,148,178,255,0,0,0,0,23,22,29,255,13,45,57,255,1,106,128,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,21,21,28,255,5,118,143,255,0,191,229,255,0,157,189,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,164,196,255,0,189,227,255,7,97,118,255,22,21,27,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,23,30,255,9,62,77,255,0,182,219,255,0,184,221,255,13,63,77,255,0,0,0,0,
-0,0,0,0,16,54,67,255,0,179,214,255,0,184,221,255,8,64,78,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,169,203,255,0,189,227,255,
-1,88,107,255,0,0,0,0,0,0,0,0,16,59,73,255,0,185,222,255,0,182,219,255,12,54,66,255,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,160,193,255,0,188,226,255,0,104,126,255,0,0,0,0,0,0,0,0,16,54,67,255,0,178,214,255,0,184,221,255,8,65,80,255,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,170,204,255,0,188,226,255,0,90,109,255,0,0,0,0,0,0,0,0,0,0,0,0,0,163,196,255,0,189,227,255,
-7,99,121,255,22,20,27,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,22,23,30,255,11,64,79,255,0,183,220,255,0,183,220,255,12,64,78,255,0,0,0,0,0,0,0,0,0,0,0,0,
-4,132,158,255,0,192,231,255,2,150,181,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,20,22,29,255,3,123,149,255,0,191,229,255,0,156,189,255,0,0,0,0,0,0,0,0,
-0,0,0,0,22,22,29,255,11,75,92,255,0,184,221,255,0,186,224,255,7,95,115,255,22,21,27,255,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,21,27,255,12,67,82,255,0,176,212,255,0,190,228,255,6,107,130,255,
-21,22,29,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,130,156,255,0,191,229,255,0,176,212,255,10,81,98,255,21,22,29,255,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,21,27,255,12,58,71,255,0,162,195,255,0,190,229,255,
-0,158,190,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,157,189,255,0,190,229,255,
-0,180,216,255,4,117,141,255,16,48,60,255,0,0,0,0,20,22,29,255,20,21,28,255,0,0,0,0,0,0,0,0,6,98,120,255,0,170,204,255,
-0,191,229,255,0,174,209,255,10,64,78,255,21,23,30,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-14,49,61,255,2,149,179,255,0,190,229,255,0,189,228,255,0,173,209,255,0,141,169,255,4,122,146,255,5,119,144,255,0,135,162,255,0,167,201,255,
-0,188,225,255,0,191,229,255,0,166,200,255,9,69,85,255,22,23,30,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,22,23,30,255,0,0,0,0,5,113,136,255,0,171,206,255,0,188,226,255,0,189,227,255,0,190,229,255,0,190,229,255,
-0,189,228,255,0,188,226,255,0,179,214,255,2,129,157,255,12,53,65,255,21,22,30,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,21,23,30,255,0,0,0,0,2,99,120,255,0,152,182,255,
-0,175,211,255,0,178,214,255,0,159,191,255,1,114,137,255,14,57,70,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,];
+    // Tray icon: Recode circular arrow (22x22 RGBA) with animation frames
+    let icon_data = include_bytes!("tray_icon.bin").to_vec();
     let icon = tray_icon::Icon::from_rgba(icon_data, 22, 22).unwrap();
+    let tray_frames_data = include_bytes!("tray_frames.bin");
 
-    let _tray = TrayIconBuilder::new()
+    let tray_instance = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Recode GPU Server")
+        .with_tooltip("Recode GPU Server — Idle")
         .with_icon(icon)
         .build()
         .unwrap();
+    unsafe { TRAY = Some(tray_instance); }
+    build_tray_menu();
 
-    let show_id = show_item.id().clone();
-    let quit_id = quit_item.id().clone();
-
-    // Handle menu events in background
+    // Handle menu events in background (match by string ID since menu items get recreated)
     std::thread::spawn(move || {
         loop {
             if let Ok(event) = MenuEvent::receiver().recv() {
-                if event.id() == &quit_id {
+                let id_str = event.id().0.as_str();
+                if id_str == "quit" {
+                    // Clean up all child processes before exit
+                    let _ = std::process::Command::new("pkill").args(["-f", "recode-remote connect"]).output();
+                    let _ = std::process::Command::new("pkill").args(["-f", "ffmpeg.*recode/rrp"]).output();
+                    // Unmount FUSE
+                    if let Ok(output) = std::process::Command::new("mount").output() {
+                        for line in String::from_utf8_lossy(&output.stdout).lines() {
+                            if line.contains("macfuse") && line.contains("/tmp/recode") {
+                                if let Some(mp) = line.split(" on ").nth(1).and_then(|s| s.split(' ').next()) {
+                                    let _ = std::process::Command::new("diskutil").args(["unmount", "force", mp]).output();
+                                }
+                            }
+                        }
+                    }
                     QUIT_FLAG.store(true, Ordering::Relaxed);
                     std::process::exit(0);
                 }
-                if event.id() == &show_id {
+                if id_str == "show" {
                     SHOW_FLAG.store(true, Ordering::Relaxed);
                 }
             }
         }
     });
 
+
+    // On macOS, restore the bundle's dock icon after egui opens (egui overrides it)
+    #[cfg(target_os = "macos")]
+    {
+        let icns_path = std::env::current_exe().ok()
+            .and_then(|p| p.parent()?.parent().map(|d| d.join("Resources/AppIcon.icns")))
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        std::thread::spawn(move || {
+            for delay_ms in [300, 600, 1000, 2000, 4000] {
+                std::thread::sleep(Duration::from_millis(delay_ms));
+                unsafe {
+                    use cocoa::base::nil;
+                    use cocoa::foundation::NSString;
+                    let app = cocoa::appkit::NSApp();
+                    let path = NSString::alloc(nil).init_str(&icns_path);
+                    let image: cocoa::base::id = msg_send![class!(NSImage), alloc];
+                    let image: cocoa::base::id = msg_send![image, initWithContentsOfFile: path];
+                    if image != nil {
+                        let _: () = msg_send![app, setApplicationIconImage: image];
+                    }
+                }
+            }
+        });
+    }
+
     eframe::run_native("Recode GPU Server", eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([540.0, 640.0])
+            .with_inner_size([800.0, 640.0])
             .with_min_inner_size([460.0, 420.0])
-            .with_title("Recode GPU Server"),
+            .with_title("Recode GPU Server")
+            .with_icon(Arc::new(egui::IconData { rgba: vec![0, 0, 0, 0], width: 1, height: 1 })),
         ..Default::default()
     }, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }

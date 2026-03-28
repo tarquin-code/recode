@@ -58,7 +58,7 @@ pub fn fuse_unmount(path: &std::path::Path) {
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("umount").args([path_str.as_ref()]).output();
+        let _ = std::process::Command::new("diskutil").args(["unmount", "force", path_str.as_ref()]).output();
         let _ = std::process::Command::new("umount").args(["-f", path_str.as_ref()]).output();
     }
 }
@@ -305,27 +305,40 @@ pub async fn run_fuse_job(
             MountOption::RO,
             MountOption::FSName("rrp".into()),
             MountOption::AutoUnmount,
+            MountOption::AllowOther,
             MountOption::CUSTOM(format!("max_read={}", CHUNK_SIZE)),
+            MountOption::CUSTOM("nobrowse".into()),
+            MountOption::CUSTOM("defer_permissions".into()),
+            MountOption::CUSTOM("noappledouble".into()),
+            MountOption::CUSTOM("noapplexattr".into()),
         ];
-        #[cfg(target_os = "linux")]
-        options.push(MountOption::AllowOther);
-        mount_ok2.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Err(e) = fuser::mount2(fs, &mount_path, &options) {
-            mount_ok2.store(false, std::sync::atomic::Ordering::SeqCst);
-            error!("FUSE mount error: {}", e);
+        match fuser::mount2(fs, &mount_path, &options) {
+            Ok(()) => { /* mount ran and unmounted normally */ }
+            Err(e) => {
+                mount_ok2.store(false, std::sync::atomic::Ordering::SeqCst);
+                error!("FUSE mount error: {}", e);
+            }
         }
     });
 
-    for _ in 0..20 {
+    let mut mounted = false;
+    for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         if mount_dir.join(".").exists() && std::fs::read_dir(&mount_dir).map(|mut d| d.next().is_some()).unwrap_or(false) {
+            mounted = true;
+            mount_ok.store(true, std::sync::atomic::Ordering::SeqCst);
+            break;
+        }
+        // Check if mount thread reported failure
+        if !mount_ok.load(std::sync::atomic::Ordering::SeqCst) && fuse_handle.is_finished() {
             break;
         }
     }
-    if !mount_ok.load(std::sync::atomic::Ordering::SeqCst) {
-        let _ = write_tagged(tx, TAG_CONTROL, &ControlMsg::JobError("FUSE mount failed".into())).await;
-        bail!("FUSE mount failed");
+    if !mounted {
+        let _ = write_tagged(tx, TAG_CONTROL, &ControlMsg::JobError("FUSE mount failed — check macFUSE installation".into())).await;
+        bail!("FUSE mount failed after 5s — mount dir empty");
     }
+    info!("FUSE mounted at {:?}", mount_dir);
 
     let output_local = job_dir.join("output.mkv");
     let orig_input = input_files.first().map(|f| f.original_path.as_str()).unwrap_or("");
@@ -344,10 +357,36 @@ pub async fn run_fuse_job(
         rw.push(out);
     }
 
-    // Pipe stderr through our process so we capture it even on crash
     // Write metadata files so GUI can read them (macOS can't read process env vars)
     let _ = std::fs::write(job_dir.join("rrp_input.txt"), orig_input);
     let _ = std::fs::write(job_dir.join("rrp_client.txt"), peer);
+
+    // Probe input duration in background (can't await here — would deadlock FUSE reads)
+    {
+        let ffprobe_path = {
+            let p = std::path::Path::new(ffmpeg);
+            if let Some(dir) = p.parent() {
+                let fp = dir.join("ffprobe");
+                if fp.exists() { fp.to_string_lossy().to_string() } else { "ffprobe".into() }
+            } else { "ffprobe".into() }
+        };
+        let input_path = mount_dir.join(input_files.first().map(|f| f.virtual_name.as_str()).unwrap_or("input_0.mkv"));
+        let dur_file = job_dir.join("rrp_duration.txt");
+        let jid = job_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await; // wait for FUSE + ffmpeg to start
+            if let Ok(output) = Command::new(&ffprobe_path)
+                .args(["-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0"])
+                .arg(&input_path)
+                .output().await {
+                let dur_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !dur_str.is_empty() {
+                    let _ = std::fs::write(&dur_file, &dur_str);
+                    info!("Job {}: input duration {}s", jid, dur_str);
+                }
+            }
+        });
+    }
 
     let stderr_path = job_dir.join("ffmpeg_stderr.log");
     let mut child = Command::new(ffmpeg)
@@ -549,12 +588,7 @@ pub async fn run_fuse_job(
     }
     let exit_code = post_exit_code;
 
-    // Step 2: Unmount FUSE (ffmpeg + post-commands done, safe to unmount)
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    fuse_unmount(&mount_dir);
-    let _ = fuse_handle.join();
-
-    // Send output back to client
+    // Send output back to client BEFORE unmounting FUSE (output is on local disk, not FUSE)
     if exit_code == 0 && output_local.exists() {
         let meta = tokio::fs::metadata(&output_local).await?;
         let total = meta.len();
@@ -578,6 +612,13 @@ pub async fn run_fuse_job(
     // Send JobComplete so the listener knows the final exit code
     let _ = write_tagged(tx, TAG_CONTROL, &ControlMsg::JobComplete { exit_code }).await;
     let _ = tx.flush().await;
+
+    // Unmount FUSE after output is sent (safe to unmount now)
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    fuse_unmount(&mount_dir);
+    // Join with timeout — don't block forever if macFUSE unmount hangs
+    let fuse_join = tokio::task::spawn_blocking(move || { let _ = fuse_handle.join(); });
+    let _ = tokio::time::timeout(Duration::from_secs(10), fuse_join).await;
 
     Ok(exit_code)
 }
