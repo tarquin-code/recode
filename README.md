@@ -163,52 +163,12 @@ Recode includes RRP (Recode Remote Protocol) for offloading encodes to remote GP
 
 ### macOS GPU Server Setup
 
-The Mac runs as a headless GPU server only (no web UI needed):
+1. Install [macFUSE](https://osxfuse.github.io/) — approve the kernel extension in System Settings → Privacy & Security, then reboot
+2. Download `Recode-GPU-Server.dmg` from the [latest release](https://github.com/tarquin-code/recode/releases)
+3. Open the DMG and drag **Recode GPU Server** to Applications
+4. Launch the app, enter your Recode server address and secret in Settings, click Start
 
-```bash
-# 1. Install macFUSE (required for FUSE mount mode)
-brew install macfuse
-# Approve the kernel extension in System Settings → Privacy & Security, then reboot
-
-# 2. Copy binaries from the macos/ folder in the release package
-mkdir -p ~/recode
-cp macos/recode-remote macos/ffmpeg macos/ffprobe ~/recode/
-chmod +x ~/recode/*
-
-# 3. Start the GPU server
-~/recode/recode-remote server --port 9878 --secret YOUR_SECRET --ffmpeg ~/recode/ffmpeg
-
-# 4. On the Linux Recode instance, add the Mac as a remote server:
-#    Settings → Remote GPU → Add Server → enter Mac IP:9878 and the secret
-```
-
-The encoder type (VideoToolbox) is auto-detected — no manual configuration needed. The GPU Target dropdown will show `🟢 Server Name (videotoolbox)`.
-
-To run on startup, create a launchd plist:
-```bash
-cat > ~/Library/LaunchAgents/com.recode.remote.plist << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>com.recode.remote</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/Users/YOUR_USER/recode/recode-remote</string>
-        <string>server</string>
-        <string>--port</string><string>9878</string>
-        <string>--secret</string><string>YOUR_SECRET</string>
-        <string>--ffmpeg</string><string>/Users/YOUR_USER/recode/ffmpeg</string>
-    </array>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>/tmp/recode-remote.log</string>
-    <key>StandardErrorPath</key><string>/tmp/recode-remote.log</string>
-</dict>
-</plist>
-EOF
-launchctl load ~/Library/LaunchAgents/com.recode.remote.plist
-```
+The app handles everything — VideoToolbox encoding, FUSE streaming, tray icon with live progress, and auto-cleanup. No command line needed.
 
 ### How It Works
 
