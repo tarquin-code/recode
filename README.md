@@ -129,7 +129,7 @@ Then open `http://your-server:9877` in a browser.
 ### Linux (Full Application)
 - **NVIDIA GPU** with drivers (for GPU encoding) — CPU-only mode available
 - **Linux** (RHEL/Debian/Arch-based distros)
-- No Python required — ships as a compiled binary
+- **Python 3.9+** — installer sets up a virtualenv automatically
 
 ### macOS (GPU Server Only)
 - **macOS 11+** on Apple Silicon (M1/M2/M3/M4)
@@ -139,7 +139,7 @@ Then open `http://your-server:9877` in a browser.
 ### Bundled Tools (no manual install needed)
 
 **Linux:**
-- `recode` — Main application binary (compiled, no Python needed)
+- `recode_server.py` — Main application (Python, runs in auto-created venv)
 - `ffmpeg` / `ffprobe` — Jellyfin static build with NVENC, QSV, VAAPI, libx265
 - `recode-remote` — RRP remote GPU encoding (server + client + ping)
 - `dovi_tool` — Dolby Vision metadata conversion
