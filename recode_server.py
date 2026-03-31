@@ -60,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.22.3.1"
+VERSION = "2.23.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -1096,6 +1096,69 @@ def resolve_preset(preset_name: str, width: int, height: int) -> dict:
     else:
         return {"cq": 24, "maxbitrate": "20M", "speed": "p5", "resolved": "custom"}
 
+# Encoder speed mappings
+NVENC_TO_QSV = {"p1": "veryfast", "p2": "faster", "p3": "fast", "p4": "medium", "p5": "medium", "p6": "slow", "p7": "veryslow"}
+NVENC_TO_AMF = {"p1": "speed", "p2": "speed", "p3": "speed", "p4": "balanced", "p5": "balanced", "p6": "quality", "p7": "quality"}
+
+
+def _get_encoder_type_for_job(settings, is_remote):
+    """Determine the encoder type for a job."""
+    if is_remote:
+        return settings.get("_remote_encoder_type", "nvenc")
+    gpu_idx = int(settings.get("gpu_id", 0))
+    if gpu_idx < len(_detected_gpus):
+        return _detected_gpus[gpu_idx]["encoder_type"]
+    return "nvenc"
+
+
+def _get_render_device(gpu_idx):
+    """Get the render device path for a GPU index."""
+    if gpu_idx < len(_detected_gpus):
+        return _detected_gpus[gpu_idx].get("render_device")
+    return None
+
+
+def _build_encoder_args(encoder_type, is_h264, cq, speed, maxbitrate):
+    """Build encoder-specific ffmpeg args for video codec, quality, and speed."""
+    if encoder_type == "nvenc":
+        codec = "h264_nvenc" if is_h264 else "hevc_nvenc"
+        profile = "high" if is_h264 else "main10"
+        return [
+            "-c:v", codec, "-rc", "vbr", "-cq", str(cq),
+            "-preset", speed, "-profile:v", profile,
+            "-b:v", "0", "-bufsize", maxbitrate, "-maxrate", maxbitrate,
+            "-multipass", "qres", "-spatial-aq", "1", "-temporal-aq", "1",
+            "-aq-strength", "8",
+        ]
+    elif encoder_type == "vaapi":
+        codec = "h264_vaapi" if is_h264 else "hevc_vaapi"
+        args = ["-c:v", codec, "-rc_mode", "CQP", "-qp", str(cq), "-maxrate", maxbitrate, "-bufsize", maxbitrate]
+        if not is_h264:
+            args += ["-profile:v", "main10"]
+        return args
+    elif encoder_type == "qsv":
+        codec = "h264_qsv" if is_h264 else "hevc_qsv"
+        qsv_speed = NVENC_TO_QSV.get(speed, "medium")
+        args = ["-c:v", codec, "-global_quality", str(cq), "-preset", qsv_speed, "-maxrate", maxbitrate, "-bufsize", maxbitrate]
+        if not is_h264:
+            args += ["-profile:v", "main10"]
+        return args
+    elif encoder_type == "amf":
+        codec = "h264_amf" if is_h264 else "hevc_amf"
+        amf_quality = NVENC_TO_AMF.get(speed, "balanced")
+        return ["-c:v", codec, "-rc", "cqp", "-qp_i", str(cq), "-qp_p", str(cq), "-quality", amf_quality, "-maxrate", maxbitrate, "-bufsize", maxbitrate]
+    elif encoder_type == "videotoolbox":
+        codec = "h264_videotoolbox" if is_h264 else "hevc_videotoolbox"
+        args = ["-c:v", codec, "-b:v", maxbitrate, "-allow_sw", "1"]
+        if not is_h264:
+            args += ["-tag:v", "hvc1"]
+        return args
+    else:
+        # CPU fallback
+        codec = "libx264" if is_h264 else "libx265"
+        x265_speed = NVENC_TO_X265.get(speed, "medium")
+        return ["-c:v", codec, "-crf", str(cq), "-preset", x265_speed, "-maxrate", maxbitrate, "-bufsize", maxbitrate]
+
 
 def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tuple[list[str], str]:
     """Build the full ffmpeg command. Returns (cmd_list, output_path)."""
@@ -1135,15 +1198,15 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
     dovi_p5 = info.get("dovi_profile") == 5
 
     is_remote = settings.get("_remote_server_idx", -1) >= 0
-    remote_encoder_type = settings.get("_remote_encoder_type", "nvenc")
-    is_videotoolbox = is_remote and remote_encoder_type == "videotoolbox"
+    encoder_type = _get_encoder_type_for_job(settings, is_remote)
+    is_videotoolbox = encoder_type == "videotoolbox"
 
     # Get target server's Vulkan capability from reported capabilities
     _target_has_vulkan = _has_libplacebo  # local default
     if is_remote:
         remote_gpu_name = settings.get("_remote_gpu_name", "")
         try:
-            _lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
+            _lsf = os.path.join(app_settings.get("tmp_dir") or "/tmp/recode", "rrp", "listener-status.json")
             with open(_lsf) as _f:
                 for _rg in json.load(_f).get("gpus", []):
                     if _rg.get("name") == remote_gpu_name:
@@ -1157,29 +1220,34 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
 
     if not use_cpu:
         pix_fmt = info.get("pix_fmt", "unknown")
-        cuda_safe_fmts = ("yuv420p", "nv12", "p010le", "yuv420p10le")
         gpu_id = str(settings.get("gpu_id", 0))
         if is_remote or gpu_id == "-1":
-            gpu_id = "0"  # remote assign_gpu rewrites device IDs
-        if is_remote and is_videotoolbox:
-            # VideoToolbox — no hwaccel flags needed (Apple handles decode internally)
-            pass
+            gpu_id = "0"
+        render_device = _get_render_device(int(gpu_id)) if not is_remote else None
+
+        if is_videotoolbox:
+            pass  # VideoToolbox handles decode internally
         elif dovi_p5 and dv_mode not in ("skip", "keep") and _target_has_vulkan:
-            # DV Profile 5 — Vulkan/libplacebo for color conversion + NVENC encode
-            # No CUDA hwaccel — Vulkan and CUDA compete for GPU resources at 4K
             log.info(f"DV Profile 5 — Vulkan libplacebo + GPU encode (GPU {gpu_id})")
             cmd += ["-init_hw_device", f"vulkan=vk:{gpu_id}", "-filter_hw_device", "vk"]
-        elif pix_fmt in cuda_safe_fmts:
-            cmd += ["-hwaccel", "cuda", "-hwaccel_device", gpu_id, "-extra_hw_frames", "16"]
-            if not dovi_p5 and not (info.get("has_dovi") and dv_mode == "encode_dv"):
-                # Full CUDA pipeline — frames stay in GPU memory
-                cmd += ["-hwaccel_output_format", "cuda"]
+        elif encoder_type == "nvenc":
+            cuda_safe_fmts = ("yuv420p", "nv12", "p010le", "yuv420p10le")
+            if pix_fmt in cuda_safe_fmts:
+                cmd += ["-hwaccel", "cuda", "-hwaccel_device", gpu_id, "-extra_hw_frames", "16"]
+                if not dovi_p5 and not (info.get("has_dovi") and dv_mode == "encode_dv"):
+                    cmd += ["-hwaccel_output_format", "cuda"]
+                else:
+                    log.info(f"DV P{info.get('dovi_profile','?')} encode_dv: CUDA decode without output_format cuda")
             else:
-                # DV encode_dv mode: CUDA decode to system memory — DOVI config record
-                # causes auto_scale filter conflict with hwaccel_output_format cuda
-                log.info(f"DV P{info.get('dovi_profile','?')} encode_dv: CUDA decode without output_format cuda (DOVI config incompatible)")
-        else:
-            log.info(f"Pixel format '{pix_fmt}' — using software decode + GPU encode to avoid color issues")
+                log.info(f"Pixel format '{pix_fmt}' — software decode + NVENC encode")
+        elif encoder_type == "vaapi":
+            dev = render_device or "/dev/dri/renderD128"
+            cmd += ["-hwaccel", "vaapi", "-hwaccel_device", dev, "-hwaccel_output_format", "vaapi"]
+        elif encoder_type == "qsv":
+            dev = render_device or "/dev/dri/renderD128"
+            cmd += ["-hwaccel", "qsv", "-qsv_device", dev]
+        elif encoder_type == "amf":
+            cmd += ["-hwaccel", "auto"]
 
     # Test mode: limit to 5 minutes for quick iteration
     if app_settings.get("test_mode"):
@@ -1309,58 +1377,18 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
     if use_cpu:
         cpu_preset = NVENC_TO_X265.get(speed, "medium")
         if is_h264:
-            cmd += [
-                "-c:v", "libx264", "-crf", str(cq),
-                "-preset", cpu_preset, "-profile:v", "high",
-                "-maxrate", maxbitrate, "-bufsize", maxbitrate,
-            ]
+            cmd += ["-c:v", "libx264", "-crf", str(cq), "-preset", cpu_preset, "-profile:v", "high", "-maxrate", maxbitrate, "-bufsize", maxbitrate]
         else:
-            cmd += [
-                "-c:v", "libx265", "-crf", str(cq),
-                "-preset", cpu_preset, "-profile:v", "main10",
-                "-maxrate", maxbitrate, "-bufsize", maxbitrate,
-            ]
+            cmd += ["-c:v", "libx265", "-crf", str(cq), "-preset", cpu_preset, "-profile:v", "main10", "-maxrate", maxbitrate, "-bufsize", maxbitrate]
         if cpu_threads and cpu_threads > 0:
             cmd += ["-threads", str(cpu_threads)]
-    elif is_videotoolbox:
-        # Apple VideoToolbox hardware encoder
-        # Use bitrate-based encoding (FFmpeg 8+ dropped -q:v for VideoToolbox)
-        if is_h264:
-            cmd += [
-                "-c:v", "h264_videotoolbox",
-                "-b:v", maxbitrate,
-                "-allow_sw", "1",
-            ]
-        else:
-            cmd += [
-                "-c:v", "hevc_videotoolbox",
-                "-b:v", maxbitrate,
-                "-tag:v", "hvc1",
-                "-allow_sw", "1",
-            ]
     else:
-        gpu_id = str(settings.get("gpu_id", 0))
-        if is_h264:
-            cmd += [
-                "-c:v", "h264_nvenc", "-rc", "vbr", "-cq", str(cq),
-                "-preset", speed, "-profile:v", "high",
-                "-b:v", "0", "-bufsize", maxbitrate, "-maxrate", maxbitrate,
-                "-multipass", "qres", "-spatial-aq", "1", "-temporal-aq", "1",
-                "-aq-strength", "8",
-            ]
-        else:
-            cmd += [
-                "-c:v", "hevc_nvenc", "-rc", "vbr", "-cq", str(cq),
-                "-preset", speed, "-profile:v", "main10",
-                "-b:v", "0", "-bufsize", maxbitrate, "-maxrate", maxbitrate,
-                "-multipass", "qres", "-spatial-aq", "1", "-temporal-aq", "1",
-                "-aq-strength", "8",
-            ]
-        # Only add -gpu flag for local GPU encoding, not remote
+        cmd += _build_encoder_args(encoder_type, is_h264, cq, speed, maxbitrate)
+        # GPU-specific device selection (local only)
         if not is_remote:
-            cmd += ["-gpu", gpu_id]
-        # Limit CPU threads for GPU encodes — GPU does the heavy lifting,
-        # only need a few CPU threads for demux/mux/BSF pipeline
+            gpu_id = str(settings.get("gpu_id", 0))
+            if encoder_type == "nvenc":
+                cmd += ["-gpu", gpu_id]
         cmd += ["-threads", "8"]
 
     # HDR / DV metadata (HEVC only — H.264 does not support HDR/DV)
@@ -1887,26 +1915,56 @@ scan_cancel_event = asyncio.Event()
 # System Stats Collection (CPU/GPU)
 # =============================================================================
 
-def detect_gpu_count() -> int:
-    """Detect number of NVIDIA GPUs available."""
+_detected_gpus = []  # list of {"index": 0, "vendor": "nvidia"|"amd"|"intel", "name": "...", "render_device": "/dev/dri/renderD128"|None, "vram_mb": 0, "encoder_type": "nvenc"|"vaapi"|"qsv"|"amf", "hw_encoders": [...]}
+
+
+def _probe_ffmpeg_encoders():
+    """Probe which hardware encoders ffmpeg supports."""
+    available = []
     try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            count = len([l for l in result.stdout.strip().splitlines() if l.strip()])
-            log.info(f"Detected {count} GPU(s)")
-            return count
+        result = subprocess.run([FFMPEG, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=10)
+        for enc in ("hevc_nvenc", "h264_nvenc", "hevc_vaapi", "h264_vaapi", "hevc_qsv", "h264_qsv", "hevc_amf", "h264_amf", "hevc_videotoolbox", "h264_videotoolbox"):
+            if enc in result.stdout:
+                available.append(enc)
     except Exception:
         pass
-    return 0
+    return available
 
 
-GPU_COUNT = detect_gpu_count()
+def _test_encoder(encoder, render_device=None, gpu_idx=None):
+    """Quick test if an encoder actually works on this system."""
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y"]
+    if "vaapi" in encoder:
+        dev = render_device or "/dev/dri/renderD128"
+        cmd += ["-init_hw_device", f"vaapi=va:{dev}", "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1:r=25",
+                "-vf", "format=nv12,hwupload", "-frames:v", "5", "-c:v", encoder, "-f", "null", "-"]
+    elif "qsv" in encoder:
+        dev = render_device or "/dev/dri/renderD128"
+        cmd += ["-init_hw_device", f"qsv=qsv:hw,child_device={dev}", "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1:r=25",
+                "-vf", "format=nv12,hwupload=extra_hw_frames=16", "-frames:v", "5", "-c:v", encoder, "-global_quality", "28", "-f", "null", "-"]
+    elif "amf" in encoder:
+        cmd += ["-f", "lavfi", "-i", "color=black:s=256x256:d=0.1:r=25",
+                "-frames:v", "5", "-c:v", encoder, "-f", "null", "-"]
+    elif "nvenc" in encoder:
+        gpu = str(gpu_idx) if gpu_idx is not None else "0"
+        cmd += ["-f", "lavfi", "-i", "color=black:s=256x256:d=0.1:r=25",
+                "-frames:v", "5", "-c:v", encoder, "-gpu", gpu, "-f", "null", "-"]
+    else:
+        return False
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=15)
+        return r.returncode == 0
+    except Exception:
+        return False
 
-def _seed_gpu_info():
-    """Pre-populate per_gpu_info with VRAM totals so gpu_max_encodes works before stats_collector runs."""
+
+def detect_all_gpus():
+    """Detect all GPUs — NVIDIA via nvidia-smi, AMD/Intel via /sys/class/drm/."""
+    gpus = []
+    ffmpeg_encoders = _probe_ffmpeg_encoders()
+    log.info(f"ffmpeg hardware encoders available: {ffmpeg_encoders}")
+
+    # 1. NVIDIA GPUs via nvidia-smi
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"],
@@ -1916,8 +1974,136 @@ def _seed_gpu_info():
             for line in result.stdout.strip().splitlines():
                 parts = [p.strip() for p in line.split(",")]
                 if len(parts) >= 3:
-                    gi = int(parts[0])
-                    per_gpu_info[gi] = {"name": parts[1], "mem_used": 0, "mem_total": int(parts[2])}
+                    idx = int(parts[0])
+                    hw_enc = [e for e in ffmpeg_encoders if "nvenc" in e]
+                    gpus.append({
+                        "index": len(gpus), "vendor": "nvidia", "name": parts[1],
+                        "render_device": None, "vram_mb": int(parts[2]),
+                        "encoder_type": "nvenc", "hw_encoders": hw_enc,
+                        "nvidia_idx": idx,
+                    })
+    except Exception:
+        pass
+
+    # 2. Scan /sys/class/drm/ for AMD and Intel GPUs
+    nvidia_count = len(gpus)
+    drm_path = "/sys/class/drm"
+    if os.path.isdir(drm_path):
+        render_devices = sorted([d for d in os.listdir(drm_path) if d.startswith("renderD")])
+        for rd in render_devices:
+            dev_path = f"/dev/dri/{rd}"
+            vendor_file = os.path.join(drm_path, rd, "device", "vendor")
+            if not os.path.exists(vendor_file):
+                continue
+            try:
+                vendor_id = open(vendor_file).read().strip().lower()
+            except Exception:
+                continue
+            # Skip NVIDIA — already detected via nvidia-smi
+            if vendor_id == "0x10de":
+                continue
+            if vendor_id == "0x1002":
+                vendor = "amd"
+            elif vendor_id == "0x8086":
+                vendor = "intel"
+            else:
+                continue
+
+            # Get GPU name
+            name = f"{vendor.upper()} GPU"
+            try:
+                # Try uevent for model info
+                uevent = open(os.path.join(drm_path, rd, "device", "uevent")).read()
+                for line in uevent.splitlines():
+                    if line.startswith("PCI_SLOT_NAME="):
+                        bus_id = line.split("=", 1)[1]
+                        lspci = subprocess.run(["lspci", "-s", bus_id], capture_output=True, text=True, timeout=5)
+                        if lspci.returncode == 0 and lspci.stdout.strip():
+                            # "03:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Navi 22 [Radeon RX 6700/6700 XT ...]"
+                            name_part = lspci.stdout.strip().split(": ", 1)[-1] if ": " in lspci.stdout else lspci.stdout.strip()
+                            # Shorten vendor prefix
+                            for prefix in ("Advanced Micro Devices, Inc. [AMD/ATI] ", "Intel Corporation "):
+                                name_part = name_part.replace(prefix, "")
+                            name = name_part.split(" (")[0].strip()[:60]
+                        break
+            except Exception:
+                pass
+
+            # Get VRAM (AMD has sysfs, Intel typically doesn't)
+            vram_mb = 0
+            # Find matching card device for VRAM info
+            card_num = rd.replace("renderD", "")
+            for cd in sorted(os.listdir(drm_path)):
+                if cd.startswith("card") and not cd.startswith("card-"):
+                    card_vendor = os.path.join(drm_path, cd, "device", "vendor")
+                    card_rd = os.path.join(drm_path, cd, "device", "drm", rd)
+                    if os.path.exists(card_rd):
+                        vram_file = os.path.join(drm_path, cd, "device", "mem_info_vram_total")
+                        if os.path.exists(vram_file):
+                            try:
+                                vram_mb = int(open(vram_file).read().strip()) // (1024 * 1024)
+                            except Exception:
+                                pass
+                        break
+
+            # Determine best encoder type
+            if vendor == "amd":
+                if any("amf" in e for e in ffmpeg_encoders) and _test_encoder("hevc_amf"):
+                    enc_type = "amf"
+                    hw_enc = [e for e in ffmpeg_encoders if "amf" in e]
+                elif any("vaapi" in e for e in ffmpeg_encoders) and _test_encoder("hevc_vaapi", dev_path):
+                    enc_type = "vaapi"
+                    hw_enc = [e for e in ffmpeg_encoders if "vaapi" in e]
+                else:
+                    continue  # no working encoder
+            else:  # intel
+                if any("qsv" in e for e in ffmpeg_encoders) and _test_encoder("hevc_qsv", dev_path):
+                    enc_type = "qsv"
+                    hw_enc = [e for e in ffmpeg_encoders if "qsv" in e]
+                elif any("vaapi" in e for e in ffmpeg_encoders) and _test_encoder("hevc_vaapi", dev_path):
+                    enc_type = "vaapi"
+                    hw_enc = [e for e in ffmpeg_encoders if "vaapi" in e]
+                else:
+                    continue  # no working encoder
+
+            gpus.append({
+                "index": len(gpus), "vendor": vendor, "name": name,
+                "render_device": dev_path, "vram_mb": vram_mb,
+                "encoder_type": enc_type, "hw_encoders": hw_enc,
+            })
+            log.info(f"Detected {vendor.upper()} GPU: {name} ({enc_type}) at {dev_path}{f' — {vram_mb}MB VRAM' if vram_mb else ''}")
+
+    if gpus:
+        log.info(f"Detected {len(gpus)} GPU(s): {', '.join(g['name'][:30] + ' (' + g['encoder_type'] + ')' for g in gpus)}")
+    else:
+        log.info("No GPUs detected — CPU encoding only")
+    return gpus
+
+
+_detected_gpus = detect_all_gpus()
+GPU_COUNT = len(_detected_gpus)
+
+
+def _seed_gpu_info():
+    """Pre-populate per_gpu_info with VRAM totals from detected GPUs."""
+    for g in _detected_gpus:
+        per_gpu_info[g["index"]] = {"name": g["name"], "mem_used": 0, "mem_total": g["vram_mb"]}
+    # Fallback: NVIDIA via nvidia-smi for richer data
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 3:
+                    # Find matching detected GPU by nvidia_idx
+                    ni = int(parts[0])
+                    for g in _detected_gpus:
+                        if g.get("nvidia_idx") == ni:
+                            per_gpu_info[g["index"]] = {"name": parts[1], "mem_used": 0, "mem_total": int(parts[2])}
+                            break
     except Exception:
         pass
 
@@ -2261,42 +2447,93 @@ def _safe_int(v):
         return 0
 
 
-def get_gpu_stats() -> dict:
-    """Get GPU utilization, memory, and temperature via nvidia-smi.
-    Returns aggregated stats across all GPUs (max util, sum memory, max temp)
-    plus per-GPU breakdown."""
+def _read_sysfs_int(path, default=0):
     try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            gpus = []
-            for line in result.stdout.strip().splitlines():
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 7:
-                    gpus.append({
-                        "index": _safe_int(parts[0]),
-                        "name": parts[1],
-                        "gpu_util": _safe_int(parts[2]),
-                        "gpu_mem_util": _safe_int(parts[3]),
-                        "gpu_mem_used": _safe_int(parts[4]),
-                        "gpu_mem_total": _safe_int(parts[5]),
-                        "gpu_temp": _safe_int(parts[6]),
-                    })
-            if gpus:
-                # Aggregate: max utilization, sum memory, max temp
-                return {
-                    "gpu_util": max(g["gpu_util"] for g in gpus),
-                    "gpu_mem_util": max(g["gpu_mem_util"] for g in gpus),
-                    "gpu_mem_used": sum(g["gpu_mem_used"] for g in gpus),
-                    "gpu_mem_total": sum(g["gpu_mem_total"] for g in gpus),
-                    "gpu_temp": max(g["gpu_temp"] for g in gpus),
-                    "gpus": gpus,
-                }
+        return int(open(path).read().strip())
     except Exception:
-        pass
+        return default
+
+
+def _get_amd_intel_gpu_stats(gpu):
+    """Read GPU stats from sysfs for AMD/Intel GPUs."""
+    rd = gpu.get("render_device", "")
+    if not rd:
+        return {"index": gpu["index"], "name": gpu["name"], "gpu_util": 0, "gpu_mem_util": 0, "gpu_mem_used": 0, "gpu_mem_total": gpu.get("vram_mb", 0), "gpu_temp": 0}
+    # Find matching card device
+    drm = "/sys/class/drm"
+    rd_name = os.path.basename(rd)
+    gpu_util = 0
+    mem_used = 0
+    mem_total = gpu.get("vram_mb", 0)
+    temp = 0
+    for cd in sorted(os.listdir(drm)):
+        if not cd.startswith("card") or cd.startswith("card-"):
+            continue
+        if os.path.exists(os.path.join(drm, cd, "device", "drm", rd_name)):
+            dev_dir = os.path.join(drm, cd, "device")
+            gpu_util = _read_sysfs_int(os.path.join(dev_dir, "gpu_busy_percent"))
+            vram_used_bytes = _read_sysfs_int(os.path.join(dev_dir, "mem_info_vram_used"))
+            vram_total_bytes = _read_sysfs_int(os.path.join(dev_dir, "mem_info_vram_total"))
+            if vram_total_bytes > 0:
+                mem_total = vram_total_bytes // (1024 * 1024)
+                mem_used = vram_used_bytes // (1024 * 1024)
+            # Find hwmon for temperature
+            hwmon_dir = os.path.join(dev_dir, "hwmon")
+            if os.path.isdir(hwmon_dir):
+                for hm in os.listdir(hwmon_dir):
+                    temp_file = os.path.join(hwmon_dir, hm, "temp1_input")
+                    if os.path.exists(temp_file):
+                        temp = _read_sysfs_int(temp_file) // 1000
+                        break
+            break
+    mem_pct = round(mem_used / mem_total * 100) if mem_total > 0 else 0
+    return {"index": gpu["index"], "name": gpu["name"], "gpu_util": gpu_util, "gpu_mem_util": mem_pct, "gpu_mem_used": mem_used, "gpu_mem_total": mem_total, "gpu_temp": temp}
+
+
+def get_gpu_stats() -> dict:
+    """Get GPU utilization, memory, and temperature for all detected GPUs."""
+    gpus = []
+    # NVIDIA GPUs via nvidia-smi
+    nvidia_gpus = [g for g in _detected_gpus if g["vendor"] == "nvidia"]
+    if nvidia_gpus:
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().splitlines():
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) >= 7:
+                        nvidia_idx = _safe_int(parts[0])
+                        # Map nvidia index to our global index
+                        matched = next((g for g in _detected_gpus if g.get("nvidia_idx") == nvidia_idx), None)
+                        idx = matched["index"] if matched else nvidia_idx
+                        gpus.append({
+                            "index": idx, "name": parts[1],
+                            "gpu_util": _safe_int(parts[2]), "gpu_mem_util": _safe_int(parts[3]),
+                            "gpu_mem_used": _safe_int(parts[4]), "gpu_mem_total": _safe_int(parts[5]),
+                            "gpu_temp": _safe_int(parts[6]),
+                        })
+        except Exception:
+            pass
+    # AMD/Intel GPUs via sysfs
+    for g in _detected_gpus:
+        if g["vendor"] in ("amd", "intel"):
+            gpus.append(_get_amd_intel_gpu_stats(g))
+    # Update per_gpu_info
+    for g in gpus:
+        per_gpu_info[g["index"]] = {"name": g["name"], "mem_used": g["gpu_mem_used"], "mem_total": g["gpu_mem_total"]}
+    if gpus:
+        return {
+            "gpu_util": max(g["gpu_util"] for g in gpus),
+            "gpu_mem_util": max(g["gpu_mem_util"] for g in gpus),
+            "gpu_mem_used": sum(g["gpu_mem_used"] for g in gpus),
+            "gpu_mem_total": sum(g["gpu_mem_total"] for g in gpus),
+            "gpu_temp": max(g["gpu_temp"] for g in gpus),
+            "gpus": gpus,
+        }
     return {"gpu_util": 0, "gpu_mem_util": 0, "gpu_mem_used": 0, "gpu_mem_total": 0, "gpu_temp": 0, "gpus": []}
 
 async def stats_collector():
@@ -2604,8 +2841,15 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                     pipe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 _, dovi_err = await p.communicate()
                 if p.returncode != 0 or not os.path.exists(rpu_bin) or os.path.getsize(rpu_bin) == 0:
-                    raise RuntimeError(f"RPU extraction failed: {dovi_err.decode(errors='replace')[-200:]}")
-                encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU extracted ({human_size(os.path.getsize(rpu_bin))})")
+                    # RPU not extractable — source has no DV NALs (container-only DV or already stripped)
+                    _reason = "no DV RPU in bitstream" if "No frames" in dovi_err.decode(errors='replace') else dovi_err.decode(errors='replace')[-100:]
+                    log.warning(f"[{job.id}] RPU extraction failed ({_reason}) — keeping encode as HDR10")
+                    encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU extraction failed ({_reason}) — keeping as HDR10")
+                    _needs_dv_inject = False
+                encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU extracted ({human_size(os.path.getsize(rpu_bin))})") if _needs_dv_inject else None
+
+                if not _needs_dv_inject:
+                    raise Exception("_skip_dv_")  # skip to except block, handled below
 
                 log.info(f"[{job.id}] {_dv_label} step 2/4: extracting HEVC bitstream")
                 encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 2/4: extracting HEVC bitstream...")
@@ -2648,14 +2892,17 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 log.info(f"[{job.id}] {_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
                 encode_queue.ffmpeg_logs.get(job.id, []).append(f"{_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
             except Exception as e:
-                log.error(f"[{job.id}] {_dv_label} failed: {e}")
-                encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"DV conversion failed: {e}")
-                for f in dovi_cleanup:
-                    if os.path.exists(f): os.remove(f)
-                if os.path.exists(tmp_output): os.remove(tmp_output)
-                _finish_job(JobStatus.FAILED, f"{_dv_label} failed")
-                await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
-                return
+                if str(e) == "_skip_dv_":
+                    pass  # RPU extraction failed, keeping as HDR10 — continue normally
+                else:
+                    log.error(f"[{job.id}] {_dv_label} failed: {e}")
+                    encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"DV conversion failed: {e}")
+                    for f in dovi_cleanup:
+                        if os.path.exists(f): os.remove(f)
+                    if os.path.exists(tmp_output): os.remove(tmp_output)
+                    _finish_job(JobStatus.FAILED, f"{_dv_label} failed")
+                    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                    return
             finally:
                 for f in dovi_cleanup:
                     if os.path.exists(f): os.remove(f)
@@ -2784,6 +3031,10 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                     if app_settings.get("test_mode"):
                         log.info(f"[{job.id}] Test mode (5 min) — not deleting original")
                         encode_queue.ffmpeg_logs.setdefault(job.id, []).append("Test mode (5 min) — not deleting original")
+                    elif orig_bytes > 0 and new_bytes < orig_bytes * 0.05:
+                        log.warning(f"[{job.id}] Encode suspiciously small ({human_size(new_bytes)} vs {human_size(orig_bytes)}) — NOT deleting original")
+                        encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Safety: encode too small ({human_size(new_bytes)} vs {human_size(orig_bytes)}) — kept original")
+                        action = "kept original (safety)"
                     else:
                         try:
                             os.remove(info["path"])
@@ -3338,31 +3589,13 @@ async def encode_worker(worker_id: int):
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
             continue
 
-        # GPU fallback: if set to GPU but no GPU/nvenc available, fall back to CPU
+        # GPU fallback: if set to GPU but no hardware encoder available, fall back to CPU
         # Skip this check for remote jobs — the remote server handles GPU
         if not settings.get("use_cpu", False) and settings.get("_remote_server_idx", -1) < 0:
-            gpu_ok = False
-            try:
-                gpu_check = await asyncio.create_subprocess_exec(
-                    "nvidia-smi", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await gpu_check.communicate()
-                if gpu_check.returncode != 0:
-                    raise RuntimeError("nvidia-smi failed")
-                # Also verify nvenc encoder is usable on the assigned GPU
-                vc = settings.get("video_codec", "hevc")
-                nvenc = "hevc_nvenc" if vc == "hevc" else "h264_nvenc"
-                gpu_id = str(settings.get("gpu_id", 0))
-                nvenc_check = await asyncio.create_subprocess_exec(
-                    FFMPEG, "-hide_banner", "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1",
-                    "-c:v", nvenc, "-gpu", gpu_id, "-f", "null", "-",
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await nvenc_check.communicate()
-                if nvenc_check.returncode != 0:
-                    raise RuntimeError(f"{nvenc} not available")
-                gpu_ok = True
-            except Exception as e:
-                log.warning(f"[{job.id}] GPU encoding not available ({e}), falling back to CPU")
-                encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"GPU not available ({e}) — falling back to CPU encoding")
+            gpu_ok = GPU_COUNT > 0
+            if not gpu_ok:
+                log.warning(f"[{job.id}] No GPU detected, falling back to CPU")
+                encode_queue.ffmpeg_logs.setdefault(job.id, []).append("No GPU detected — falling back to CPU encoding")
                 settings["use_cpu"] = True
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
@@ -3988,7 +4221,11 @@ async def encode_worker(worker_id: int):
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                         _, dovi_err = await p.communicate()
                         if p.returncode != 0 or not os.path.exists(rpu_bin) or os.path.getsize(rpu_bin) == 0:
-                            raise RuntimeError(f"RPU extraction failed: {dovi_err.decode(errors='replace')[-200:]}")
+                            _reason = "no DV RPU in bitstream" if "No frames" in dovi_err.decode(errors='replace') else dovi_err.decode(errors='replace')[-100:]
+                            log.warning(f"[{job.id}] RPU extraction failed ({_reason}) — keeping encode as HDR10")
+                            encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU extraction failed ({_reason}) — keeping as HDR10")
+                            needs_dv_inject = False
+                            raise Exception("_skip_dv_")
                         rpu_size = os.path.getsize(rpu_bin)
                         log.info(f"[{job.id}] RPU extracted ({human_size(rpu_size)})")
                         encode_queue.ffmpeg_logs.get(job.id, []).append(f"RPU extracted ({human_size(rpu_size)})")
@@ -4077,17 +4314,20 @@ async def encode_worker(worker_id: int):
                         encode_queue.ffmpeg_logs.get(job.id, []).append(f"{dv_label} complete — {human_size(new_bytes)}")
 
                     except Exception as e:
-                        log.error(f"[{job.id}] {dv_label} failed: {e}")
-                        encode_queue.ffmpeg_logs.get(job.id, []).append(f"DV conversion failed: {e}")
-                        for f in dovi_cleanup:
-                            if os.path.exists(f):
-                                os.remove(f)
-                        if os.path.exists(tmp_output):
-                            os.remove(tmp_output)
-                        encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"{dv_label} failed: {e}")
-                        _finish_job(JobStatus.FAILED, f"{dv_label} failed")
-                        await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
-                        continue
+                        if str(e) == "_skip_dv_":
+                            pass  # RPU extraction failed, keeping as HDR10 — continue normally
+                        else:
+                            log.error(f"[{job.id}] {dv_label} failed: {e}")
+                            encode_queue.ffmpeg_logs.get(job.id, []).append(f"DV conversion failed: {e}")
+                            for f in dovi_cleanup:
+                                if os.path.exists(f):
+                                    os.remove(f)
+                            if os.path.exists(tmp_output):
+                                os.remove(tmp_output)
+                            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"{dv_label} failed: {e}")
+                            _finish_job(JobStatus.FAILED, f"{dv_label} failed")
+                            await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                            continue
                     finally:
                         for f in dovi_cleanup:
                             if os.path.exists(f):
@@ -4283,6 +4523,10 @@ async def encode_worker(worker_id: int):
                     if app_settings.get("test_mode"):
                         log.info(f"[{job.id}] Test mode (5 min) — not deleting original")
                         encode_queue.ffmpeg_logs.setdefault(job.id, []).append("Test mode (5 min) — not deleting original")
+                    elif orig_bytes > 0 and new_bytes < orig_bytes * 0.05:
+                        log.warning(f"[{job.id}] Encode suspiciously small ({human_size(new_bytes)} vs {human_size(orig_bytes)}) — NOT deleting original")
+                        encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Safety: encode too small ({human_size(new_bytes)} vs {human_size(orig_bytes)}) — kept original")
+                        action = "kept original (safety)"
                     else:
                         try:
                             os.remove(info["path"])
@@ -4354,20 +4598,8 @@ def _get_os_name():
 @app.get("/api/setup/status")
 async def setup_status():
     """Check if first-run setup is needed."""
-    has_gpu = False
-    gpu_info = []
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            has_gpu = True
-            for line in result.stdout.strip().splitlines():
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 3:
-                    gpu_info.append({"index": int(parts[0]), "name": parts[1], "vram_mb": int(parts[2])})
-    except Exception:
-        pass
+    has_gpu = GPU_COUNT > 0
+    gpu_info = [{"index": g["index"], "name": g["name"], "vram_mb": g.get("vram_mb", 0), "vendor": g["vendor"], "encoder_type": g["encoder_type"]} for g in _detected_gpus]
 
     has_plex = False
     plex_token_found = PLEX_TOKEN is not None
@@ -4383,68 +4615,28 @@ async def setup_status():
 
     ffmpeg_path = _find_bin("ffmpeg")
     ffmpeg_found = os.path.isfile(ffmpeg_path) if ffmpeg_path else False
-    has_nvenc = False
+    # Detect available encoders from ffmpeg and detected GPUs
+    available_hw_encoders = []
+    for g in _detected_gpus:
+        available_hw_encoders.extend(g.get("hw_encoders", []))
+    available_hw_encoders = sorted(set(available_hw_encoders))
+    has_nvenc = any("nvenc" in e for e in available_hw_encoders)
+    has_vaapi = any("vaapi" in e for e in available_hw_encoders)
+    has_qsv = any("qsv" in e for e in available_hw_encoders)
+    has_amf = any("amf" in e for e in available_hw_encoders)
     has_libplacebo = False
     if ffmpeg_found:
         try:
-            r = subprocess.run([ffmpeg_path, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=5)
-            has_nvenc = "hevc_nvenc" in r.stdout
             r2 = subprocess.run([ffmpeg_path, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=5)
             has_libplacebo = "libplacebo" in r2.stdout
         except Exception:
             pass
 
-    # Detect GPU hardware — try nvidia-smi name first, fall back to lspci
-    lspci_gpu = ""
-    has_nvidia_hw = False
-    # If nvidia-smi works, use its GPU name (always correct)
-    if has_gpu and gpu_info:
-        has_nvidia_hw = True
-        lspci_gpu = gpu_info[0].get("name", "")
-    if not has_nvidia_hw:
-        # Fall back to lspci with -nn for numeric IDs + try -v for better names
-        try:
-            r = subprocess.run(["lspci", "-nn"], capture_output=True, text=True, timeout=5)
-            if r.returncode == 0:
-                for line in r.stdout.splitlines():
-                    if "NVIDIA" in line and ("VGA" in line or "3D" in line or "Display" in line):
-                        lspci_gpu = line.split(": ", 1)[-1] if ": " in line else line
-                        has_nvidia_hw = True
-                        break
-            # Try to get a better name with lspci -v if we only got a device ID
-            if has_nvidia_hw and "Device" in lspci_gpu and "[" in lspci_gpu:
-                try:
-                    r2 = subprocess.run(["lspci", "-vmm"], capture_output=True, text=True, timeout=5)
-                    if r2.returncode == 0:
-                        in_nvidia = False
-                        for line in r2.stdout.splitlines():
-                            if line.startswith("Vendor:") and "NVIDIA" in line:
-                                in_nvidia = True
-                            elif line.startswith("Device:") and in_nvidia:
-                                dev_name = line.split(":", 1)[-1].strip()
-                                if dev_name and "Device" not in dev_name:
-                                    lspci_gpu = f"NVIDIA {dev_name}"
-                                break
-                            elif line.strip() == "":
-                                in_nvidia = False
-                except Exception:
-                    pass
-            # Last resort: try to update PCI IDs database
-            if "Device" in lspci_gpu:
-                try:
-                    subprocess.run(["update-pciids"], capture_output=True, timeout=30)
-                    r3 = subprocess.run(["lspci"], capture_output=True, text=True, timeout=5)
-                    if r3.returncode == 0:
-                        for line in r3.stdout.splitlines():
-                            if "NVIDIA" in line and ("VGA" in line or "3D" in line or "Display" in line):
-                                new_name = line.split(": ", 1)[-1] if ": " in line else line
-                                if "Device" not in new_name:
-                                    lspci_gpu = new_name
-                                break
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    # GPU hardware summary
+    lspci_gpu = gpu_info[0]["name"] if gpu_info else ""
+    has_nvidia_hw = any(g["vendor"] == "nvidia" for g in _detected_gpus)
+    has_amd_hw = any(g["vendor"] == "amd" for g in _detected_gpus)
+    has_intel_hw = any(g["vendor"] == "intel" for g in _detected_gpus)
 
     # Get tool versions
     def _get_version(bin_name, args=None, parse=None):
@@ -4468,7 +4660,7 @@ async def setup_status():
     mkvmerge_version = _get_version("mkvmerge", ["--version"], lambda o: o.split("(")[0].replace("mkvmerge v", "v").strip() if o else "")
     mediainfo_version = _get_version("mediainfo", ["--Version"], lambda o: o.replace("MediaInfoLib - v", "v").split("\n")[-1].strip() if o else "")
     nvidia_driver_ver = ""
-    if has_gpu:
+    if has_nvidia_hw:
         try:
             r = subprocess.run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"], capture_output=True, text=True, timeout=5)
             nvidia_driver_ver = r.stdout.strip().split("\n")[0] if r.returncode == 0 else ""
@@ -4482,14 +4674,20 @@ async def setup_status():
         "gpu_info": gpu_info,
         "gpu_count": len(gpu_info),
         "has_nvidia_hw": has_nvidia_hw,
+        "has_amd_hw": has_amd_hw,
+        "has_intel_hw": has_intel_hw,
         "lspci_gpu": lspci_gpu,
         "has_plex": has_plex,
         "plex_token_found": plex_token_found,
         "plex_prefs_path": plex_prefs_path,
         "ffmpeg_path": ffmpeg_path if ffmpeg_found else "",
         "has_nvenc": has_nvenc,
+        "has_vaapi": has_vaapi,
+        "has_qsv": has_qsv,
+        "has_amf": has_amf,
+        "available_hw_encoders": available_hw_encoders,
         "has_libplacebo": has_libplacebo,
-        "vulkan_available": _has_libplacebo,  # actual functional test from startup
+        "vulkan_available": _has_libplacebo,
         "vulkan_version": _get_vulkan_version(),
         "has_dovi_tool": os.path.isfile(_find_bin("dovi_tool")),
         "has_mkvmerge": os.path.isfile(_find_bin("mkvmerge")),

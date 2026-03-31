@@ -695,7 +695,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <option value="auto">Auto (least loaded)</option>
                         </select>
                     </div>
-                    <span class="set-desc">GPU is much faster, CPU has better compression</span>
+                    <span class="set-desc">GPU is much faster (NVIDIA/AMD/Intel), CPU has better compression</span>
                 </div>
             </div>
 
@@ -2010,7 +2010,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Recode</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.22.3</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.23.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2043,6 +2043,19 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.23.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>AMD &amp; Intel GPU support</strong> &mdash; auto-detects AMD (VAAPI/AMF) and Intel (QSV/VAAPI) GPUs, builds correct ffmpeg commands per encoder, GPU stats from sysfs</li>
+                                <li><strong>Multi-vendor setup wizard</strong> &mdash; detects all GPU vendors, shows available hardware encoders, installer handles AMD/Intel dependencies</li>
+                                <li><strong>FUSE throughput boost</strong> &mdash; reduced chunk size from 8MB to 256KB for ~40% faster remote GPU streaming on LAN</li>
+                                <li><strong>Data connection keepalive</strong> &mdash; TCP keepalive + application-level heartbeat prevents NAT/firewall from dropping idle FUSE connections during long encodes</li>
+                                <li><strong>Zombie job cleanup</strong> &mdash; connector detects and cleans stale jobs on reconnect (fixes Mac GPU appearing permanently full)</li>
+                                <li><strong>RPU fallback</strong> &mdash; when Dolby Vision RPU extraction fails (container-only DV, already re-encoded), encode continues as HDR10 instead of failing</li>
+                                <li><strong>Delete safety guard</strong> &mdash; never deletes original if encoded file is less than 5% of original size</li>
+                                <li><strong>Settings save fix</strong> &mdash; Save button now enables when adding, removing, or toggling remote clients</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.22.3 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -6147,7 +6160,7 @@ function renderRemoteClients() {
             `<option value="${n}" ${n === mj ? 'selected' : ''}>${n}</option>`
         ).join('');
         html += `<div style="display:flex;align-items:flex-end;gap:10px;margin-bottom:6px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;${disabled ? 'opacity:0.4;' : ''}">
-            <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Disabled' : c._online ? 'Connected' : 'Checking...'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : c._online ? 'var(--success)' : 'var(--border)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;margin-bottom:1px;" onclick="window._remoteClients[${i}].enabled=${disabled};renderRemoteClients();setTimeout(()=>checkRemoteClients(),300);">${svgIcon('power', 14)}</button>
+            <button id="${statusId}" class="btn btn-sm btn-power" title="${disabled ? 'Disabled' : c._online ? 'Connected' : 'Checking...'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : c._online ? 'var(--success)' : 'var(--border)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;margin-bottom:1px;" onclick="window._remoteClients[${i}].enabled=${disabled};renderRemoteClients();markSettingsDirty();setTimeout(()=>checkRemoteClients(),300);">${svgIcon('power', 14)}</button>
             <div style="flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:4px 10px;">
                 <div style="flex:1;min-width:100px;">
                     <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Name</div>
@@ -6166,7 +6179,7 @@ function renderRemoteClients() {
                 <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;">Max Jobs</div>
                 <select style="font-size:12px;width:auto;min-width:55px;" ${disabled ? 'disabled' : ''} onchange="window._remoteClients[${i}].max_jobs=parseInt(this.value)">${maxOpts}</select>
             </div>
-            <button class="btn btn-danger btn-sm" title="Remove" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;font-size:16px;margin-bottom:1px;" onclick="window._remoteClients.splice(${i},1);renderRemoteClients();">&times;</button>
+            <button class="btn btn-danger btn-sm" title="Remove" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;flex-shrink:0;font-size:16px;margin-bottom:1px;" onclick="window._remoteClients.splice(${i},1);renderRemoteClients();markSettingsDirty();">&times;</button>
         </div>`;
     });
     container.innerHTML = html;
@@ -6261,6 +6274,7 @@ async function checkRemoteClients() {
 function addRemoteClient() {
     window._remoteClients.push({name: '', address: '', secret: '', enabled: true, max_jobs: 1});
     renderRemoteClients();
+    markSettingsDirty();
 }
 // Keep old function names as aliases for backward compatibility
 window._remoteGpuServers = window._remoteClients;

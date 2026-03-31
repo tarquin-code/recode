@@ -463,6 +463,9 @@ pub async fn run_fuse_job(
     });
 
     let mut child_done = false;
+    let mut keepalive_interval = tokio::time::interval(Duration::from_secs(30));
+    keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_progress_sent = std::time::Instant::now();
     loop {
         // Drain any pending progress and send to client
         let mut sent = 0u32;
@@ -470,12 +473,21 @@ pub async fn run_fuse_job(
             let _ = write_tagged(tx, TAG_PROGRESS, &p).await;
             sent += 1;
         }
-        if sent > 0 { let _ = tx.flush().await; }
+        if sent > 0 { let _ = tx.flush().await; last_progress_sent = std::time::Instant::now(); }
 
         // If ffmpeg already exited, break out
         if child_done { break; }
 
         tokio::select! {
+            _ = keepalive_interval.tick() => {
+                // Only send keepalive if no real progress was sent recently
+                if last_progress_sent.elapsed() > Duration::from_secs(25) {
+                    let _ = write_tagged(tx, TAG_PROGRESS, &ProgressMsg {
+                        frame: 0, time_secs: 0.0, speed: 0.0, bitrate_kbps: 0.0, output_size: 0,
+                    }).await;
+                    let _ = tx.flush().await;
+                }
+            }
             Some(freq) = req_rx.recv() => {
                 let req = FileReadReq {
                     file_idx: freq.file_idx,

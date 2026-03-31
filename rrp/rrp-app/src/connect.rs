@@ -142,7 +142,34 @@ pub async fn run(
         }
         let effective_max: usize = gpu_max_jobs_vec.iter().sum::<usize>().max(max_jobs.min(1));
 
-        // Sync active_jobs counter with actual running jobs (fixes stale count after disconnect)
+        // On reconnect: clean up stale job IDs by checking if job dirs still have ffmpeg running
+        {
+            let mut ids = active_job_ids.lock().unwrap();
+            let stale: Vec<String> = ids.iter().filter(|id| {
+                let mnt = PathBuf::from(&tmp_dir).join(id).join("mnt");
+                let progress = PathBuf::from(&tmp_dir).join(id).join("ffmpeg_progress.txt");
+                // Job is stale if: no mount, or progress file says "progress=end", or dir doesn't exist
+                if !PathBuf::from(&tmp_dir).join(id).exists() { return true; }
+                if !mnt.exists() { return true; }
+                if let Ok(p) = std::fs::read_to_string(&progress) {
+                    if p.contains("progress=end") { return true; }
+                }
+                false
+            }).cloned().collect();
+            for id in &stale {
+                info!("Cleaning stale job {} from active set", id);
+                ids.remove(id);
+                // Unmount and remove
+                let job_dir = PathBuf::from(&tmp_dir).join(id);
+                let mnt = job_dir.join("mnt");
+                if mnt.exists() {
+                    #[cfg(feature = "fuse")]
+                    crate::server::fuse_unmount(&mnt);
+                }
+                let _ = std::fs::remove_dir_all(&job_dir);
+            }
+        }
+        // Reset semaphore permits to match actual active count
         let actual_active = active_job_ids.lock().unwrap().len() as u32;
         active_jobs.store(actual_active, Ordering::Relaxed);
 
@@ -482,6 +509,31 @@ async fn execute_job(
     let mut stream = TcpStream::connect(&data_addr).await
         .context("data connection failed")?;
     stream.set_nodelay(true)?;
+    // Enable TCP keepalive to prevent NAT/firewall from dropping idle connections
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = stream.as_raw_fd();
+        unsafe {
+            let optval: libc::c_int = 1;
+            libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE, &optval as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+            let idle: libc::c_int = 30;
+            let interval: libc::c_int = 10;
+            let cnt: libc::c_int = 3;
+            #[cfg(target_os = "linux")]
+            {
+                libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, &idle as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+                libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, &interval as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+                libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, &cnt as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, &idle as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+                libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, &interval as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+                libc::setsockopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, &cnt as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+            }
+        }
+    }
 
     // Send data connection type prefix + auth
     stream.write_all(&[CONN_TYPE_DATA]).await?;

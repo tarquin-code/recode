@@ -498,7 +498,7 @@ async function init() {
         // Check for in-progress installs (recover from page reload)
         await checkActiveInstalls();
         // Auto-select GPU/CPU based on detection
-        if (!sysInfo.has_nvenc) {
+        if (!sysInfo.has_nvenc && !sysInfo.has_vaapi && !sysInfo.has_qsv && !sysInfo.has_amf) {
             document.getElementById('sEncoder').value = 'cpu';
         }
         // Disable DV P8.4 if no libplacebo
@@ -528,16 +528,19 @@ function renderSystemCheck() {
     </div>`;
 
     if (s.has_gpu) {
+        const gpuNames = (s.gpu_info || []).map(g => g.name).filter(Boolean);
+        const gpuTypes = [...new Set((s.gpu_info || []).map(g => (g.encoder_type || '').toUpperCase()).filter(Boolean))];
         const driverVer = s.nvidia_driver_version ? ` — Driver ${s.nvidia_driver_version}` : '';
-        html += checkItem('NVIDIA GPU', true, `${s.gpu_count} GPU(s)${driverVer}`, null, s.lspci_gpu || (s.gpu_info && s.gpu_info[0] ? s.gpu_info[0].name : ''));
-    } else if (s.has_nvidia_hw) {
-        html += checkItem('NVIDIA GPU', false, `Hardware found but no drivers`, null, s.lspci_gpu);
+        const typeStr = gpuTypes.length ? ` (${gpuTypes.join(', ')})` : '';
+        html += checkItem('GPU', true, `${s.gpu_count} GPU(s)${typeStr}${driverVer}`, null, gpuNames[0] || s.lspci_gpu || '');
+    } else if (s.has_nvidia_hw || s.has_amd_hw || s.has_intel_hw) {
+        html += checkItem('GPU', false, `Hardware found but no drivers/encoder`, null, s.lspci_gpu);
     } else {
-        html += checkItem('NVIDIA GPU', false, 'No NVIDIA GPU detected — CPU encoding only');
+        html += checkItem('GPU', false, 'No GPU detected — CPU encoding only');
     }
-    // RAM shown in system info header above
     html += checkItem('ffmpeg', !!s.ffmpeg_path && s.ffmpeg_path !== 'ffmpeg', s.ffmpeg_version || s.ffmpeg_path || 'Not found');
-    html += checkItem('NVENC', s.has_nvenc, s.has_nvenc ? 'GPU encoding ready' : 'Requires ffmpeg rebuild');
+    const hwEncStr = (s.available_hw_encoders || []).length ? (s.available_hw_encoders || []).join(', ') : 'None';
+    html += checkItem('HW Encoders', (s.has_nvenc || s.has_vaapi || s.has_qsv || s.has_amf), (s.has_nvenc || s.has_vaapi || s.has_qsv || s.has_amf) ? 'GPU encoding ready' : 'No hardware encoder available', null, hwEncStr);
     html += checkItem('libplacebo', s.has_libplacebo, s.has_libplacebo ? 'DV P5 color conversion ready' : 'Requires ffmpeg rebuild');
     html += checkItem('Vulkan', s.vulkan_available, s.vulkan_version ? 'v' + s.vulkan_version + (s.vulkan_available ? ' — functional' : ' — not working') : 'Not installed (required for DV P5)', !s.vulkan_available ? 'vulkan' : null);
     html += checkItem('dovi_tool', s.has_dovi_tool, s.dovi_version || 'DV conversion ready', !s.has_dovi_tool ? 'dovi_tool' : null);
@@ -545,7 +548,7 @@ function renderSystemCheck() {
     html += checkItem('mediainfo', !!s.mediainfo_version, s.mediainfo_version || 'Not installed');
     // RRP removed — replaced by Vulkan check above
     html += '</div>';
-    if (s.has_nvidia_hw && !s.has_gpu) {
+    if (s.has_nvidia_hw && !s.has_gpu && !s.has_amd_hw && !s.has_intel_hw) {
         html += `<div class="warn-box" style="margin-top:12px;">
             <strong>NVIDIA GPU detected: ${s.lspci_gpu}</strong><br>
             Drivers are not installed. GPU encoding requires NVIDIA drivers.<br><br>
@@ -582,10 +585,11 @@ function renderSystemCheck() {
     }
     // ffmpeg build/rebuild logic based on GPU state
     const hasFFmpeg = !!s.ffmpeg_path && s.ffmpeg_path !== 'ffmpeg';
-    const gpuDriversWorking = s.has_gpu;  // nvidia-smi works
-    const gpuHwNoDrivers = s.has_nvidia_hw && !s.has_gpu;  // lspci sees GPU but no drivers
+    const gpuDriversWorking = s.has_gpu;  // any GPU with working encoder
+    const gpuHwNoDrivers = (s.has_nvidia_hw || s.has_amd_hw || s.has_intel_hw) && !s.has_gpu;
 
-    const allFfmpegFeatures = hasFFmpeg && s.has_nvenc && s.has_libplacebo;
+    const hasHwEncoder = s.has_nvenc || s.has_vaapi || s.has_qsv || s.has_amf;
+    const allFfmpegFeatures = hasFFmpeg && hasHwEncoder && s.has_libplacebo;
 
     if (!hasFFmpeg) {
         // No ffmpeg at all — shouldn't happen with bundled binary, but handle gracefully
@@ -595,11 +599,9 @@ function renderSystemCheck() {
             <button class="btn-sm" id="buildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Build ffmpeg from source</button>
             <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
         </div>`;
-    } else if (gpuDriversWorking && (!s.has_nvenc || !s.has_libplacebo)) {
-        // ffmpeg exists but missing GPU features — GPU drivers may have been installed after ffmpeg
-        // Bundled Jellyfin ffmpeg has all features, so this likely means a library issue
+    } else if (gpuDriversWorking && (!hasHwEncoder || !s.has_libplacebo)) {
         let missing = [];
-        if (!s.has_nvenc) missing.push('NVENC (GPU encoding)');
+        if (!hasHwEncoder) missing.push('Hardware encoder (GPU encoding)');
         if (!s.has_libplacebo) missing.push('libplacebo (DV P5 conversion)');
         html += `<div class="info-box" style="margin-top:12px;">
             <strong>ffmpeg is missing GPU features:</strong> ${missing.join(', ')}<br>
@@ -607,11 +609,11 @@ function renderSystemCheck() {
             <button class="btn-sm" id="rebuildFfmpegBtn" onclick="this.disabled=true; this.textContent='Building...'; this.className='btn-sm installing'; installTool('ffmpeg', this)">Rebuild ffmpeg from source</button>
             <span style="font-size:11px;color:var(--muted);margin-left:8px;">Takes 15-30 minutes</span>
         </div>`;
-    } else if (hasFFmpeg && gpuHwNoDrivers && !s.has_nvenc) {
+    } else if (hasFFmpeg && gpuHwNoDrivers && !hasHwEncoder) {
         html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
-            ffmpeg ready for CPU encoding. Install GPU drivers above to enable GPU acceleration — no ffmpeg rebuild needed.
+            ffmpeg ready for CPU encoding. Install GPU drivers to enable GPU acceleration.
         </div>`;
-    } else if (hasFFmpeg && !s.has_gpu && !s.has_nvidia_hw) {
+    } else if (hasFFmpeg && !s.has_gpu && !s.has_nvidia_hw && !s.has_amd_hw && !s.has_intel_hw) {
         html += `<div style="margin-top:8px;font-size:11px;color:var(--muted);">
             ffmpeg ready for CPU encoding. If you add a GPU later, re-run setup to rebuild with GPU support.
         </div>`;
@@ -740,7 +742,7 @@ async function installTool(tool, btn) {
                             const cont = document.getElementById('btnContinue');
                             if (cont) cont.disabled = false;
                             // If all requirements met, hide log. Otherwise keep it visible.
-                            const allGood = sysInfo.has_nvenc !== false && sysInfo.has_libplacebo !== false && sysInfo.has_dovi_tool && sysInfo.has_mkvmerge;
+                            const allGood = (sysInfo.has_nvenc || sysInfo.has_vaapi || sysInfo.has_qsv || sysInfo.has_amf) && sysInfo.has_libplacebo !== false && sysInfo.has_dovi_tool && sysInfo.has_mkvmerge;
                             const newLogEl = document.getElementById('installLog');
                             if (newLogEl) {
                                 if (allGood || tool !== 'ffmpeg') {
@@ -853,7 +855,7 @@ function showPage2() {
     // Refresh concurrency options based on latest system info
     renderConcurrency();
     // Set encoder default based on GPU detection
-    if (!sysInfo.has_nvenc) {
+    if (!sysInfo.has_nvenc && !sysInfo.has_vaapi && !sysInfo.has_qsv && !sysInfo.has_amf) {
         document.getElementById('sEncoder').value = 'cpu';
     }
     // Disable DV P8.4 if no libplacebo

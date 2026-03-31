@@ -147,7 +147,7 @@ pub fn verify_hmac(secret: &str, timestamp: u64, hmac_bytes: &[u8; 32]) -> bool 
 
 pub const DEFAULT_PORT: u16 = 9878;
 pub const DEFAULT_LISTEN_PORT: u16 = 9879;
-pub const CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8MB chunks — larger = fewer round trips over WAN
+pub const CHUNK_SIZE: usize = 256 * 1024; // 256KB chunks — optimal for LAN throughput
 
 // Reverse-connect: connection type prefixes
 pub const CONN_TYPE_CONTROL: u8 = 0x01;

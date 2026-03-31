@@ -327,6 +327,7 @@ async fn handle_control(
         else if encoders.iter().any(|e| e.contains("videotoolbox")) { "videotoolbox" }
         else if encoders.iter().any(|e| e.contains("qsv")) { "qsv" }
         else if encoders.iter().any(|e| e.contains("amf")) { "amf" }
+        else if encoders.iter().any(|e| e.contains("vaapi")) { "vaapi" }
         else { "cpu" }.to_string();
 
     info!("GPU server '{}' connected from {} ({}/{}, {})", name, peer, os, arch, encoder_type);
@@ -486,14 +487,17 @@ async fn handle_data(
             }
             TAG_PROGRESS => {
                 // Write progress to a file so the Python server can read it
+                // Skip keepalive-only messages (all zeros) to avoid overwriting real progress
                 if let Ok(p) = bincode::deserialize::<ProgressMsg>(&payload) {
-                    let progress_path = format!("/tmp/recode/rrp/listener-jobs/{}.progress", dc.job_id);
-                    let progress_json = serde_json::json!({
-                        "frame": p.frame, "time_secs": p.time_secs,
-                        "speed": p.speed, "bitrate_kbps": p.bitrate_kbps,
-                        "output_size": p.output_size,
-                    });
-                    let _ = std::fs::write(&progress_path, progress_json.to_string());
+                    if p.frame > 0 || p.time_secs > 0.0 || p.output_size > 0 {
+                        let progress_path = format!("/tmp/recode/rrp/listener-jobs/{}.progress", dc.job_id);
+                        let progress_json = serde_json::json!({
+                            "frame": p.frame, "time_secs": p.time_secs,
+                            "speed": p.speed, "bitrate_kbps": p.bitrate_kbps,
+                            "output_size": p.output_size,
+                        });
+                        let _ = std::fs::write(&progress_path, progress_json.to_string());
+                    }
                 }
             }
             TAG_CONTROL => {
