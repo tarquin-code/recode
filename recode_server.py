@@ -161,6 +161,44 @@ def write_recode_manifest_entry(source_path: str, output_path: str, version: str
     except Exception as e:
         log.warning(f"Failed to write recode manifest: {e}")
 
+def tag_file_skipped(file_path: str, reason: str = "larger"):
+    """Tag an MKV file with RECODE_SKIPPED metadata so it won't be re-queued on future scans.
+    Uses mkvpropedit to add a global tag. Preserves any existing RECODE tag."""
+    mkvpropedit = _find_bin("mkvpropedit")
+    if not mkvpropedit or not os.path.isfile(mkvpropedit):
+        return False
+    if not os.path.isfile(file_path) or not file_path.lower().endswith(".mkv"):
+        return False
+    try:
+        tag_val = f"{reason}:{VERSION}:{time.strftime('%Y%m%d')}"
+        # Read existing RECODE tag to preserve it
+        existing_recode = ""
+        try:
+            r = subprocess.run([FFPROBE, "-v", "quiet", "-show_entries", "format_tags=RECODE", "-of", "csv=p=0", file_path],
+                               capture_output=True, text=True, timeout=10)
+            existing_recode = r.stdout.strip()
+        except Exception:
+            pass
+        tags = [f'<Simple><Name>RECODE_SKIPPED</Name><String>{tag_val}</String></Simple>']
+        if existing_recode:
+            tags.append(f'<Simple><Name>RECODE</Name><String>{existing_recode}</String></Simple>')
+        tag_xml = f'<?xml version="1.0"?>\n<Tags><Tag>{"".join(tags)}</Tag></Tags>'
+        tag_file = os.path.join(os.path.dirname(file_path), f".recode_skip_{os.getpid()}.xml")
+        with open(tag_file, "w") as f:
+            f.write(tag_xml)
+        result = subprocess.run([mkvpropedit, file_path, "--tags", f"global:{tag_file}"], capture_output=True, timeout=30)
+        try: os.remove(tag_file)
+        except Exception: pass
+        if result.returncode == 0:
+            log.info(f"Tagged {os.path.basename(file_path)} as RECODE_SKIPPED={reason}")
+            return True
+        log.warning(f"Failed to tag {os.path.basename(file_path)}: {result.stderr.decode(errors='replace')[:100]}")
+        return False
+    except Exception as e:
+        log.warning(f"Failed to tag {os.path.basename(file_path)}: {e}")
+        return False
+
+
 PRESETS = {
     "stream":    {"cq": 20, "maxbitrate": "25M", "speed": "p6", "desc": "High quality 1080p streaming"},
     "4kstream":  {"cq": 20, "maxbitrate": "50M", "speed": "p5", "desc": "High quality 4K streaming"},
@@ -857,6 +895,10 @@ async def get_file_info(path: str) -> Optional[FileInfo]:
     dirname = str(p.parent)
     # Check if this file was encoded by Recode — RECODE metadata tag in MKV container
     recode_tag = fmt.get("tags", {}).get("RECODE", "")
+    # Check if previously skipped (encoded larger) — RECODE_SKIPPED tag
+    recode_skipped = fmt.get("tags", {}).get("RECODE_SKIPPED", "")
+    if recode_skipped and not recode_tag:
+        recode_tag = f"SKIPPED:{recode_skipped}"
     output_exists = bool(recode_tag)
 
     return FileInfo(
@@ -3031,6 +3073,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
             pct_bigger = int((new_bytes - orig_bytes) / orig_bytes * 100) if orig_bytes > 0 else 0
             log.info(f"[{job.id}] Discarded: encoded file is larger ({human_size(new_bytes)} vs {human_size(orig_bytes)}) — deleted temp output")
             os.remove(tmp_output)
+            tag_file_skipped(info["path"], f"larger:+{pct_bigger}%")
             job.result = {
                 "orig_size": human_size(orig_bytes),
                 "new_size": human_size(new_bytes),
@@ -4187,6 +4230,7 @@ async def encode_worker(worker_id: int):
                 job.error = f"Encoded file larger than original ({human_size(new_bytes)} vs {human_size(orig_bytes)}, +{pct_bigger}%) — discarded"
                 log.info(f"[{job.id}] Discarded: encoded file is larger ({human_size(new_bytes)} vs {human_size(orig_bytes)}) — deleted temp output")
                 os.remove(tmp_output)
+                tag_file_skipped(info["path"], f"larger:+{pct_bigger}%")
                 job.result = {
                     "orig_size": human_size(orig_bytes),
                     "new_size": human_size(new_bytes),
