@@ -2010,7 +2010,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Recode</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.23.1</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.23.2</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2043,6 +2043,15 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v2.23.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Remote GPU auto-disable</strong> &mdash; GPUs automatically disabled after 3 consecutive failures, preventing queue churn from crashed GPUs</li>
+                                <li><strong>Remote GPU power toggle</strong> &mdash; manually enable/disable connected GPUs with power button, matching local GPU controls</li>
+                                <li><strong>Skipped file tagging</strong> &mdash; files discarded as larger get RECODE_SKIPPED metadata tag via mkvpropedit, excluded from future scans</li>
+                                <li><strong>macFUSE noalerts</strong> &mdash; suppresses macFUSE graphical permission prompts on mount</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v2.23.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— March 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -3124,6 +3133,7 @@ function handleMessage(msg) {
         if (msg.data && msg.data.gpu_info) {
             if (!state.system) state.system = {};
             state.system.gpu_info = msg.data.gpu_info;
+            if (msg.data.gpu_scan_complete !== undefined) state.system.gpu_scan_complete = msg.data.gpu_scan_complete;
             const modal = document.getElementById('settingsModal');
             if (modal && modal.classList.contains('open')) {
                 renderGpuToggles();
@@ -3270,10 +3280,18 @@ function updateGpuServerStatus() {
                     const encColor = isCpu ? 'rgba(210,153,34,0.15)' : 'rgba(88,166,255,0.15)';
                     const encTextColor = isCpu ? 'var(--warning)' : '#58a6ff';
 
-                    html += `<div style="display:grid;grid-template-columns:180px 80px 1fr;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;">
-                        <div style="display:flex;align-items:center;gap:6px;overflow:hidden;">
-                            <span style="color:var(--success);font-size:10px;flex-shrink:0;">&#9679;</span>
-                            <span style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(gpu.name || 'Unknown')}</span>
+                    const isDisabled = gpu.auto_disabled || false;
+                    const failCount = gpu.fail_count || 0;
+                    const toggleUrl = isDisabled
+                        ? `/api/remote-gpu/re-enable?name=${encodeURIComponent(gpu.name)}`
+                        : `/api/remote-gpu/disable?name=${encodeURIComponent(gpu.name)}`;
+                    const failBadge = failCount >= 3 ? `<span style="font-size:9px;color:var(--error);">${failCount} failures</span>` : '';
+
+                    html += `<div style="display:grid;grid-template-columns:32px 150px 80px 1fr;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;${isDisabled ? 'opacity:0.4;' : ''}">
+                        <button class="btn btn-sm btn-power" title="${isDisabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${isDisabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="const b=this;b.innerHTML='<span style=\\'display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top:2px solid #fff;border-radius:50%;animation:spin 0.6s linear infinite;\\'></span>';b.disabled=true;fetch('${toggleUrl}',{method:'POST'}).then(()=>setTimeout(()=>fetch('/api/remote-clients/status').then(r=>r.json()).then(d=>{state._connectedGpus=d.gpus||[];const sel=document.getElementById('selGpuTarget');if(sel)populateGpuTargets(sel,(state.system?.gpu_count)||0);updateRemoteTargetStatus();}),500))">${svgIcon('power', 14)}</button>
+                        <div style="overflow:hidden;">
+                            <span style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">${escHtml(gpu.name || 'Unknown')}</span>
+                            ${failBadge}
                         </div>
                         <div style="display:flex;flex-direction:column;gap:2px;">
                             <span style="background:${encColor};color:${encTextColor};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;text-align:center;">${encLabel}</span>
@@ -5951,16 +5969,23 @@ async function renderGpuToggles() {
                     <tr>${rowLabel('1080p')}${capCell(true)}${capCell(true)}${capCell(true)}${capCell(true)}${maxJobsSelect}</tr>
                     <tr>${rowLabel('4K')}${capCell(true)}${capCell(true)}${capCell(true)}${capCell(true)}<td></td></tr>
                 </table>`;
-            } else {
+            } else if (state.system?.gpu_scan_complete === false) {
                 const probeCell = `<td style="text-align:center;width:36px;padding:1px 4px;"><span style="display:inline-block;width:8px;height:8px;border:2px solid rgba(210,153,34,0.3);border-top:2px solid var(--warning);border-radius:50%;animation:spin 0.8s linear infinite;"></span></td>`;
                 capsTable = `<table style="border-collapse:collapse;">
                     <tr><th style="width:40px;"></th>${hdrCell('SDR')}${hdrCell('10bit')}${hdrCell('HDR')}${hdrCell('Dolby V')}${hdrCell('Max Jobs')}</tr>
                     <tr>${rowLabel('1080p')}${probeCell}${probeCell}${probeCell}${probeCell}${maxJobsSelect}</tr>
                     <tr>${rowLabel('4K')}${probeCell}${probeCell}${probeCell}${probeCell}<td></td></tr>
                 </table>`;
+            } else {
+                // Scan complete but no caps for this GPU — show all green (assume capable)
+                capsTable = `<table style="border-collapse:collapse;">
+                    <tr><th style="width:40px;"></th>${hdrCell('SDR')}${hdrCell('10bit')}${hdrCell('HDR')}${hdrCell('Dolby V')}${hdrCell('Max Jobs')}</tr>
+                    <tr>${rowLabel('1080p')}${capCell(true)}${capCell(true)}${capCell(true)}${capCell(true)}${maxJobsSelect}</tr>
+                    <tr>${rowLabel('4K')}${capCell(true)}${capCell(true)}${capCell(true)}${capCell(true)}<td></td></tr>
+                </table>`;
             }
             return `<div style="display:grid;grid-template-columns:32px 180px 80px 1fr;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;${disabled ? 'opacity:0.4;' : ''}">
-                <button class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="toggleGpu(${g.index}, ${!disabled});openSettings();">${svgIcon('power', 14)}</button>
+                <button class="btn btn-sm btn-power" title="${disabled ? 'Enable' : 'Disable'}" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:${disabled ? 'var(--error)' : 'var(--success)'};color:#fff;cursor:pointer;border-radius:6px;flex-shrink:0;" onclick="const b=this;b.innerHTML='<span style=\\'display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top:2px solid #fff;border-radius:50%;animation:spin 0.6s linear infinite;\\'></span>';b.disabled=true;toggleGpu(${g.index}, ${!disabled});setTimeout(()=>renderGpuToggles(),500);">${svgIcon('power', 14)}</button>
                 <div style="overflow:hidden;">
                     <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(g.name)}</div>
                     <div style="font-size:10px;color:var(--text-muted);">${vram} VRAM</div>
@@ -6210,7 +6235,11 @@ function populateGpuTargets(sel, localGpuCount) {
         connectedGpus.forEach((gpu, i) => {
             const enc = gpu.encoder_type ? ' (' + gpu.encoder_type + ')' : '';
             const name = gpu.name || 'GPU ' + i;
-            const opt = new Option('\u00A0\u00A0\u00A0\u00A0\uD83D\uDFE2 ' + name + enc, 'remote:' + name);
+            const isRemoteDisabled = gpu.auto_disabled || false;
+            const dot = isRemoteDisabled ? '\uD83D\uDD34' : '\uD83D\uDFE2';
+            const label = '\u00A0\u00A0\u00A0\u00A0' + dot + ' ' + name + enc + (isRemoteDisabled ? ' (disabled)' : '');
+            const opt = new Option(label, 'remote:' + name);
+            if (isRemoteDisabled) { opt.disabled = true; }
             sel.add(opt);
         });
     }
@@ -6403,11 +6432,12 @@ async function checkConnectedGpus() {
 }
 
 function toggleGpu(index, disabled) {
-    let list = (state.settings?.disabled_gpus || []).slice();
+    let list = (state.settings?.disabled_gpus || window._settingsDisabledGpus || []).slice();
     if (disabled && !list.includes(index)) list.push(index);
     if (!disabled) list = list.filter(i => i !== index);
     fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({disabled_gpus: list}) });
     if (state.settings) state.settings.disabled_gpus = list;
+    window._settingsDisabledGpus = list;
 }
 function setGpuMaxJobs(index, maxJobs) {
     let jobs = Object.assign({}, state.settings?.gpu_max_jobs || {});

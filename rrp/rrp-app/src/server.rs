@@ -314,6 +314,7 @@ pub async fn run_fuse_job(
             options.push(MountOption::CUSTOM("nobrowse".into()));
             options.push(MountOption::CUSTOM("defer_permissions".into()));
             options.push(MountOption::CUSTOM("noappledouble".into()));
+            options.push(MountOption::CUSTOM("noalerts".into()));
             options.push(MountOption::CUSTOM("noapplexattr".into()));
         }
         match fuser::mount2(fs, &mount_path, &options) {

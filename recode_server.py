@@ -60,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.23.1"
+VERSION = "2.23.2"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -1620,6 +1620,8 @@ class EncodeQueue:
         self._proc_ended_at: dict[str, float] = {}  # track when ffmpeg procs exit for watchdog
         self.job_gpus: dict[str, int] = {}  # job_id -> gpu index
         self._last_save = 0  # throttle _save_state
+        self.remote_fail_counts: dict[str, int] = {}  # gpu_name -> consecutive failure count
+        self.remote_auto_disabled: set[str] = set()  # gpu_names auto-disabled due to failures
         self._load_state()
 
     def get_gpu_loads(self) -> dict:
@@ -1841,6 +1843,31 @@ class EncodeQueue:
         remaining = [j for j in self.queue_order if j not in valid and j in self.jobs and self.jobs[j].status == JobStatus.QUEUED]
         self.queue_order = valid + remaining
         self._save_state()
+
+    def record_remote_failure(self, gpu_name: str):
+        """Record a consecutive failure for a remote GPU. Auto-disable after 3."""
+        if not gpu_name:
+            return
+        self.remote_fail_counts[gpu_name] = self.remote_fail_counts.get(gpu_name, 0) + 1
+        count = self.remote_fail_counts[gpu_name]
+        if count >= 3 and gpu_name not in self.remote_auto_disabled:
+            self.remote_auto_disabled.add(gpu_name)
+            log.warning(f"Remote GPU '{gpu_name}' auto-disabled after {count} consecutive failures")
+
+    def record_remote_success(self, gpu_name: str):
+        """Reset failure counter on success."""
+        if gpu_name:
+            self.remote_fail_counts.pop(gpu_name, None)
+            self.remote_auto_disabled.discard(gpu_name)
+
+    def is_remote_auto_disabled(self, gpu_name: str) -> bool:
+        return gpu_name in self.remote_auto_disabled
+
+    def re_enable_remote(self, gpu_name: str):
+        """Manually re-enable an auto-disabled remote GPU."""
+        self.remote_auto_disabled.discard(gpu_name)
+        self.remote_fail_counts.pop(gpu_name, None)
+        log.info(f"Remote GPU '{gpu_name}' manually re-enabled")
 
     def get_state(self) -> dict:
         queued = []
@@ -2863,6 +2890,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
         await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
         return
     if exit_code != 0:
+        encode_queue.record_remote_failure(settings.get("_remote_gpu_name", ""))
         _finish_job(JobStatus.FAILED, error_msg or f"Remote encode failed (exit {exit_code})")
         await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
         return
@@ -3073,6 +3101,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
             pct_bigger = int((new_bytes - orig_bytes) / orig_bytes * 100) if orig_bytes > 0 else 0
             log.info(f"[{job.id}] Discarded: encoded file is larger ({human_size(new_bytes)} vs {human_size(orig_bytes)}) — deleted temp output")
             os.remove(tmp_output)
+            encode_queue.record_remote_success(settings.get("_remote_gpu_name", ""))
             tag_file_skipped(info["path"], f"larger:+{pct_bigger}%")
             job.result = {
                 "orig_size": human_size(orig_bytes),
@@ -3118,6 +3147,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                     "larger": new_bytes >= orig_bytes,
                 }
                 log.info(f"[{job.id}] Remote encode complete: {output_file} ({human_size(new_bytes)}, saved {saved_pct}%)")
+                encode_queue.record_remote_success(settings.get("_remote_gpu_name", ""))
                 _finish_job(JobStatus.DONE, "")
             except Exception as e:
                 log.error(f"[{job.id}] Failed to move output: {e}")
@@ -3221,7 +3251,7 @@ async def encode_worker(worker_id: int):
                                 break
                 except Exception:
                     pass
-                if not _target_online:
+                if not _target_online or encode_queue.is_remote_auto_disabled(_target_name):
                     continue
                 _active_on_target = sum(1 for j in encode_queue.active_jobs.values()
                     if j.settings.get("_remote_gpu_name") == _target_name and not j.paused)
@@ -3265,6 +3295,7 @@ async def encode_worker(worker_id: int):
                             _remote_loads[_rn] = _remote_loads.get(_rn, 0) + 1
                     _auto_gpus = [g for g in _all_remote
                         if g.get("online")
+                        and not encode_queue.is_remote_auto_disabled(g.get("name", ""))
                         and remote_gpu_can_handle(g, job_is_4k, job_is_hdr, job_is_10bit)
                         and max(_remote_loads.get(g.get("name", ""), 0), g.get("active_jobs", 0)) < g.get("max_jobs", 1)]
                     if _auto_gpus:
@@ -3359,7 +3390,7 @@ async def encode_worker(worker_id: int):
                 try:
                     with open(listener_status_file) as _f:
                         _ls = json.load(_f)
-                    _connected_gpus = [g for g in _ls.get("gpus", []) if g.get("online")]
+                    _connected_gpus = [g for g in _ls.get("gpus", []) if g.get("online") and not encode_queue.is_remote_auto_disabled(g.get("name", ""))]
                 except Exception:
                     pass
                 # Use connected GPUs from listener
@@ -3465,7 +3496,7 @@ async def encode_worker(worker_id: int):
                     try:
                         _auto_lsf = os.path.join(app_settings.get("tmp_dir", "/tmp/recode"), "rrp", "listener-status.json")
                         with open(_auto_lsf) as _f:
-                            _auto_connected = [g for g in json.load(_f).get("gpus", []) if g.get("online")]
+                            _auto_connected = [g for g in json.load(_f).get("gpus", []) if g.get("online") and not encode_queue.is_remote_auto_disabled(g.get("name", ""))]
                     except Exception:
                         pass
                     if _auto_connected:
@@ -3670,7 +3701,7 @@ async def encode_worker(worker_id: int):
             try:
                 with open(listener_status_file) as _f:
                     _ls = json.load(_f)
-                connected_gpus = [g for g in _ls.get("gpus", []) if g.get("online")]
+                connected_gpus = [g for g in _ls.get("gpus", []) if g.get("online") and not encode_queue.is_remote_auto_disabled(g.get("name", ""))]
                 if connected_gpus:
                     use_remote_listener = True
                     # Set encoder type from target GPU (for VideoToolbox vs NVENC command building)
@@ -6003,6 +6034,7 @@ async def system_check():
         results["h264_nvenc"] = False
 
     results["cpu_count"] = os.cpu_count() or 1
+    results["gpu_scan_complete"] = _gpu_scan_complete
 
     # Check if staged .new files exist (waiting for restart to swap)
     restart_needed = False
@@ -7661,6 +7693,11 @@ async def remote_client_status():
             with open(status_file) as f:
                 data = json.load(f)
             data["port"] = app_settings.get("remote_client_port", 9879)
+            # Add auto-disabled status and fail counts per GPU
+            for g in data.get("gpus", []):
+                gname = g.get("name", "")
+                g["auto_disabled"] = encode_queue.is_remote_auto_disabled(gname)
+                g["fail_count"] = encode_queue.remote_fail_counts.get(gname, 0)
             return data
         except Exception:
             pass
@@ -7670,6 +7707,22 @@ async def remote_client_status():
         "port": app_settings.get("remote_client_port", 9879),
         "gpus": [],
     }
+
+@app.post("/api/remote-gpu/re-enable")
+async def re_enable_remote_gpu(name: str):
+    """Re-enable an auto-disabled or manually disabled remote GPU."""
+    encode_queue.re_enable_remote(name)
+    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+    return {"ok": True}
+
+@app.post("/api/remote-gpu/disable")
+async def disable_remote_gpu(name: str):
+    """Manually disable a remote GPU from receiving jobs."""
+    encode_queue.remote_auto_disabled.add(name)
+    encode_queue.remote_fail_counts[name] = 0  # not from failures, manual
+    log.info(f"Remote GPU '{name}' manually disabled")
+    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+    return {"ok": True}
 
 @app.get("/api/settings")
 async def get_settings():
