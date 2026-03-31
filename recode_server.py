@@ -5942,40 +5942,52 @@ async def update_apply():
                 shutil.copy2(os.path.join(BASE_DIR, "static", f), static_bak)
             _install_tasks["update"]["log"] += f"Backed up current version to {backup_dir}\n"
 
-            # Apply update — use sudo cp to handle root-owned files
+            # Apply update — try direct copy first, fall back to sudo
             _install_tasks["update"]["log"] += "Applying update...\n"
             apply_script = f"""
 set -e
 # Core files
-for f in recode_server.py build-ffmpeg.sh requirements.txt README.md LICENSE install.sh; do
-    [ -f "{extracted}/$f" ] && cp -f "{extracted}/$f" "{BASE_DIR}/$f"
+for f in recode_server.py build-ffmpeg.sh requirements.txt README.md LICENSE install.sh VERSION; do
+    [ -f "{extracted}/$f" ] && cp -f "{extracted}/$f" "{BASE_DIR}/$f" 2>/dev/null || true
 done
 # Static files
 [ -d "{extracted}/static" ] && cp -f {extracted}/static/* {BASE_DIR}/static/ 2>/dev/null || true
-# Bin files (may be root-owned)
+# Bin files — stage as .new so swap-staged.sh handles them on restart
 if [ -d "{extracted}/bin" ]; then
     mkdir -p {BASE_DIR}/bin
-    cp -af {extracted}/bin/* {BASE_DIR}/bin/
-    find {BASE_DIR}/bin -type f -exec chmod 755 {{}} \\;
+    for f in {extracted}/bin/*; do
+        [ -f "$f" ] || continue
+        bn=$(basename "$f")
+        cp -f "$f" "{BASE_DIR}/bin/${{bn}}.new" 2>/dev/null || cp -f "$f" "{BASE_DIR}/bin/$bn" 2>/dev/null || true
+        chmod 755 "{BASE_DIR}/bin/${{bn}}.new" 2>/dev/null || chmod 755 "{BASE_DIR}/bin/$bn" 2>/dev/null || true
+    done
 fi
 # Lib files
 [ -d "{extracted}/lib" ] && cp -af {extracted}/lib/* {BASE_DIR}/lib/ 2>/dev/null || true
-# Fix ownership — use the service user, not root
-SVC_USER=$(grep '^User=' /etc/systemd/system/recode.service 2>/dev/null | cut -d= -f2)
-SVC_GROUP=$(grep '^Group=' /etc/systemd/system/recode.service 2>/dev/null | cut -d= -f2)
-SVC_USER=${{SVC_USER:-{os.getuid()}}}
-SVC_GROUP=${{SVC_GROUP:-{os.getgid()}}}
-chown -R "$SVC_USER:$SVC_GROUP" {BASE_DIR}/ 2>/dev/null || true
+# Fix ownership
+chown -R {os.getuid()}:{os.getgid()} {BASE_DIR}/ 2>/dev/null || true
 echo "Files copied successfully"
 """
-            proc = await _run_sudo("bash", "-c", apply_script)
-            async for line in proc.stdout:
-                text = line.decode(errors="replace").rstrip()
-                if text:
-                    _install_tasks["update"]["log"] += text + "\n"
-            await proc.wait()
+            # Try without sudo first (works when service user owns the files)
+            proc = await asyncio.create_subprocess_exec(
+                "bash", "-c", apply_script,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            stdout_data = await proc.communicate()
             if proc.returncode != 0:
-                raise RuntimeError("Failed to copy update files")
+                # Fall back to sudo
+                _install_tasks["update"]["log"] += "Direct copy failed, trying with sudo...\n"
+                proc = await _run_sudo("bash", "-c", apply_script)
+                async for line in proc.stdout:
+                    text = line.decode(errors="replace").rstrip()
+                    if text:
+                        _install_tasks["update"]["log"] += text + "\n"
+                await proc.wait()
+                if proc.returncode != 0:
+                    raise RuntimeError("Failed to copy update files")
+            else:
+                out = stdout_data[0].decode(errors="replace") if stdout_data[0] else ""
+                if out.strip():
+                    _install_tasks["update"]["log"] += out.strip() + "\n"
 
             # Cleanup
             shutil.rmtree(tmp_dir, ignore_errors=True)
