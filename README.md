@@ -2,7 +2,7 @@
 
 **GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-3.1.0-blue)
+![Version](https://img.shields.io/badge/version-3.1.1-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -114,8 +114,9 @@
 - **Login Page** — Username/password authentication with session cookies
 - **Default Credentials** — admin/admin with forced password change on first login
 - **SSL/TLS** — Auto-generated self-signed certificate, custom cert upload, or Let's Encrypt
-- **Let's Encrypt** — One-click free trusted SSL certificate installation via certbot
+- **Let's Encrypt** — One-click free trusted SSL via certbot with HTTP (port 80) or DNS (TXT record) verification
 - **SSL Toggle** — Enable/disable HTTPS from settings with inline restart confirmation
+- **Root Password** — Let's Encrypt uses root password entered in the browser, never saved
 - **API Keys** — Bearer token authentication for programmatic access
 
 ### Updates & Deployment

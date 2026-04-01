@@ -63,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "3.1.0"
+VERSION = "3.1.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -4873,7 +4873,6 @@ async def setup_complete(settings: dict):
     save_settings(merged)
     app_settings.update(merged)
     FIRST_RUN = False
-    # Restart the service, then remove sudoers on next startup
     merged["_remove_sudoers_on_start"] = True
     save_settings(merged)
     async def _delayed_restart():
@@ -5927,80 +5926,78 @@ async def ssl_letsencrypt(request: Request):
         return {"ok": False, "error": "Invalid request"}
     domain = body.get("domain", "").strip()
     email = body.get("email", "").strip()
+    sudo_password = body.get("sudo_password", "")
+    method = body.get("method", "http")
     if not domain:
         return {"ok": False, "error": "Domain is required"}
     if not email:
         return {"ok": False, "error": "Email is required"}
+    if not sudo_password:
+        return {"ok": False, "error": "Root/sudo password is required"}
 
     _install_tasks["letsencrypt"] = {"status": "running", "log": f"Installing Let's Encrypt certificate for {domain}...\n"}
 
+    async def _run_with_sudo(*cmd):
+        """Run a command as root using su -c with the root password via stdin."""
+        cmd_str = " ".join(f"'{c}'" if " " in c else c for c in cmd)
+        proc = await asyncio.create_subprocess_exec(
+            "su", "-c", cmd_str, "root",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT)
+        proc.stdin.write((sudo_password + "\n").encode())
+        await proc.stdin.drain()
+        return proc
+
     async def _do_letsencrypt():
         try:
-            # Install certbot if not present
+            # Check certbot is installed (installed by install.sh)
             if not shutil.which("certbot"):
-                _install_tasks["letsencrypt"]["log"] += "Installing certbot...\n"
-                if shutil.which("apt-get"):
-                    proc = await _run_sudo("apt-get", "install", "-y", "certbot")
-                elif shutil.which("dnf"):
-                    proc = await _run_sudo("dnf", "install", "-y", "certbot")
-                elif shutil.which("yum"):
-                    proc = await _run_sudo("yum", "install", "-y", "certbot")
-                elif shutil.which("pacman"):
-                    proc = await _run_sudo("pacman", "-S", "--noconfirm", "certbot")
-                else:
-                    raise RuntimeError("Cannot install certbot — unsupported package manager")
-                async for line in proc.stdout:
-                    text = line.decode(errors="replace").rstrip()
-                    if text:
-                        _install_tasks["letsencrypt"]["log"] += text + "\n"
-                await proc.wait()
-                if proc.returncode != 0:
-                    raise RuntimeError("Failed to install certbot")
-                _install_tasks["letsencrypt"]["log"] += "Certbot installed.\n"
+                raise RuntimeError("certbot is not installed. Re-run the installer: sudo bash install.sh")
 
-            # Request certificate using standalone mode (needs port 80)
-            _install_tasks["letsencrypt"]["log"] += f"Requesting certificate for {domain}...\n"
+            # Request certificate
+            _install_tasks["letsencrypt"]["log"] += f"Requesting certificate for {domain} ({method.upper()} verification)...\n"
             cert_dir = os.path.join(BASE_DIR, "ssl")
             os.makedirs(cert_dir, exist_ok=True)
-            proc = await _run_sudo(
-                "certbot", "certonly", "--standalone",
-                "--non-interactive", "--agree-tos",
-                "--email", email, "-d", domain,
-                "--cert-path", os.path.join(cert_dir, "cert.pem"),
-                "--key-path", os.path.join(cert_dir, "key.pem"),
-                "--fullchain-path", os.path.join(cert_dir, "cert.pem"),
-                "--force-renewal"
-            )
-            async for line in proc.stdout:
-                text = line.decode(errors="replace").rstrip()
-                if text:
-                    _install_tasks["letsencrypt"]["log"] += text + "\n"
-            await proc.wait()
-
-            if proc.returncode != 0:
-                # Certbot standalone may fail — try with certonly and manual copy
-                _install_tasks["letsencrypt"]["log"] += "Standalone failed. Trying with default paths...\n"
-                proc2 = await _run_sudo(
+            if method == "dns":
+                _install_tasks["letsencrypt"]["log"] += "Using DNS challenge — watch for the TXT record to add below.\n"
+                _install_tasks["letsencrypt"]["log"] += f"You will need to add a TXT record for _acme-challenge.{domain}\n\n"
+                proc = await _run_with_sudo(
+                    "certbot", "certonly", "--manual",
+                    "--preferred-challenges", "dns",
+                    "--non-interactive", "--agree-tos",
+                    "--manual-auth-hook", "/bin/true",
+                    "--email", email, "-d", domain
+                )
+            else:
+                _install_tasks["letsencrypt"]["log"] += "Using HTTP challenge — port 80 must be open.\n"
+                proc = await _run_with_sudo(
                     "certbot", "certonly", "--standalone",
                     "--non-interactive", "--agree-tos",
                     "--email", email, "-d", domain
                 )
-                async for line in proc2.stdout:
-                    text = line.decode(errors="replace").rstrip()
-                    if text:
-                        _install_tasks["letsencrypt"]["log"] += text + "\n"
-                await proc2.wait()
-                if proc2.returncode != 0:
-                    raise RuntimeError("Certbot failed — check log. Port 80 must be accessible and domain must resolve to this server.")
-                # Copy from default certbot location
-                le_dir = f"/etc/letsencrypt/live/{domain}"
-                if os.path.isdir(le_dir):
-                    copy_script = f'cp -f {le_dir}/fullchain.pem {cert_dir}/cert.pem && cp -f {le_dir}/privkey.pem {cert_dir}/key.pem && chown {os.getuid()}:{os.getgid()} {cert_dir}/*'
-                    proc3 = await _run_sudo("bash", "-c", copy_script)
-                    await proc3.wait()
-                    _install_tasks["letsencrypt"]["log"] += "Certificates copied to Recode SSL directory.\n"
-                else:
-                    raise RuntimeError(f"Certificate directory not found: {le_dir}")
+            async for line in proc.stdout:
+                text = line.decode(errors="replace").rstrip()
+                if text and "password" not in text.lower() and "lecture" not in text.lower():
+                    _install_tasks["letsencrypt"]["log"] += text + "\n"
+            await proc.wait()
+            if proc.returncode != 0:
+                if method == "dns":
+                    raise RuntimeError("Certbot DNS challenge failed. For manual DNS, run certbot manually: sudo certbot certonly --manual --preferred-challenges dns -d " + domain)
+                raise RuntimeError("Certbot failed — port 80 must be open and the domain must resolve to this server's IP.")
+
+            # Copy certs from certbot's default location to Recode SSL dir
+            le_dir = f"/etc/letsencrypt/live/{domain}"
+            _install_tasks["letsencrypt"]["log"] += "Copying certificates...\n"
+            copy_script = f'cp -fL {le_dir}/fullchain.pem {cert_dir}/cert.pem && cp -fL {le_dir}/privkey.pem {cert_dir}/key.pem && chown {os.getuid()}:{os.getgid()} {cert_dir}/cert.pem {cert_dir}/key.pem'
+            proc2 = await _run_with_sudo("bash", "-c", copy_script)
+            async for line in proc2.stdout:
+                text = line.decode(errors="replace").rstrip()
+                if text and "password" not in text.lower():
+                    _install_tasks["letsencrypt"]["log"] += text + "\n"
+            await proc2.wait()
+            if proc2.returncode != 0:
+                raise RuntimeError(f"Failed to copy certificates from {le_dir}")
 
             _install_tasks["letsencrypt"]["log"] += "Let's Encrypt certificate installed! Restart the service to apply.\n"
             _install_tasks["letsencrypt"]["status"] = "done"

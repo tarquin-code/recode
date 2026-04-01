@@ -1015,6 +1015,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="settings-nav-item" onclick="switchHelpTab('profiles',this)">Profiles</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('plex',this)">Plex Integration</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('automation',this)">Automation</div>
+                <div class="settings-nav-item" onclick="switchHelpTab('security',this)">Security</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('interface',this)">Interface</div>
                 <div class="settings-nav-item" onclick="switchHelpTab('about',this)">About</div>
             </nav>
@@ -1898,6 +1899,41 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <p>The encoding list shows a "Cancel All" button when 2+ encodes are active. This cancels all running encodes without stopping the queue &mdash; new jobs will be picked up automatically.</p>
             </div>
 
+            <!-- SECURITY -->
+            <div class="help-section" id="helpTab-security">
+                <h3>Security</h3>
+
+                <h4>Authentication</h4>
+                <p>Recode requires login to access the web interface. Default credentials are <strong>admin / admin</strong> &mdash; you are required to change the password on first login.</p>
+                <ul>
+                    <li><strong>Session cookies</strong> &mdash; sessions last 7 days. HttpOnly cookies prevent JavaScript access.</li>
+                    <li><strong>Change credentials</strong> &mdash; Settings &rarr; Security &rarr; Authentication. Change username and/or password.</li>
+                    <li><strong>Logout</strong> &mdash; click the door icon in the header bar to sign out.</li>
+                    <li><strong>API keys</strong> &mdash; programmatic access via <code>Authorization: Bearer &lt;key&gt;</code> header.</li>
+                    <li><strong>Plex webhook</strong> &mdash; the <code>/api/plex-webhook</code> endpoint does not require authentication so Plex can send webhooks.</li>
+                    <li><strong>Setup wizard</strong> &mdash; authentication is skipped during first-run setup.</li>
+                </ul>
+
+                <h4>SSL / TLS</h4>
+                <p>Recode supports HTTPS with SSL certificates. A self-signed certificate is auto-generated on first run.</p>
+                <ul>
+                    <li><strong>Enable/Disable SSL</strong> &mdash; toggle in Settings &rarr; Security. Triggers a service restart to switch between HTTP and HTTPS.</li>
+                    <li><strong>Self-signed certificate</strong> &mdash; auto-generated in <code>/opt/Recode/ssl/</code>. Browsers will show a security warning.</li>
+                    <li><strong>Custom certificate</strong> &mdash; upload your own cert and key (PEM format) in Settings &rarr; Security &rarr; SSL/TLS Certificate.</li>
+                    <li><strong>Certificate info</strong> &mdash; subject, issuer, expiry, and self-signed status displayed in Settings.</li>
+                </ul>
+
+                <h4>Let's Encrypt</h4>
+                <p>Free trusted SSL certificates from Let's Encrypt. Configure in Settings &rarr; Security &rarr; Let's Encrypt.</p>
+                <ul>
+                    <li><strong>HTTP method (Port 80)</strong> &mdash; certbot starts a temporary server on port 80 for domain verification. Port 80 must be open in your firewall during certificate installation. It can be closed after.</li>
+                    <li><strong>DNS method (TXT Record)</strong> &mdash; verify domain ownership by adding a DNS TXT record. No port 80 needed. The record name and value are shown in the installation log.</li>
+                    <li><strong>Root password</strong> &mdash; required to run certbot as root. The password is used once and never saved. It is sent over the authenticated HTTPS connection and cleared immediately after use.</li>
+                    <li><strong>Renewal</strong> &mdash; Let's Encrypt certificates are valid for 90 days. Re-run the installation to renew.</li>
+                    <li><strong>Requires certbot</strong> &mdash; installed automatically by the Recode installer. If missing, re-run <code>sudo bash install.sh</code>.</li>
+                </ul>
+            </div>
+
             <!-- INTERFACE -->
             <div class="help-section" id="helpTab-interface">
                 <h3>Interface Guide</h3>
@@ -2019,7 +2055,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Recode</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v3.1.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v3.1.1</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2052,6 +2088,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v3.1.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Let's Encrypt DNS method</strong> &mdash; choose HTTP (port 80) or DNS (TXT record) verification — no firewall changes needed with DNS</li>
+                                <li><strong>Root password via browser</strong> &mdash; certbot runs with root password entered in the browser, never saved, cleared immediately</li>
+                                <li><strong>Post-install restart</strong> &mdash; inline restart confirmation after Let's Encrypt certificate installation</li>
+                                <li><strong>Security help tab</strong> &mdash; full documentation for authentication, SSL, and Let's Encrypt</li>
+                                <li><strong>Certbot in installer</strong> &mdash; certbot installed by default on all distros</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v3.1.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -3093,7 +3139,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         <!-- Let's Encrypt -->
                         <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
                             <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Let's Encrypt (Free Trusted SSL)</div>
-                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Automatically obtain a free trusted SSL certificate. Requires a domain name pointing to this server and port 80 accessible from the internet.</div>
+                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Automatically obtain a free trusted SSL certificate from Let's Encrypt.</div>
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                                 <div class="form-group" style="margin:0;">
                                     <label>Domain Name</label>
@@ -3106,11 +3152,26 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                     <span class="set-desc">Required by Let's Encrypt</span>
                                 </div>
                             </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+                                <div class="form-group" style="margin:0;">
+                                    <label>Verification Method</label>
+                                    <select id="leMethod" onchange="document.getElementById('leMethodInfo').innerHTML=this.value==='dns'?'Add a DNS TXT record for <strong>_acme-challenge.'+((document.getElementById('leDomain').value||'yourdomain.com'))+'</strong>. The record value will be shown in the log below. Keep this page open during verification.':'Open <strong>port 80</strong> in your firewall before clicking Install. It can be closed after the certificate is issued.'">
+                                        <option value="http">HTTP (Port 80)</option>
+                                        <option value="dns">DNS (TXT Record)</option>
+                                    </select>
+                                    <span class="set-desc" id="leMethodInfo">Open <strong>port 80</strong> in your firewall before clicking Install. It can be closed after the certificate is issued.</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label>Root / Sudo Password</label>
+                                    <input type="password" id="leSudoPass" placeholder="Server root password" autocomplete="off" style="font-family:var(--font-mono);background:rgba(248,81,73,0.05);border:1px solid rgba(248,81,73,0.3);border-radius:6px;color:var(--text-primary);padding:9px 10px;font-size:12px;width:100%;box-sizing:border-box;">
+                                    <span class="set-desc" style="color:var(--error);">Used once, never saved</span>
+                                </div>
+                            </div>
                             <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
                                 <button class="btn btn-primary btn-sm" style="font-size:12px;" onclick="btnAction(this, () => secLetsEncrypt(), '✓ Done', 3000)">Install Let's Encrypt Certificate</button>
                                 <span style="font-size:11px;color:var(--text-muted);" id="secLeStatus"></span>
                             </div>
-                            <div id="leLog" style="display:none;margin-top:8px;padding:8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);max-height:150px;overflow-y:auto;white-space:pre-wrap;"></div>
+                            <div id="leLog" style="display:none;margin-top:8px;padding:8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);max-height:200px;overflow-y:auto;white-space:pre-wrap;"></div>
                         </div>
                     </div>
                 </div>
@@ -6301,8 +6362,8 @@ async function openSettings() {
     if (saveBtn) { saveBtn.disabled = true; saveBtn.style.opacity = '0.5'; saveBtn.textContent = 'Save Settings'; }
     const modal = document.getElementById('settingsModal');
     if (!modal._changeListenerAdded) {
-        modal.addEventListener('input', () => { markSettingsDirty(); });
-        modal.addEventListener('change', () => { markSettingsDirty(); });
+        modal.addEventListener('input', (e) => { if (!e.target.closest('#setTab-security')) markSettingsDirty(); });
+        modal.addEventListener('change', (e) => { if (!e.target.closest('#setTab-security')) markSettingsDirty(); });
         modal._changeListenerAdded = true;
     }
 }
@@ -7915,11 +7976,16 @@ async function secLetsEncrypt() {
     const logEl = document.getElementById('leLog');
     const domain = document.getElementById('leDomain').value.trim();
     const email = document.getElementById('leEmail').value.trim();
+    const sudoPass = document.getElementById('leSudoPass').value;
+    const method = document.getElementById('leMethod').value;
     if (!domain) { status.textContent = 'Enter a domain name'; status.style.color = 'var(--error)'; throw new Error('no domain'); }
     if (!email) { status.textContent = 'Enter an email address'; status.style.color = 'var(--error)'; throw new Error('no email'); }
-    status.textContent = 'Installing certbot and requesting certificate...'; status.style.color = 'var(--text-muted)';
-    logEl.style.display = 'block'; logEl.textContent = 'Starting Let\'s Encrypt...\n';
-    const r = await fetch('/api/ssl/letsencrypt', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({domain, email})});
+    if (!sudoPass) { status.textContent = 'Enter the root/sudo password'; status.style.color = 'var(--error)'; throw new Error('no pass'); }
+    document.getElementById('leSudoPass').value = '';
+    const modeMsg = method === 'dns' ? 'Watch the log below for the DNS TXT record to add. Keep this page open.' : 'Ensure port 80 is open in your firewall.';
+    status.textContent = modeMsg; status.style.color = 'var(--text-muted)';
+    logEl.style.display = 'block'; logEl.textContent = 'Starting Let\'s Encrypt (' + (method === 'dns' ? 'DNS' : 'HTTP') + ' verification)...\n';
+    const r = await fetch('/api/ssl/letsencrypt', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({domain, email, sudo_password: sudoPass, method})});
     const d = await r.json();
     if (!d.ok) { status.textContent = d.error || 'Failed'; status.style.color = 'var(--error)'; throw new Error(d.error); }
     // Poll for status
@@ -7931,8 +7997,17 @@ async function secLetsEncrypt() {
             if (logEl) { logEl.textContent = task.log || ''; logEl.scrollTop = logEl.scrollHeight; }
             if (task.status === 'done') {
                 clearInterval(poll);
-                status.textContent = 'Certificate installed! Restart to apply.'; status.style.color = 'var(--success)';
                 loadSecurityTab();
+                // Show inline restart confirmation
+                status.innerHTML = '';
+                const banner = document.createElement('div');
+                banner.style.cssText = 'margin-top:8px;padding:10px 14px;background:rgba(63,185,80,0.1);border:1px solid var(--success);border-radius:6px;font-size:11px;color:var(--text-secondary);line-height:1.6;';
+                banner.innerHTML = '<strong style="color:var(--success);">Certificate installed!</strong> Restart the service to apply the new certificate.' +
+                    '<div style="display:flex;gap:8px;margin-top:8px;align-items:center;">' +
+                    '<button class="btn btn-primary btn-sm" style="font-size:12px;" onclick="fetch(\'/api/setup/install-tool?tool=restart-service\',{method:\'POST\'});const p=this.parentElement.parentElement;p.innerHTML=\'<span style=color:var(--success)>Restarting... Redirecting in 5 seconds.</span>\';setTimeout(()=>{window.location.reload()},5000)">Restart Now</button>' +
+                    '<button class="btn btn-sm" style="font-size:12px;padding:5px 10px;" onclick="this.parentElement.parentElement.remove()">Later</button>' +
+                    '</div>';
+                logEl.parentElement.insertBefore(banner, logEl.nextSibling);
             } else if (task.status === 'error') {
                 clearInterval(poll);
                 status.textContent = 'Failed — check log below'; status.style.color = 'var(--error)';
