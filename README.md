@@ -2,7 +2,7 @@
 
 **GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-3.0.0-blue)
+![Version](https://img.shields.io/badge/version-3.1.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -109,6 +109,14 @@
 - **Space Savings** — Total potential savings for scanned libraries
 - **Scan Cache** — Instant re-scans with local metadata cache
 - **Stats Tab** — Aggregate stats: files encoded, space saved, compression ratio
+
+### Security
+- **Login Page** — Username/password authentication with session cookies
+- **Default Credentials** — admin/admin with forced password change on first login
+- **SSL/TLS** — Auto-generated self-signed certificate, custom cert upload, or Let's Encrypt
+- **Let's Encrypt** — One-click free trusted SSL certificate installation via certbot
+- **SSL Toggle** — Enable/disable HTTPS from settings with inline restart confirmation
+- **API Keys** — Bearer token authentication for programmatic access
 
 ### Updates & Deployment
 - **Python + venv** — Runs directly from Python with automatic venv setup

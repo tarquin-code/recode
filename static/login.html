@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300b4d8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a9 9 0 1 1-6.219-8.56'/><polyline points='21 3 21 9 15 9'/></svg>">
+<title>Recode - Login</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-card: #1c2333;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent: #58a6ff;
+    --accent-dim: #1f6feb;
+    --error: #f85149;
+    --success: #3fb950;
+    --radius: 8px;
+    --font: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+}
+body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.login-container {
+    width: 100%;
+    max-width: 380px;
+    padding: 20px;
+}
+.login-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px 28px;
+}
+.logo {
+    text-align: center;
+    margin-bottom: 28px;
+}
+.logo svg {
+    width: 36px;
+    height: 36px;
+    vertical-align: middle;
+    margin-right: 8px;
+}
+.logo-text {
+    font-size: 24px;
+    font-weight: 400;
+    color: #fff;
+}
+.logo-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+.form-group {
+    margin-bottom: 16px;
+}
+.form-group label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-weight: 500;
+}
+.form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: var(--font);
+    transition: border-color 0.2s;
+}
+.form-group input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.15);
+}
+.btn {
+    width: 100%;
+    padding: 10px 16px;
+    background: var(--accent-dim);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.btn:hover { background: var(--accent); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.error-msg {
+    color: var(--error);
+    font-size: 12px;
+    text-align: center;
+    margin-bottom: 12px;
+    display: none;
+}
+.success-msg {
+    color: var(--success);
+    font-size: 12px;
+    text-align: center;
+    margin-bottom: 12px;
+    display: none;
+}
+.section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    text-align: center;
+}
+.hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 12px;
+}
+</style>
+</head>
+<body>
+<div class="login-container">
+    <div class="login-card">
+        <div class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="21 3 21 9 15 9"/></svg><span class="logo-text">Recode</span>
+            <div class="logo-sub">H.265 GPU/CPU encode with HDR &amp; Dolby Vision</div>
+        </div>
+
+        <!-- Login Form -->
+        <div id="loginForm">
+            <div class="section-title">Sign In</div>
+            <div class="error-msg" id="loginError"></div>
+            <form onsubmit="doLogin(event)">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="loginUser" autocomplete="username" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="loginPass" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn" id="loginBtn">Sign In</button>
+            </form>
+            <div class="hint" id="loginHint"></div>
+        </div>
+
+        <!-- Password Change Form -->
+        <div id="changeForm" style="display:none;">
+            <div class="section-title">Set New Password</div>
+            <div style="font-size:12px;color:var(--text-secondary);text-align:center;margin-bottom:16px;">
+                Please change your password before continuing.
+            </div>
+            <div class="error-msg" id="changeError"></div>
+            <div class="success-msg" id="changeSuccess"></div>
+            <form onsubmit="doChangePassword(event)">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="changeUser" autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label>New Password</label>
+                    <input type="password" id="changePass" autocomplete="new-password" required minlength="4">
+                </div>
+                <div class="form-group">
+                    <label>Confirm Password</label>
+                    <input type="password" id="changePassConfirm" autocomplete="new-password" required minlength="4">
+                </div>
+                <button type="submit" class="btn" id="changeBtn">Set Password</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+async function checkStatus() {
+    try {
+        const r = await fetch('/api/auth/status');
+        const s = await r.json();
+        if (s.authenticated && !s.force_password_change) {
+            window.location.href = '/';
+            return;
+        }
+        if (s.force_password_change) {
+            document.getElementById('loginHint').textContent = 'Default: admin / admin';
+        }
+    } catch(e) {}
+}
+checkStatus();
+
+async function doLogin(e) {
+    e.preventDefault();
+    const errEl = document.getElementById('loginError');
+    errEl.style.display = 'none';
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true; btn.textContent = 'Signing in...';
+    try {
+        const r = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                username: document.getElementById('loginUser').value,
+                password: document.getElementById('loginPass').value
+            })
+        });
+        const d = await r.json();
+        if (!d.ok) {
+            errEl.textContent = d.error || 'Login failed';
+            errEl.style.display = 'block';
+            btn.disabled = false; btn.textContent = 'Sign In';
+            return;
+        }
+        if (d.force_password_change) {
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('changeForm').style.display = 'block';
+            document.getElementById('changeUser').value = document.getElementById('loginUser').value;
+            return;
+        }
+        window.location.href = '/';
+    } catch(ex) {
+        errEl.textContent = 'Connection error';
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Sign In';
+    }
+}
+
+async function doChangePassword(e) {
+    e.preventDefault();
+    const errEl = document.getElementById('changeError');
+    const successEl = document.getElementById('changeSuccess');
+    errEl.style.display = 'none';
+    successEl.style.display = 'none';
+    const pass = document.getElementById('changePass').value;
+    const confirm = document.getElementById('changePassConfirm').value;
+    if (pass !== confirm) {
+        errEl.textContent = 'Passwords do not match';
+        errEl.style.display = 'block';
+        return;
+    }
+    if (pass.length < 4) {
+        errEl.textContent = 'Password must be at least 4 characters';
+        errEl.style.display = 'block';
+        return;
+    }
+    const btn = document.getElementById('changeBtn');
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+        const r = await fetch('/api/auth/change-password', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                username: document.getElementById('changeUser').value,
+                new_password: pass
+            })
+        });
+        const d = await r.json();
+        if (!d.ok) {
+            errEl.textContent = d.error || 'Failed to change password';
+            errEl.style.display = 'block';
+            btn.disabled = false; btn.textContent = 'Set Password';
+            return;
+        }
+        successEl.textContent = 'Password changed. Redirecting...';
+        successEl.style.display = 'block';
+        setTimeout(() => { window.location.href = '/'; }, 1000);
+    } catch(ex) {
+        errEl.textContent = 'Connection error';
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Set Password';
+    }
+}
+</script>
+</body>
+</html>

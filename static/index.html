@@ -566,6 +566,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <span class="status-dot" id="dotRemoteServerWrap" style="display:none;"><span class="dot" id="dotRemoteServer"></span>Server<span id="remoteServerBadge" style="display:none;margin-left:2px;background:var(--accent);color:#fff;border-radius:8px;padding:0 5px;font-size:9px;font-weight:700;vertical-align:top;"></span></span>
             <span class="status-dot" id="dotRemoteClientWrap" style="display:none;"><span class="dot" id="dotRemoteClient"></span>Client</span>
             <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light theme" id="themeBtn"></button>
+            <button class="theme-toggle" onclick="doLogout()" title="Sign out" style="margin-left:4px;"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
         </div>
     </header>
     <div id="updateBanner" style="display:none;background:linear-gradient(90deg,rgba(88,166,255,0.15),rgba(88,166,255,0.05));border-bottom:1px solid var(--accent);padding:8px 24px;font-size:12px;align-items:center;justify-content:space-between;cursor:pointer;" onclick="document.getElementById('helpModal').classList.add('open');switchHelpTab('about',document.querySelector('.settings-nav-item:last-child'));document.querySelector('#aboutUpdateSection')?.scrollIntoView({behavior:'smooth'})">
@@ -2018,7 +2019,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Recode</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v3.0.0</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v3.1.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2051,6 +2052,15 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v3.1.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Login &amp; authentication</strong> &mdash; username/password login page, session cookies, forced password change on first login, API key support</li>
+                                <li><strong>SSL/TLS</strong> &mdash; auto-generated self-signed certificate, custom cert upload, Enable SSL toggle with inline restart</li>
+                                <li><strong>Let's Encrypt</strong> &mdash; one-click free trusted SSL certificate via certbot with live log</li>
+                                <li><strong>Security settings</strong> &mdash; new settings tab for credentials, SSL cert info, cert upload, and Let's Encrypt</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v3.0.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -2650,6 +2660,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="settings-nav-item" onclick="switchSettingsTab('watch',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span> Folder Watch</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('remote-gpu',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span> GPU Config</div>
                 <div class="settings-nav-item" onclick="switchSettingsTab('general',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> General</div>
+                <div class="settings-nav-item" onclick="switchSettingsTab('security',this)"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span> Security</div>
             </nav>
             <div class="settings-panel">
 
@@ -2921,7 +2932,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
                     <!-- Remote Clients (connect this GPU out to clients) -->
                     <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Remote Clients</div>
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Remote Clients</div>
                         <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Connect this machine's GPU to remote Recode clients. Add the client's address and shared secret.</div>
                         <div id="remoteClientsList"></div>
                         <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
@@ -2935,10 +2946,12 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <!-- General -->
                 <div class="set-section" id="setTab-general">
                     <div class="set-section-title">General</div>
+                    <div class="set-section-desc">Encoding settings, temp directories, queue behaviour, Plex integration, and service management.</div>
 
                     <!-- Encoding -->
                     <div style="margin-bottom:20px;">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Encoding</div>
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Encoding</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Temp directory, file naming, CPU threads, and queue behaviour.</div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <div class="form-group" style="margin:0;">
                                 <label>Temp Directory</label>
@@ -2978,21 +2991,21 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
                     <!-- Daily Cache Scan -->
                     <div style="padding-top:16px;border-top:1px solid var(--border);margin-bottom:20px;">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:6px;">Daily Cache Scan</div>
-                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">Pre-warm the scan cache daily so directory scans are instant. Only probes new or changed files.</div>
-                        <div style="display:flex;gap:20px;align-items:center;">
-                            <label class="set-chk" style="font-size:13px;"><input type="checkbox" id="setDailyScanEnabled"> Enable daily scan</label>
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Daily Cache Scan</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Pre-warm the scan cache daily so directory scans are instant. Only probes new or changed files.</div>
+                        <div style="display:flex;gap:20px;align-items:flex-end;">
+                            <label class="set-chk" style="margin-bottom:6px;"><input type="checkbox" id="setDailyScanEnabled"> Enable daily scan</label>
                             <div class="form-group" style="margin-bottom:0;width:120px;">
                                 <label>Scan Hour</label>
-                                <select id="setDailyScanHour" style="padding:6px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:12px;"></select>
+                                <select id="setDailyScanHour"></select>
                             </div>
                         </div>
                     </div>
 
                     <!-- Plex -->
                     <div style="padding-top:16px;border-top:1px solid var(--border);margin-bottom:20px;">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:6px;">Plex Integration</div>
-                        <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Plex Integration</div>
+                        <div style="font-size:11px;color:var(--text-muted);line-height:1.6;">
                             <span id="setPlexTokenStatus"></span>
                             Webhook: <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;font-size:11px;">http://&lt;server&gt;:9877/api/plex-webhook</code>
                             <span style="color:var(--text-muted);"> &mdash; Add in Plex &rarr; Settings &rarr; Webhooks. Uses matching library profile or Default.</span>
@@ -3001,10 +3014,103 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
                     <!-- Service -->
                     <div style="padding-top:16px;border-top:1px solid var(--border);">
-                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:8px;">Service</div>
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Service</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Restart the Recode service to apply configuration changes.</div>
                         <div style="display:flex;align-items:center;gap:12px;">
                             <button class="btn btn-danger btn-sm" style="font-size:12px;" onclick="restartService(this)">Restart Service</button>
                             <span style="font-size:11px;color:var(--text-muted);" id="restartStatus">Active encodes will be interrupted and re-queued.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Security -->
+                <div class="set-section" id="setTab-security">
+                    <div class="set-section-title">Security</div>
+                    <div class="set-section-desc">Login credentials, SSL/TLS certificates, and Let's Encrypt setup.</div>
+
+                    <!-- Authentication -->
+                    <div style="margin-bottom:20px;">
+                        <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Authentication</div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Login credentials for the web interface. Default: admin / admin.</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                            <div class="form-group" style="margin:0;">
+                                <label>Username</label>
+                                <input type="text" id="secUsername" autocomplete="username" placeholder="admin">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>New Password</label>
+                                <input type="password" id="secNewPass" autocomplete="new-password" placeholder="Enter new password" style="font-family:var(--font-mono);background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);padding:9px 10px;font-size:12px;width:100%;box-sizing:border-box;">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Confirm Password</label>
+                                <input type="password" id="secConfirmPass" autocomplete="new-password" placeholder="Confirm password" style="font-family:var(--font-mono);background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);padding:9px 10px;font-size:12px;width:100%;box-sizing:border-box;">
+                            </div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+                            <button class="btn btn-primary btn-sm" style="font-size:12px;" onclick="btnAction(this, () => secChangePassword(), '✓ Updated', 2000)">Update Credentials</button>
+                            <span style="font-size:11px;color:var(--text-muted);" id="secCredStatus"></span>
+                        </div>
+                    </div>
+
+                    <!-- SSL/TLS -->
+                    <div style="padding-top:16px;border-top:1px solid var(--border);">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+                            <div style="font-weight:600;font-size:13px;color:var(--text-primary);">SSL / TLS Certificate</div>
+                            <label class="set-chk"><input type="checkbox" id="setSSLEnabled" onchange="showSSLConfirm(this.checked)"> Enable SSL</label>
+                            <div id="sslConfirmBanner" style="display:none;margin-top:8px;padding:10px 14px;background:rgba(210,153,34,0.1);border:1px solid var(--warning);border-radius:6px;font-size:11px;color:var(--text-secondary);line-height:1.6;">
+                                <strong style="color:var(--warning);">Warning:</strong> Switching to <span id="sslConfirmMode">HTTP</span> will restart the service. Active encodes will be interrupted and re-queued.
+                                <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+                                    <button class="btn btn-primary btn-sm" style="font-size:12px;" onclick="confirmSSLToggle()">Restart Now</button>
+                                    <button class="btn btn-sm" style="font-size:12px;padding:5px 10px;" onclick="cancelSSLToggle()">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">When enabled, serves HTTPS with a self-signed certificate. Upload your own for trusted SSL.</div>
+                        <div id="sslInfo" style="font-size:11px;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;line-height:1.8;"></div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                            <div class="form-group" style="margin:0;">
+                                <label>Certificate (.pem / .crt)</label>
+                                <div style="display:flex;gap:6px;align-items:center;">
+                                    <input type="text" id="sslCertName" readonly placeholder="No file selected" style="flex:1;cursor:pointer;" onclick="document.getElementById('sslCertFile').click()">
+                                    <input type="file" id="sslCertFile" accept=".pem,.crt,.cer" style="display:none;" onchange="document.getElementById('sslCertName').value=this.files[0]?.name||''">
+                                    <button class="btn btn-sm" style="font-size:11px;white-space:nowrap;padding:9px 12px;" onclick="document.getElementById('sslCertFile').click()">Browse</button>
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Private Key (.pem / .key)</label>
+                                <div style="display:flex;gap:6px;align-items:center;">
+                                    <input type="text" id="sslKeyName" readonly placeholder="No file selected" style="flex:1;cursor:pointer;" onclick="document.getElementById('sslKeyFile').click()">
+                                    <input type="file" id="sslKeyFile" accept=".pem,.key" style="display:none;" onchange="document.getElementById('sslKeyName').value=this.files[0]?.name||''">
+                                    <button class="btn btn-sm" style="font-size:11px;white-space:nowrap;padding:9px 12px;" onclick="document.getElementById('sslKeyFile').click()">Browse</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+                            <button class="btn btn-primary btn-sm" style="font-size:12px;" onclick="btnAction(this, () => secUploadSSL(), '✓ Uploaded', 2000)">Upload Certificate</button>
+                            <span style="font-size:11px;color:var(--text-muted);" id="secSslStatus">Restart required after upload to apply.</span>
+                        </div>
+
+                        <!-- Let's Encrypt -->
+                        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+                            <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Let's Encrypt (Free Trusted SSL)</div>
+                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Automatically obtain a free trusted SSL certificate. Requires a domain name pointing to this server and port 80 accessible from the internet.</div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                                <div class="form-group" style="margin:0;">
+                                    <label>Domain Name</label>
+                                    <input type="text" id="leDomain" placeholder="recode.example.com" style="font-family:var(--font-mono);">
+                                    <span class="set-desc">Must resolve to this server's public IP</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label>Email (for renewal notices)</label>
+                                    <input type="text" id="leEmail" placeholder="admin@example.com">
+                                    <span class="set-desc">Required by Let's Encrypt</span>
+                                </div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+                                <button class="btn btn-primary btn-sm" style="font-size:12px;" onclick="btnAction(this, () => secLetsEncrypt(), '✓ Done', 3000)">Install Let's Encrypt Certificate</button>
+                                <span style="font-size:11px;color:var(--text-muted);" id="secLeStatus"></span>
+                            </div>
+                            <div id="leLog" style="display:none;margin-top:8px;padding:8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);max-height:150px;overflow-y:auto;white-space:pre-wrap;"></div>
                         </div>
                     </div>
                 </div>
@@ -3022,6 +3128,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
 </div>
 
 <script>
+/* =========================================================================
+   Auth — intercept 401s and redirect to login
+   ========================================================================= */
+const _origFetch = window.fetch;
+window.fetch = async function(...args) {
+    const res = await _origFetch(...args);
+    if (res.status === 401 && !window._loggingOut) { window.location.href = '/login'; }
+    return res;
+};
+
 /* =========================================================================
    SVG Icon System
    ========================================================================= */
@@ -3107,7 +3223,8 @@ function connectWs() {
         updateGpuServerStatus();
         loadAndApplySettings();
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+        if (event.code === 4001) { window.location.href = '/login'; return; }
         state.connected = false;
         document.getElementById('dotWs').className = 'dot err';
         const vBadge = document.getElementById('appVersionBadge');
@@ -6114,6 +6231,7 @@ async function openSettings() {
         document.getElementById('setRemoteServerEnabled').checked = !!s.remote_client_enabled;
         document.getElementById('setRemoteServerPort').value = s.remote_client_port || 9879;
         document.getElementById('setRemoteServerSecret').value = s.remote_client_secret || '';
+        document.getElementById('setSSLEnabled').checked = s.ssl_enabled !== false;
         updateGpuServerStatus();
         // Remote Clients (connect out to clients)
         window._remoteClients = s.remote_gpu_servers || [];
@@ -6204,6 +6322,7 @@ function switchSettingsTab(name, el) {
     const tab = document.getElementById('setTab-' + name);
     if (tab) tab.classList.add('active');
     if (name === 'remote-gpu') checkAllRemoteServers();
+    if (name === 'security') loadSecurityTab();
 }
 
 function switchHelpTab(name, el) {
@@ -6760,6 +6879,8 @@ async function saveSettings() {
         // Remote Server (listener)
         remote_client_enabled: document.getElementById('setRemoteServerEnabled').checked,
         remote_client_port: parseInt(document.getElementById('setRemoteServerPort').value) || 9879,
+        // SSL (saved directly by toggleSSL, not here)
+        ssl_enabled: document.getElementById('setSSLEnabled').checked,
         remote_client_secret: document.getElementById('setRemoteServerSecret').value.trim(),
         // Remote Clients (connect out)
         remote_gpu_servers: (window._remoteClients || []).filter(c => {
@@ -7725,6 +7846,139 @@ document.getElementById('scanPath').addEventListener('input', () => {
         document.getElementById('btnScan').disabled = !document.getElementById('scanPath').value.trim();
     }
 });
+
+/* =========================================================================
+   Auth & Security
+   ========================================================================= */
+async function doLogout() {
+    window._loggingOut = true;
+    try { await fetch('/api/auth/logout', {method: 'POST'}); } catch(e) {}
+    window.location.href = '/login';
+}
+
+async function loadSecurityTab() {
+    // Load SSL info
+    const el = document.getElementById('sslInfo');
+    if (!el) return;
+    try {
+        const r = await fetch('/api/ssl/info');
+        const d = await r.json();
+        if (!d.ssl_enabled) {
+            el.innerHTML = '<span style="color:var(--warning);">SSL not enabled</span> — No certificate found.';
+        } else if (d.error) {
+            el.innerHTML = '<span style="color:var(--warning);">SSL enabled</span> — Could not read certificate details.';
+        } else {
+            el.innerHTML = `<span style="color:var(--success);">SSL enabled</span>${d.self_signed ? ' (self-signed)' : ''}<br>` +
+                `Subject: <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:11px;">${d.subject || 'N/A'}</code><br>` +
+                `Issuer: <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:11px;">${d.issuer || 'N/A'}</code><br>` +
+                `Expires: <code style="background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;font-size:11px;">${d.expires || 'N/A'}</code>`;
+        }
+    } catch(e) {
+        el.innerHTML = '<span style="color:var(--text-muted);">Could not load SSL info.</span>';
+    }
+}
+
+window._sslPendingState = null;
+
+function showSSLConfirm(enabled) {
+    window._sslPendingState = enabled;
+    const banner = document.getElementById('sslConfirmBanner');
+    document.getElementById('sslConfirmMode').textContent = enabled ? 'HTTPS' : 'HTTP';
+    banner.style.display = '';
+}
+
+function cancelSSLToggle() {
+    document.getElementById('setSSLEnabled').checked = !window._sslPendingState;
+    document.getElementById('sslConfirmBanner').style.display = 'none';
+    window._sslPendingState = null;
+}
+
+function confirmSSLToggle() {
+    const enabled = window._sslPendingState;
+    const mode = enabled ? 'HTTPS' : 'HTTP';
+    const banner = document.getElementById('sslConfirmBanner');
+    banner.innerHTML = `<span style="color:var(--text-muted);">Saving and restarting...</span>`;
+    fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ssl_enabled:enabled})})
+        .then(() => {
+            fetch('/api/setup/install-tool?tool=restart-service', {method:'POST'}).catch(()=>{});
+            const proto = enabled ? 'https' : 'http';
+            const host = window.location.hostname;
+            const port = window.location.port || '9877';
+            const newUrl = `${proto}://${host}:${port}`;
+            banner.innerHTML = `<span style="color:var(--success);">Switching to ${mode}. Redirecting to <a href="${newUrl}" style="color:var(--accent);">${newUrl}</a> in 5 seconds...</span>`;
+            setTimeout(() => { window.location.href = newUrl; }, 5000);
+        });
+}
+
+async function secLetsEncrypt() {
+    const status = document.getElementById('secLeStatus');
+    const logEl = document.getElementById('leLog');
+    const domain = document.getElementById('leDomain').value.trim();
+    const email = document.getElementById('leEmail').value.trim();
+    if (!domain) { status.textContent = 'Enter a domain name'; status.style.color = 'var(--error)'; throw new Error('no domain'); }
+    if (!email) { status.textContent = 'Enter an email address'; status.style.color = 'var(--error)'; throw new Error('no email'); }
+    status.textContent = 'Installing certbot and requesting certificate...'; status.style.color = 'var(--text-muted)';
+    logEl.style.display = 'block'; logEl.textContent = 'Starting Let\'s Encrypt...\n';
+    const r = await fetch('/api/ssl/letsencrypt', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({domain, email})});
+    const d = await r.json();
+    if (!d.ok) { status.textContent = d.error || 'Failed'; status.style.color = 'var(--error)'; throw new Error(d.error); }
+    // Poll for status
+    const poll = setInterval(async () => {
+        try {
+            const pr = await fetch('/api/setup/install-status');
+            const pd = await pr.json();
+            const task = (pd.tasks || {}).letsencrypt || {};
+            if (logEl) { logEl.textContent = task.log || ''; logEl.scrollTop = logEl.scrollHeight; }
+            if (task.status === 'done') {
+                clearInterval(poll);
+                status.textContent = 'Certificate installed! Restart to apply.'; status.style.color = 'var(--success)';
+                loadSecurityTab();
+            } else if (task.status === 'error') {
+                clearInterval(poll);
+                status.textContent = 'Failed — check log below'; status.style.color = 'var(--error)';
+            }
+        } catch(e) {}
+    }, 2000);
+}
+
+async function secChangePassword() {
+    const status = document.getElementById('secCredStatus');
+    const user = document.getElementById('secUsername').value.trim();
+    const pass = document.getElementById('secNewPass').value;
+    const confirm = document.getElementById('secConfirmPass').value;
+    if (!pass) { status.textContent = 'Enter a new password'; status.style.color = 'var(--error)'; throw new Error('no pass'); }
+    if (pass !== confirm) { status.textContent = 'Passwords do not match'; status.style.color = 'var(--error)'; throw new Error('mismatch'); }
+    if (pass.length < 4) { status.textContent = 'Min 4 characters'; status.style.color = 'var(--error)'; throw new Error('short'); }
+    const body = {new_password: pass};
+    if (user) body.username = user;
+    const r = await fetch('/api/auth/change-password', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (d.ok) {
+        status.textContent = 'Credentials updated'; status.style.color = 'var(--success)';
+        document.getElementById('secNewPass').value = '';
+        document.getElementById('secConfirmPass').value = '';
+    } else {
+        status.textContent = d.error || 'Failed'; status.style.color = 'var(--error)';
+    }
+}
+
+async function secUploadSSL() {
+    const status = document.getElementById('secSslStatus');
+    const certFile = document.getElementById('sslCertFile').files[0];
+    const keyFile = document.getElementById('sslKeyFile').files[0];
+    if (!certFile || !keyFile) { status.textContent = 'Select both cert and key files'; status.style.color = 'var(--error)'; throw new Error('no files'); }
+    const fd = new FormData();
+    fd.append('cert', certFile);
+    fd.append('key', keyFile);
+    const r = await fetch('/api/ssl/upload', {method: 'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) {
+        status.textContent = 'Uploaded — restart to apply'; status.style.color = 'var(--success)';
+        loadSecurityTab();
+    } else {
+        status.textContent = d.error || 'Failed'; status.style.color = 'var(--error)';
+    }
+}
 </script>
 </body>
 </html>

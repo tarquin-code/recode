@@ -46,6 +46,9 @@ from typing import Optional
 import logging
 import re
 from collections import deque
+import hashlib
+import secrets
+import hmac as _hmac
 
 import psutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Form, UploadFile, File
@@ -60,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -74,6 +77,25 @@ def _find_bin(name: str) -> str:
     if os.path.isfile(local_bin) and os.access(local_bin, os.X_OK):
         return local_bin
     return shutil.which(name) or name
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+    return f"pbkdf2:sha256:100000${salt}${h.hex()}"
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        parts = stored.split('$')
+        if len(parts) != 3: return False
+        salt = parts[1]
+        expected = parts[2]
+        h = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+        return _hmac.compare_digest(h.hex(), expected)
+    except Exception:
+        return False
+
+_active_sessions = {}  # token -> {"username": str, "expires_at": float}
 
 
 FFMPEG = _find_bin("ffmpeg")
@@ -381,6 +403,12 @@ APP_DEFAULTS = {
     # Daily background cache scan — pre-warm cache so user scans are instant
     "daily_scan_enabled": True,
     "daily_scan_hour": 3,  # Hour of day (0-23) to run the scan
+    # Authentication
+    "auth_username": "admin",
+    "auth_password_hash": "",
+    "auth_force_password_change": True,
+    "auth_session_secret": "",
+    "ssl_enabled": True,
 }
 
 def load_settings() -> dict:
@@ -4664,6 +4692,40 @@ async def encode_worker(worker_id: int):
 
 app = FastAPI(title="Recode")
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import RedirectResponse
+from starlette.requests import Request
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    EXEMPT = {"/api/auth/login", "/api/auth/status", "/login", "/api/plex-webhook",
+              "/api/setup/status", "/api/setup/complete", "/api/setup/install-tool",
+              "/api/setup/install-status", "/api/setup/cancel-install", "/setup"}
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if path in self.EXEMPT or path.startswith("/static/") or FIRST_RUN:
+            return await call_next(request)
+        # Check API key
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            api_key = auth_header[7:]
+            for k in app_settings.get("auth_api_keys", []):
+                if _hmac.compare_digest(k.get("key", ""), api_key):
+                    return await call_next(request)
+        # Check session cookie
+        session_token = request.cookies.get("recode_session")
+        if session_token and session_token in _active_sessions:
+            session = _active_sessions[session_token]
+            if session["expires_at"] > time.time():
+                return await call_next(request)
+            del _active_sessions[session_token]
+        # Not authenticated
+        if "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/login")
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+
+app.add_middleware(AuthMiddleware)
+
 # First-run detection — set to True if settings file doesn't exist OR has no setup_complete flag
 FIRST_RUN = not app_settings.get("setup_complete", False)
 
@@ -5765,6 +5827,189 @@ async def startup():
     # Run initial remote server status check
     asyncio.create_task(remote_gpu_status())
 
+
+@app.get("/login")
+async def login_page():
+    return FileResponse(os.path.join(BASE_DIR, "static", "login.html"))
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid request"})
+    username = body.get("username", "")
+    password = body.get("password", "")
+    stored_user = app_settings.get("auth_username", "admin")
+    stored_hash = app_settings.get("auth_password_hash", "")
+    # First run — no password set, accept default
+    if not stored_hash:
+        if username == stored_user and password == "admin":
+            pass  # allow
+        else:
+            return JSONResponse({"ok": False, "error": "Invalid credentials"})
+    else:
+        if username != stored_user or not _verify_password(password, stored_hash):
+            return JSONResponse({"ok": False, "error": "Invalid credentials"})
+    # Create session
+    token = secrets.token_hex(32)
+    _active_sessions[token] = {"username": username, "expires_at": time.time() + 604800}
+    force_change = app_settings.get("auth_force_password_change", True) and not stored_hash
+    resp = JSONResponse({"ok": True, "force_password_change": force_change})
+    resp.set_cookie("recode_session", token, max_age=604800, httponly=True, samesite="lax")
+    return resp
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    token = request.cookies.get("recode_session")
+    if token: _active_sessions.pop(token, None)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("recode_session")
+    return resp
+
+@app.post("/api/auth/change-password")
+async def auth_change_password(request: Request):
+    body = await request.json()
+    new_password = body.get("new_password", "")
+    if len(new_password) < 4:
+        return JSONResponse({"ok": False, "error": "Password must be at least 4 characters"})
+    new_username = body.get("username", "").strip()
+    if new_username:
+        app_settings["auth_username"] = new_username
+    app_settings["auth_password_hash"] = _hash_password(new_password)
+    app_settings["auth_force_password_change"] = False
+    save_settings(app_settings)
+    return JSONResponse({"ok": True})
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    token = request.cookies.get("recode_session")
+    authenticated = token and token in _active_sessions and _active_sessions[token]["expires_at"] > time.time()
+    return {"authenticated": authenticated, "first_run": FIRST_RUN,
+            "force_password_change": app_settings.get("auth_force_password_change", True) and not app_settings.get("auth_password_hash")}
+
+@app.post("/api/ssl/upload")
+async def ssl_upload(cert: UploadFile = File(...), key: UploadFile = File(...)):
+    cert_data = await cert.read()
+    key_data = await key.read()
+    os.makedirs(SSL_DIR, exist_ok=True)
+    cert_path = os.path.join(SSL_DIR, "cert.pem")
+    key_path = os.path.join(SSL_DIR, "key.pem")
+    with open(cert_path, "wb") as f: f.write(cert_data)
+    with open(key_path, "wb") as f: f.write(key_data)
+    return {"ok": True, "message": "SSL certificate uploaded. Restart to apply."}
+
+@app.get("/api/ssl/info")
+async def ssl_info():
+    if not os.path.isfile(SSL_CERT):
+        return {"ssl_enabled": False}
+    try:
+        r = subprocess.run(["openssl", "x509", "-in", SSL_CERT, "-noout", "-subject", "-issuer", "-enddate"],
+            capture_output=True, text=True, timeout=5)
+        lines = r.stdout.strip().split("\n")
+        info = {}
+        for line in lines:
+            if line.startswith("subject="): info["subject"] = line[8:].strip()
+            elif line.startswith("issuer="): info["issuer"] = line[7:].strip()
+            elif line.startswith("notAfter="): info["expires"] = line[9:].strip()
+        info["ssl_enabled"] = True
+        info["self_signed"] = info.get("subject") == info.get("issuer")
+        return info
+    except Exception:
+        return {"ssl_enabled": True, "error": "Could not read certificate"}
+
+@app.post("/api/ssl/letsencrypt")
+async def ssl_letsencrypt(request: Request):
+    """Install Let's Encrypt certificate using certbot standalone."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "Invalid request"}
+    domain = body.get("domain", "").strip()
+    email = body.get("email", "").strip()
+    if not domain:
+        return {"ok": False, "error": "Domain is required"}
+    if not email:
+        return {"ok": False, "error": "Email is required"}
+
+    _install_tasks["letsencrypt"] = {"status": "running", "log": f"Installing Let's Encrypt certificate for {domain}...\n"}
+
+    async def _do_letsencrypt():
+        try:
+            # Install certbot if not present
+            if not shutil.which("certbot"):
+                _install_tasks["letsencrypt"]["log"] += "Installing certbot...\n"
+                if shutil.which("apt-get"):
+                    proc = await _run_sudo("apt-get", "install", "-y", "certbot")
+                elif shutil.which("dnf"):
+                    proc = await _run_sudo("dnf", "install", "-y", "certbot")
+                elif shutil.which("yum"):
+                    proc = await _run_sudo("yum", "install", "-y", "certbot")
+                elif shutil.which("pacman"):
+                    proc = await _run_sudo("pacman", "-S", "--noconfirm", "certbot")
+                else:
+                    raise RuntimeError("Cannot install certbot — unsupported package manager")
+                async for line in proc.stdout:
+                    text = line.decode(errors="replace").rstrip()
+                    if text:
+                        _install_tasks["letsencrypt"]["log"] += text + "\n"
+                await proc.wait()
+                if proc.returncode != 0:
+                    raise RuntimeError("Failed to install certbot")
+                _install_tasks["letsencrypt"]["log"] += "Certbot installed.\n"
+
+            # Request certificate using standalone mode (needs port 80)
+            _install_tasks["letsencrypt"]["log"] += f"Requesting certificate for {domain}...\n"
+            cert_dir = os.path.join(BASE_DIR, "ssl")
+            os.makedirs(cert_dir, exist_ok=True)
+            proc = await _run_sudo(
+                "certbot", "certonly", "--standalone",
+                "--non-interactive", "--agree-tos",
+                "--email", email, "-d", domain,
+                "--cert-path", os.path.join(cert_dir, "cert.pem"),
+                "--key-path", os.path.join(cert_dir, "key.pem"),
+                "--fullchain-path", os.path.join(cert_dir, "cert.pem"),
+                "--force-renewal"
+            )
+            async for line in proc.stdout:
+                text = line.decode(errors="replace").rstrip()
+                if text:
+                    _install_tasks["letsencrypt"]["log"] += text + "\n"
+            await proc.wait()
+
+            if proc.returncode != 0:
+                # Certbot standalone may fail — try with certonly and manual copy
+                _install_tasks["letsencrypt"]["log"] += "Standalone failed. Trying with default paths...\n"
+                proc2 = await _run_sudo(
+                    "certbot", "certonly", "--standalone",
+                    "--non-interactive", "--agree-tos",
+                    "--email", email, "-d", domain
+                )
+                async for line in proc2.stdout:
+                    text = line.decode(errors="replace").rstrip()
+                    if text:
+                        _install_tasks["letsencrypt"]["log"] += text + "\n"
+                await proc2.wait()
+                if proc2.returncode != 0:
+                    raise RuntimeError("Certbot failed — check log. Port 80 must be accessible and domain must resolve to this server.")
+                # Copy from default certbot location
+                le_dir = f"/etc/letsencrypt/live/{domain}"
+                if os.path.isdir(le_dir):
+                    copy_script = f'cp -f {le_dir}/fullchain.pem {cert_dir}/cert.pem && cp -f {le_dir}/privkey.pem {cert_dir}/key.pem && chown {os.getuid()}:{os.getgid()} {cert_dir}/*'
+                    proc3 = await _run_sudo("bash", "-c", copy_script)
+                    await proc3.wait()
+                    _install_tasks["letsencrypt"]["log"] += "Certificates copied to Recode SSL directory.\n"
+                else:
+                    raise RuntimeError(f"Certificate directory not found: {le_dir}")
+
+            _install_tasks["letsencrypt"]["log"] += "Let's Encrypt certificate installed! Restart the service to apply.\n"
+            _install_tasks["letsencrypt"]["status"] = "done"
+        except Exception as e:
+            _install_tasks["letsencrypt"]["log"] += f"Error: {e}\n"
+            _install_tasks["letsencrypt"]["status"] = "error"
+
+    asyncio.create_task(_do_letsencrypt())
+    return {"ok": True}
 
 @app.get("/")
 async def index():
@@ -8161,6 +8406,12 @@ async def plex_webhook(payload: str = Form(None)):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    if not FIRST_RUN:
+        session_token = ws.cookies.get("recode_session")
+        if not session_token or session_token not in _active_sessions or _active_sessions.get(session_token, {}).get("expires_at", 0) < time.time():
+            await ws.accept()
+            await ws.close(code=4001, reason="Authentication required")
+            return
     await manager.connect(ws)
     try:
         # Send initial state
@@ -8185,6 +8436,30 @@ class SuppressPollingFilter(logging.Filter):
         return not any(ep in msg for ep in self.SUPPRESSED)
 
 
+SSL_DIR = os.path.join(BASE_DIR, "ssl")
+SSL_CERT = os.path.join(SSL_DIR, "cert.pem")
+SSL_KEY = os.path.join(SSL_DIR, "key.pem")
+
+def _ensure_ssl():
+    os.makedirs(SSL_DIR, exist_ok=True)
+    if os.path.isfile(SSL_CERT) and os.path.isfile(SSL_KEY):
+        return
+    log.info("Generating self-signed SSL certificate...")
+    try:
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", SSL_KEY, "-out", SSL_CERT, "-days", "3650", "-nodes",
+            "-subj", "/CN=recode-server/O=Recode"], check=True, capture_output=True)
+        log.info("SSL certificate generated")
+    except Exception as e:
+        log.warning(f"Failed to generate SSL cert: {e}")
+
 if __name__ == "__main__":
+    _ensure_ssl()
     logging.getLogger("uvicorn.access").addFilter(SuppressPollingFilter())
-    uvicorn.run(app, host="0.0.0.0", port=9877, log_level="info")
+    ssl_kwargs = {}
+    if app_settings.get("ssl_enabled", True) and os.path.isfile(SSL_CERT) and os.path.isfile(SSL_KEY):
+        ssl_kwargs = {"ssl_certfile": SSL_CERT, "ssl_keyfile": SSL_KEY}
+        log.info("SSL enabled — serving HTTPS")
+    else:
+        log.info("SSL disabled — serving HTTP")
+    uvicorn.run(app, host="0.0.0.0", port=9877, log_level="info", **ssl_kwargs)
