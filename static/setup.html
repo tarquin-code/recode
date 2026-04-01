@@ -253,11 +253,11 @@ select:disabled, input:disabled { opacity: 0.4; cursor: not-allowed; }
             </p>
             <div style="display:grid;grid-template-columns:120px 1fr;gap:4px 12px;font-size:12px;margin-bottom:16px;">
                 <div style="font-weight:600;color:var(--text);">NVIDIA GPU</div>
-                <div style="color:var(--muted);">Detects GPU hardware via nvidia-smi (drivers) and lspci (hardware). GPU encoding is 10-50x faster than CPU.</div>
+                <div style="color:var(--muted);">Auto-detects NVIDIA, AMD, and Intel GPUs. GPU encoding is 10-50x faster than CPU.</div>
                 <div style="font-weight:600;color:var(--text);">ffmpeg</div>
                 <div style="color:var(--muted);">The core encoding engine. Must be built with specific features for full functionality. Click "Build ffmpeg" if missing.</div>
                 <div style="font-weight:600;color:var(--text);">NVENC</div>
-                <div style="color:var(--muted);">NVIDIA's hardware encoder inside ffmpeg. Requires GPU drivers + ffmpeg built with --enable-nvenc.</div>
+                <div style="color:var(--muted);">Hardware encoders (NVENC, VAAPI, QSV, AMF) inside ffmpeg. Requires GPU drivers.</div>
                 <div style="font-weight:600;color:var(--text);">libplacebo</div>
                 <div style="color:var(--muted);">Vulkan-based video processor. Required for Dolby Vision Profile 5 color space conversion (IPTPQc2 to BT.2020).</div>
                 <div style="font-weight:600;color:var(--text);">Vulkan</div>

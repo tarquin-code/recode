@@ -1,17 +1,17 @@
 # Recode
 
-**GPU-accelerated HEVC (H.265) re-encoding for Plex media libraries with Dolby Vision support.**
+**GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-2.23.2-blue)
+![Version](https://img.shields.io/badge/version-3.0.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
 ## Features
 
 ### Encoding
-- **GPU Encoding** — NVIDIA NVENC hardware acceleration (10-50x faster than realtime)
+- **GPU Encoding** — NVIDIA NVENC, AMD VAAPI/AMF, Intel QSV/VAAPI hardware acceleration (10-50x faster than realtime)
 - **CPU Encoding** — libx265 software encoding when no GPU is available
-- **H.265 (HEVC) & H.264** — Encode to HEVC or H.264 with configurable quality
+- **H.265 & H.264** — Encode to H.265 or H.264 with configurable quality
 - **Presets** — Auto, Film, Animation, Grain, Custom with per-preset CQ/bitrate/speed
 - **Constant Quality (CQ)** — Configurable quality level with max bitrate cap
 - **Resolution Scaling** — Downscale 4K to 1080p, 1440p, 720p, or keep original
@@ -40,24 +40,25 @@
 - **Profile Support** — Subtitle settings in default profile and per-library profiles
 
 ### Multi-GPU
-- **Auto Detection** — Automatically detects all NVIDIA GPUs
+- **Auto Detection** — Automatically detects NVIDIA, AMD, and Intel GPUs with live capability probing
 - **Auto Load-Balance** — Distributes across all local GPUs and remote servers equally
 - **Per-GPU Max Jobs** — configurable max concurrent encodes per GPU, auto-calculated from VRAM
 - **VRAM-Aware Assignment** — GPUs with ≤2GB VRAM excluded from 4K jobs (prevents CUDA OOM)
 - **Idle GPU Utilization** — Jobs can use idle GPUs even when max concurrent limit is reached
 - **GPU Selection** — Auto, All Local, All Remote, specific GPU, or specific server
 - **OOM Recovery** — Automatic re-queue on GPU out-of-memory (up to 3 retries)
+- **Auto-Disable** — Remote GPUs automatically disabled after 3 consecutive failures
 
 ### Remote GPU (RRP)
 - **Reverse-Connect** — GPU servers connect OUT to clients, NAT-friendly (no port forwarding on GPU side)
-- **FUSE Mount** — Stream input files on-demand with 8MB chunks for WAN throughput
-- **Multi-Platform** — Linux (NVENC, QSV, VAAPI) and macOS (VideoToolbox) GPU servers
+- **FUSE Mount** — Stream input files on-demand with 256KB chunks (~40% faster LAN streaming)
+- **Multi-Platform** — Linux (NVENC, QSV, VAAPI, AMF) and macOS (VideoToolbox) GPU servers
 - **Hardware Probing** — Tests actual GPU encoder capabilities, auto-strips unsupported flags (e.g. temporal-aq on Maxwell)
 - **H.264/H.265 Badges** — Connected GPUs show verified encoder capabilities
 - **HMAC-SHA256 Auth** — Secure authentication with shared secret and heartbeat monitoring
 - **SHA256 Verification** — Output file integrity check
 - **CUDA Hwaccel** — Hardware decode on NVIDIA remote GPUs
-- **VideoToolbox** — Apple Silicon hardware encoding on macOS (HEVC/H.264)
+- **VideoToolbox** — Apple Silicon hardware encoding on macOS (H.265/H.264)
 - **Live Progress** — Real-time encoding progress with estimated speed and bitrate
 - **Cancel Propagation** — Cancelling kills ffmpeg on remote, lazy FUSE unmount, temp cleanup
 - **Auto Cleanup** — FUSE unmount + temp files removed on cancel, failure, or disconnect
@@ -83,6 +84,9 @@
 - **Unlimited History** — Full encode history with detailed logs
 - **Retry Failed** — One-click retry for failed or cancelled jobs
 - **Discard Larger** — Automatically discard encodes that are larger than the original
+- **Skip Tagging** — Discarded files tagged with RECODE_SKIPPED metadata, excluded from future scans
+- **Delete Safety** — Never deletes original if encoded file is less than 5% of original size
+- **DV Fallback** — RPU extraction failure falls back to HDR10 instead of failing the job
 
 ### Automation
 - **Folder Watch** — Monitor directories for new files and auto-queue
@@ -127,14 +131,14 @@ Then open `http://your-server:9877` in a browser.
 ## Requirements
 
 ### Linux (Full Application)
-- **NVIDIA GPU** with drivers (for GPU encoding) — CPU-only mode available
+- **GPU** (NVIDIA, AMD, or Intel) with drivers — auto-detected, CPU-only mode available
 - **Linux** (RHEL/Debian/Arch-based distros)
 - **Python 3.9+** — installer sets up a virtualenv automatically
 
 ### macOS (GPU Server Only)
 - **macOS 11+** on Apple Silicon (M1/M2/M3/M4)
 - **macFUSE** — `brew install macfuse` (required for FUSE mount mode)
-- Uses **VideoToolbox** hardware encoder for HEVC/H.264
+- Uses **VideoToolbox** hardware encoder for H.265/H.264
 
 ### Bundled Tools (no manual install needed)
 

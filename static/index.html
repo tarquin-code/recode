@@ -180,6 +180,9 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .badge { display: inline-flex; align-items: center; justify-content: center; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; text-transform: uppercase; min-width: 38px; text-align: center; }
 .badge-sm { font-size: 9px; padding: 1px 5px; }
 .badge-codec { background: rgba(88,166,255,0.15); color: var(--accent); }
+.badge-h265 { background: rgba(63,185,80,0.15); color: var(--success); }
+.badge-h264 { background: rgba(57,210,224,0.15); color: var(--cyan); }
+.badge-hw { background: rgba(88,166,255,0.15); color: var(--accent); }
 .badge-hevc { background: rgba(63,185,80,0.15); color: var(--success); }
 .badge-hdr { background: rgba(210,153,34,0.2); color: var(--warning); }
 .badge-dv { background: rgba(188,140,255,0.2); color: var(--purple); }
@@ -187,6 +190,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .badge-res { background: rgba(57,210,224,0.15); color: var(--cyan); }
 .badge-audio { background: rgba(240,136,62,0.15); color: var(--orange); }
 .badge-size { background: rgba(139,148,158,0.25); color: var(--text-secondary); }
+.badge-preset { background: rgba(139,148,158,0.2); color: var(--text-muted); }
+.badge-cq { background: rgba(255,123,114,0.15); color: #ff7b72; }
+.badge-bitrate { background: rgba(57,210,224,0.15); color: var(--cyan); }
+.badge-speed { background: rgba(63,185,80,0.15); color: var(--success); }
 .badge-done { background: rgba(63,185,80,0.15); color: var(--success); }
 .badge-fail { background: rgba(248,81,73,0.15); color: var(--error); }
 .badge-skip { background: rgba(210,153,34,0.15); color: var(--warning); }
@@ -678,10 +685,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="form-group">
                     <label>Video Codec</label>
                     <select id="selVideoCodec" onchange="onEncodeSettingsChange()">
-                        <option value="hevc">HEVC (H.265)</option>
+                        <option value="hevc">H.265 (HEVC)</option>
                         <option value="h264">H.264 (AVC)</option>
                     </select>
-                    <span class="set-desc">HEVC has better compression, H.264 has wider compatibility</span>
+                    <span class="set-desc">H.265 has better compression, H.264 has wider compatibility</span>
                 </div>
                 <div class="form-group">
                     <label>Hardware</label>
@@ -872,12 +879,12 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         </select>
                         <select id="filterCodec" onchange="applyFilters()">
                             <option value="">Codec: All</option>
-                            <option value="hevc">HEVC only</option>
-                            <option value="!hevc">Non-HEVC only</option>
+                            <option value="hevc">H.265 only</option>
+                            <option value="!hevc">Non-H.265 only</option>
                             <option value="h264">H.264 only</option>
                         </select>
                         <select id="filterHdr" onchange="applyFilters()">
-                            <option value="">All</option>
+                            <option value="">Encoding: All</option>
                             <option value="hdr">HDR only</option>
                             <option value="sdr">SDR only</option>
                             <option value="dv">Dolby Vision</option>
@@ -891,6 +898,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <option value="">Status: All</option>
                             <option value="candidate">Encode Candidate</option>
                             <option value="encoded">Already Encoded</option>
+                            <option value="skipped">Skipped (Larger)</option>
                         </select>
                     </div>
                 </div>
@@ -1014,7 +1022,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <!-- GETTING STARTED -->
             <div class="help-section active" id="helpTab-getting-started">
                 <h3>Quick Start</h3>
-                <p>Recode converts your video library to HEVC (H.265), saving significant disk space while maintaining quality. Here's how to get started:</p>
+                <p>Recode converts your video library to H.265 (HEVC), saving significant disk space while maintaining quality. Here's how to get started:</p>
 
                 <div class="example-box">
                     <div class="example-title">Workflow</div>
@@ -1063,9 +1071,9 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
                 <h4>Encoding</h4>
                 <ul>
-                    <li><strong>GPU Encoding</strong> &mdash; NVIDIA NVENC hardware acceleration (10-50x faster than realtime)</li>
+                    <li><strong>GPU Encoding</strong> &mdash; NVIDIA NVENC, AMD VAAPI/AMF, Intel QSV/VAAPI hardware acceleration (10-50x faster than realtime)</li>
                     <li><strong>CPU Encoding</strong> &mdash; libx265 software encoding when no GPU is available</li>
-                    <li><strong>H.265 (HEVC) &amp; H.264</strong> &mdash; Configurable codec and quality</li>
+                    <li><strong>H.265 &amp; H.264</strong> &mdash; Configurable codec and quality</li>
                     <li><strong>Presets</strong> &mdash; Auto, Film, Animation, Grain, Custom with per-preset CQ/bitrate/speed</li>
                     <li><strong>Resolution Scaling</strong> &mdash; Downscale 4K to 1080p, 1440p, 720p, or keep original</li>
                     <li><strong>Test Mode</strong> &mdash; Encode only the first 5 minutes for quick quality checks. Originals are never deleted in test mode even if "Delete original" is enabled</li>
@@ -1099,7 +1107,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li><strong>Auto Detection</strong> &mdash; Detects all NVIDIA GPUs with VRAM-based concurrency</li>
                     <li><strong>Auto Load-Balance</strong> &mdash; Distributes across all local GPUs and remote servers equally</li>
                     <li><strong>Reverse-Connect</strong> &mdash; GPU servers connect OUT to clients, NAT-friendly, no port forwarding on GPU side</li>
-                    <li><strong>FUSE Mount</strong> &mdash; Stream input on-demand, encoding starts immediately, 8MB chunks for WAN</li>
+                    <li><strong>FUSE Mount</strong> &mdash; Stream input on-demand, encoding starts immediately, 256KB chunks for fast LAN streaming</li>
                     <li><strong>Hardware Probing</strong> &mdash; Tests actual GPU encoder capabilities, auto-strips unsupported flags</li>
                     <li><strong>Cancel Propagation</strong> &mdash; Cancelling kills ffmpeg on remote, disconnect auto-cleans FUSE mounts</li>
                     <li><strong>Auto Cleanup</strong> &mdash; Lazy FUSE unmount, temp files removed on cancel, failure, or disconnect</li>
@@ -1523,7 +1531,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h3>GPU &amp; Concurrency</h3>
 
                 <h4>Multi-GPU Support</h4>
-                <p>Recode automatically detects all NVIDIA GPUs and distributes encodes across them. Each GPU's capacity is determined by its VRAM:</p>
+                <p>Recode automatically detects NVIDIA, AMD, and Intel GPUs and distributes encodes across them. Each GPU's capabilities are tested on startup with live results in Settings. Capacity is determined by VRAM:</p>
                 <div class="example-box">
                     <div class="example-title">VRAM-based limits (1 encode per 2 GB)</div>
                     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;">
@@ -1927,7 +1935,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li><strong>Start / Stop</strong> — Control whether the queue processes jobs</li>
                     <li><strong>Stop &amp; Cancel</strong> — Stop queue and kill all active encodes</li>
                     <li><strong>Remove All</strong> — Clear all queued jobs (active encodes unaffected)</li>
-                    <li>Each queue item shows: encoder (GPU/CPU HEVC/H.264), resolution, HDR type, file size, preset, CQ, bitrate, speed</li>
+                    <li>Each queue item shows: encoder (Local/Remote + H.265/H.264), resolution, HDR type, file size, preset, CQ</li>
                     <li>Each active encode shows a spinning recode icon between the Original and Encoding detail cards</li>
                 </ul>
 
@@ -2010,7 +2018,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-about">
                 <div style="text-align:center;padding:20px 0 10px 0;">
                     <div style="font-size:28px;font-weight:700;background:linear-gradient(135deg, var(--accent), var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Recode</div>
-                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v2.23.2</div>
+                    <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;" id="aboutVersion">v3.0.0</div>
                 </div>
 
                 <div style="text-align:center;margin:16px 0;">
@@ -2018,7 +2026,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </div>
 
                 <h4>About</h4>
-                <p>Recode is a web-based tool for batch re-encoding media libraries to HEVC (H.265) using GPU-accelerated encoding (NVENC) or CPU encoding (libx265). It integrates with Plex Media Server for library scanning, automatic webhook-triggered encoding, and post-encode library rescans.</p>
+                <p>Recode is a web-based tool for batch re-encoding media libraries to H.265 (HEVC) using GPU-accelerated encoding (NVENC) or CPU encoding (libx265). It integrates with Plex Media Server for library scanning, automatic webhook-triggered encoding, and post-encode library rescans.</p>
 
                 <h4>System Information</h4>
                 <div id="aboutSystemInfo" style="margin-bottom:16px;">
@@ -2044,8 +2052,18 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
-                            <div style="font-weight:600;color:var(--text-primary);">v2.23.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <div style="font-weight:600;color:var(--text-primary);">v3.0.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Consistent UI redesign</strong> &mdash; all lists (Queue, Encoding, Done, Failed, Cancelled, Skipped) share the same compact layout with unified badge colours</li>
+                                <li><strong>Badge colour system</strong> &mdash; unique colours for each badge type: H.265 (green), H.264 (cyan), Local/Remote (blue), HDR (amber), Dolby Vision (purple), CQ (coral), Speed (green), Preset (grey), Audio (orange)</li>
+                                <li><strong>Separate hardware &amp; codec badges</strong> &mdash; "Remote: Dev" and "H.265" shown as distinct badges instead of combined</li>
+                                <li><strong>H.265 terminology</strong> &mdash; replaced all "HEVC" labels with "H.265" across badges, filters, and dropdowns</li>
+                                <li><strong>Progress bar runtime</strong> &mdash; elapsed time shown alongside percentage in the encoding progress bar</li>
+                                <li><strong>RAM/VRAM colour coding</strong> &mdash; memory values change from green to orange to red as usage increases in graph titles and header</li>
+                                <li><strong>Skipped (Larger) filter</strong> &mdash; scan results show files tagged as RECODE_SKIPPED with dedicated status badge and filter option</li>
+                                <li><strong>Result badges in Done list</strong> &mdash; file sizes, saved percentage, and elapsed time shown as styled badges</li>
+                                <li><strong>Filter labels</strong> &mdash; all dropdowns show their category (Codec: All, Encoding: All, Res: All, Status: All)</li>
+                                <li><strong>Help &amp; docs audit</strong> &mdash; README, Help, Setup wizard updated for AMD/Intel GPU support, 256KB FUSE chunks, all features</li>
                                 <li><strong>Remote GPU auto-disable</strong> &mdash; GPUs automatically disabled after 3 consecutive failures, preventing queue churn from crashed GPUs</li>
                                 <li><strong>Remote GPU power toggle</strong> &mdash; manually enable/disable connected GPUs with power button, matching local GPU controls</li>
                                 <li><strong>Skipped file tagging</strong> &mdash; files discarded as larger get RECODE_SKIPPED metadata tag via mkvpropedit, excluded from future scans</li>
@@ -2689,7 +2707,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <div class="form-group" style="margin:0;">
                                 <label style="font-size:11px;">Video Codec</label>
                                 <select id="setVideoCodec" style="font-size:12px;">
-                                    <option value="hevc">HEVC (H.265)</option>
+                                    <option value="hevc">H.265 (HEVC)</option>
                                     <option value="h264">H.264 (AVC)</option>
                                 </select>
                             </div>
@@ -3296,8 +3314,8 @@ function updateGpuServerStatus() {
                         <div style="display:flex;flex-direction:column;gap:2px;">
                             <span style="background:${encColor};color:${encTextColor};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;text-align:center;">${encLabel}</span>
                             <div style="display:flex;gap:3px;">
-                                ${hasH264 ? '<span class="badge badge-sm" style="background:rgba(63,185,80,0.15);color:#3fb950;flex:1;text-align:center;">H.264</span>' : ''}
-                                ${hasHevc ? '<span class="badge badge-sm badge-codec" style="flex:1;text-align:center;">H.265</span>' : ''}
+                                ${hasH264 ? '<span class="badge badge-sm badge-h264" style="flex:1;text-align:center;">H.264</span>' : ''}
+                                ${hasHevc ? '<span class="badge badge-sm badge-h265" style="flex:1;text-align:center;">H.265</span>' : ''}
                             </div>
                         </div>
                         <div>${capsHtml}</div>
@@ -3820,17 +3838,34 @@ function getHwLabel(s) {
     if (s.use_cpu) return 'CPU';
     const ri = s._remote_server_idx;
     if (ri != null && ri >= 0) {
-        // Try explicit name, then parse from gpu_target, then fallback
         let name = s._remote_gpu_name || '';
         if (!name && s.gpu_target && s.gpu_target.startsWith('remote:')) {
             name = s.gpu_target.split(':').slice(1).join(':');
         }
         if (name && name !== 'remote') return 'Remote: ' + name;
-        return 'Remote GPU';
+        return 'Remote';
     }
     const gid = s.gpu_id;
-    if (gid != null && gid !== 'auto' && gid !== '-1' && gid !== -1) return 'GPU ' + gid;
-    return 'GPU';
+    if (gid != null && gid !== 'auto' && gid !== '-1' && gid !== -1) return 'Local: GPU' + gid;
+    return 'Local';
+}
+function getCodecLabel(s) {
+    const vc = s.video_codec || 'hevc';
+    return vc === 'h264' ? 'H.264' : 'H.265';
+}
+function fmtCodec(c) {
+    if (!c) return '?';
+    const cl = c.toLowerCase();
+    if (cl === 'hevc' || cl === 'h265') return 'H.265';
+    if (cl === 'h264' || cl === 'avc') return 'H.264';
+    return c.toUpperCase();
+}
+function codecBadgeClass(c) {
+    if (!c) return 'badge-codec';
+    const cl = c.toLowerCase();
+    if (cl === 'hevc' || cl === 'h265') return 'badge-h265';
+    if (cl === 'h264' || cl === 'avc') return 'badge-h264';
+    return 'badge-codec';
 }
 function buildOutputFilename(fileInfo, settings) {
     const stem = fileInfo.filename.replace(/\.[^.]+$/, '');
@@ -4183,12 +4218,12 @@ function jobFilterBarHtml(prefix, searchVal, sortVal, topNVal, codecVal, hdrVal)
         </select>
         <select onchange="${prefix}FilterCodec=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
             <option value="" ${codecVal===''?'selected':''}>Codec: All</option>
-            <option value="hevc" ${codecVal==='hevc'?'selected':''}>HEVC only</option>
-            <option value="!hevc" ${codecVal==='!hevc'?'selected':''}>Non-HEVC only</option>
+            <option value="hevc" ${codecVal==='hevc'?'selected':''}>H.265 only</option>
+            <option value="!hevc" ${codecVal==='!hevc'?'selected':''}>Non-H.265 only</option>
             <option value="h264" ${codecVal==='h264'?'selected':''}>H.264 only</option>
         </select>
         <select onchange="${prefix}FilterHdr=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
-            <option value="" ${hdrVal===''?'selected':''}>All</option>
+            <option value="" ${hdrVal===''?'selected':''}>Encoding: All</option>
             <option value="hdr" ${hdrVal==='hdr'?'selected':''}>HDR only</option>
             <option value="sdr" ${hdrVal==='sdr'?'selected':''}>SDR only</option>
             <option value="dv" ${hdrVal==='dv'?'selected':''}>Dolby Vision</option>
@@ -4281,7 +4316,7 @@ function renderQueue() {
         const totalCount = (f.audio_streams || []).length;
         const audioLabel = acfg.length > 0 ? `${includedCount}/${totalCount} audio` : `${totalCount} audio`;
         const vc = job.settings.video_codec || 'hevc';
-        const vcLabel = vc === 'h264' ? 'H.264' : 'HEVC';
+        const vcLabel = vc === 'h264' ? 'H.264' : 'H.265';
         const gpuId = job.settings.gpu_id;
         const hwLabel = getHwLabel(job.settings);
         const dm = job.settings.dv_mode || 'skip';
@@ -4291,32 +4326,31 @@ function renderQueue() {
         const origHdrBadge = isDv ? 'badge-dv' : f.hdr_type === 'SDR' ? 'badge-sdr' : 'badge-hdr';
         const targetHdrBadge = targetHdr.startsWith('DV') ? 'badge-dv' : targetHdr === 'SDR' ? 'badge-sdr' : 'badge-hdr';
 
-        html += `<div class="queue-item" draggable="true" ondragstart="onDragStart(event,'${job.id}')" ondragend="onDragEnd(event)" ondragover="onDragOver(event)" ondrop="onDrop(event,'${job.id}')">
-            <span class="drag-handle" title="Drag to reorder">${svgIcon('grip-vertical', 14)}</span>
-            <div class="qi-num">${globalIdx + 1}</div>
-            <div class="qi-info">
-                <div class="qi-name" title="${escHtml(f.path)}">${escHtml(f.filename)}</div>
-                <div style="font-size:11px;color:var(--text-muted);margin:-2px 0 2px 0;">→ ${escHtml(buildOutputFilename(f, job.settings))}</div>
-                <div class="qi-detail">
+        html += `<div class="history-item" style="flex-wrap:wrap;cursor:grab;" draggable="true" ondragstart="onDragStart(event,'${job.id}')" ondragend="onDragEnd(event)" ondragover="onDragOver(event)" ondrop="onDrop(event,'${job.id}')">
+            <div style="display:flex;align-items:center;gap:4px;color:var(--text-muted);flex-shrink:0;">
+                ${svgIcon('grip-vertical', 14)}
+                <span style="font-size:12px;font-weight:700;min-width:24px;text-align:center;">${globalIdx + 1}</span>
+            </div>
+            <div class="hi-info" style="flex:1;min-width:0;">
+                <div class="hi-name" title="${escHtml(f.path)}">${escHtml(f.filename)}</div>
+                <div class="hi-detail">
                     <span style="color:var(--text-muted);font-size:10px;">Source:</span>
-                    <span class="badge badge-sm badge-codec">${f.codec ? f.codec.toUpperCase() : '?'}</span>
+                    <span class="badge badge-sm ${codecBadgeClass(f.codec)}">${fmtCodec(f.codec)}</span>
                     <span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${origHdrBadge}">${origHdr}</span>
                     <span class="badge badge-sm badge-size">${f.size_human}</span>
                     <span class="badge badge-sm badge-sdr">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
                     <span class="badge badge-sm badge-audio">${audioLabel}</span>
                     <span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span>
-                    <span class="badge badge-sm badge-codec">${hwLabel} ${vcLabel}</span>
+                    <span class="badge badge-sm badge-hw">${hwLabel}</span>
+                    <span class="badge badge-sm ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>
                     <span class="badge badge-sm badge-res">${(job.settings.resize && job.settings.resize !== 'original') ? cleanRes(job.settings.resize) : cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${targetHdrBadge}">${targetHdr}</span>
-                    <span class="badge badge-sm badge-sdr">${job.settings.preset || 'auto'}</span>
-                    <span class="badge badge-sm badge-audio">CQ${job.settings.resolved_cq || job.settings.cq || '?'}</span>
-                    <span class="badge badge-sm badge-res">${job.settings.resolved_maxbitrate || job.settings.maxbitrate || '?'}</span>
-                    <span class="badge badge-sm badge-codec">${job.settings.resolved_speed || job.settings.speed || '?'}</span>
-                    <span class="badge badge-sm badge-audio">${job.settings.audio_codec === 'copy' ? 'Passthrough' : (job.settings.audio_codec || 'auto').replace('lib','')}</span>
+                    <span class="badge badge-sm badge-preset">${job.settings.preset || 'auto'}</span>
+                    <span class="badge badge-sm badge-cq">CQ${job.settings.resolved_cq || job.settings.cq || '?'}</span>
                 </div>
             </div>
-            <button class="btn btn-danger btn-sm" onclick="removeFromQueue('${job.id}')">Remove</button>
+            <button class="btn btn-danger btn-sm" style="font-size:11px;padding:4px 8px;" onclick="removeFromQueue('${job.id}')">${svgIcon('x-circle', 12)}</button>
         </div>`;
     });
 
@@ -4402,9 +4436,9 @@ function renderEncoding() {
             const f = job.file_info;
             const p = job.progress || {};
             const vc = job.settings.video_codec || 'hevc';
-            const vcLabel = vc === 'h264' ? 'H.264' : 'HEVC';
+            const vcLabel = vc === 'h264' ? 'H.264' : 'H.265';
             const hwLabel = getHwLabel(job.settings);
-            const encoder = `${hwLabel} ${vcLabel}`;
+            const encoder = hwLabel;
             const acfg = job.settings.audio_config || [];
             let audioDetail = '';
             if (acfg.length > 0) {
@@ -4443,8 +4477,8 @@ function renderEncoding() {
                 <div style="cursor:pointer;" onclick="toggleJobDetail('${job.id}')">
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                         <span class="expand-arrow" id="jobarr-${job.id}" style="transition:transform 0.2s;display:inline-flex;${isOpen ? 'transform:rotate(90deg);' : ''}">${svgIcon('chevron-right', 12)}</span>
-                        <span class="badge badge-sm badge-hdr">Recode</span>
-                        <span class="badge badge-sm badge-codec">${getHwLabel(job.settings)}</span>
+                        <span class="badge badge-sm badge-hw">${getHwLabel(job.settings)}</span>
+                        <span class="badge badge-sm ${(job.settings.video_codec||'hevc') === 'h264' ? 'badge-h264' : 'badge-h265'}">${getCodecLabel(job.settings)}</span>
                         <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(f.path)}">${escHtml(f.filename)}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySize-${job.id}">${f.size_human} → ${curSize}</span>
                         <span style="font-size:11px;color:var(--text-muted);">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
@@ -4456,24 +4490,25 @@ function renderEncoding() {
                     </div>
                     <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;padding-left:22px;font-size:10px;">
                         <span style="color:var(--text-muted);">Source:</span>
-                        <span class="badge badge-sm badge-codec">${f.codec ? f.codec.toUpperCase() : '?'}</span>
+                        <span class="badge badge-sm ${codecBadgeClass(f.codec)}">${fmtCodec(f.codec)}</span>
                         <span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>
                         <span class="badge badge-sm ${(() => { const h = f.hdr_type||'SDR'; return h.startsWith('Dolby') ? 'badge-dv' : h === 'SDR' ? 'badge-sdr' : 'badge-hdr'; })()}">${(() => { const h = f.hdr_type||'SDR'; return h.startsWith('Dolby Vision') ? h.replace('Dolby Vision','DV') : h; })()}</span>
+                        <span class="badge badge-sm badge-size">${f.size_human}</span>
+                        <span class="badge badge-sm badge-sdr">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
+                        <span class="badge badge-sm badge-audio">${(() => { const ac = s.audio_config || []; const inc = ac.length > 0 ? ac.filter(a => a.include).length : (f.audio_streams || []).length; const tot = (f.audio_streams || []).length; return ac.length > 0 ? inc + '/' + tot + ' audio' : tot + ' audio'; })()}</span>
                         <span style="color:var(--text-muted);margin:0 2px;">→</span>
-                        <span class="badge badge-sm badge-codec">${encoder}</span>
+                        <span class="badge badge-sm badge-hw">${encoder}</span>
+                        <span class="badge badge-sm ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>
                         <span class="badge badge-sm badge-res">${(s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label)}</span>
                         <span class="badge badge-sm ${(() => { const dm = s.dv_mode||'skip'; const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); const t = (dm==='encode_dv'&&(isDv||f.hdr_type==='HDR10'))?'DV P8.4':(dm==='hdr10'&&isDv)?'HDR10':(f.hdr_type||'SDR'); return t.startsWith('DV')?'badge-dv':t==='SDR'?'badge-sdr':'badge-hdr'; })()}">${(() => { const dm = s.dv_mode||'skip'; const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return (dm==='encode_dv'&&(isDv||f.hdr_type==='HDR10'))?'DV P8.4':(dm==='hdr10'&&isDv)?'HDR10':(f.hdr_type||'SDR'); })()}</span>
-                        <span class="badge badge-sm badge-sdr">${presetLabel}</span>
-                        <span class="badge badge-sm badge-audio">CQ${rcq}</span>
-                        <span class="badge badge-sm badge-res">${rbit}</span>
-                        <span class="badge badge-sm badge-codec">${rspd}</span>
-                        <span class="badge badge-sm badge-audio">${s.audio_codec === 'copy' ? 'Pass' : (s.audio_codec || 'auto').replace('lib','')}</span>
+                        <span class="badge badge-sm badge-preset">${presetLabel}</span>
+                        <span class="badge badge-sm badge-cq">CQ${rcq}</span>
                     </div>
                 </div>
                 <div style="margin-top:6px;">
                     <div class="progress-bar-container" style="height:18px;border-radius:9px;margin-bottom:0;">
                         <div class="progress-bar-fill encoding${job.paused ? ' paused' : ''}${p.phase === 'preparing' ? ' preparing' : ''}" id="encodeBarFill-${job.id}" style="width: ${p.phase === 'preparing' ? '100' : (p.pct||0)}%"></div>
-                        <div class="progress-bar-text" id="encodeBarText-${job.id}" style="font-size:11px;line-height:18px;">${p.phase === 'preparing' ? 'Preparing...' : _fmtPct(p.pct||0)}${job.paused ? ' (Paused)' : ''}</div>
+                        <div class="progress-bar-text" id="encodeBarText-${job.id}" style="font-size:11px;line-height:18px;">${p.phase === 'preparing' ? 'Preparing...' : _fmtPct(p.pct||0) + (job.started_at ? '  ·  ' + formatTime(Math.floor(Date.now()/1000 - job.started_at)) : '')}${job.paused ? ' (Paused)' : ''}</div>
                     </div>
                 </div>
                 <div id="jobdet-${job.id}" style="${isOpen ? '' : 'display:none;'}margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
@@ -4481,7 +4516,7 @@ function renderEncoding() {
                         <div style="padding:8px;background:var(--bg-tertiary);border-radius:4px;">
                             <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;margin-bottom:4px;">Original</div>
                             <div style="font-weight:600;">${f.size_human}</div>
-                            <div>${f.codec.toUpperCase()} · ${cleanRes(f.resolution_label)} · ${f.hdr_type}</div>
+                            <div>${fmtCodec(f.codec)} · ${cleanRes(f.resolution_label)} · ${f.hdr_type}</div>
                             <div style="font-size:11px;color:var(--text-secondary);">${f.duration_secs && f.size_bytes ? 'Bitrate ' + (f.size_bytes * 8 / f.duration_secs / 1000000).toFixed(1) + ' Mbps' : ''}${f.audio_streams && f.audio_streams.length ? ' · Audio: ' + f.audio_streams.map(a => a.codec.toUpperCase() + ' ' + (a.channels === 6 ? '5.1' : a.channels === 8 ? '7.1' : a.channels + 'ch')).join(', ') : ''}</div>
                             <div style="color:var(--text-muted);margin-top:2px;word-break:break-all;font-size:11px;">${escHtml(f.path)}</div>
                         </div>
@@ -4507,17 +4542,17 @@ function renderEncoding() {
                     <div style="padding:8px;background:var(--bg-tertiary);border-radius:4px;font-size:12px;margin-bottom:10px;">
                         <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;margin-bottom:4px;">Settings</div>
                         <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                            <span class="badge badge-codec">${encoder}</span>
-                            <span class="badge badge-sdr">${presetLabel}</span>
-                            <span class="badge badge-audio">CQ ${rcq}</span>
-                            <span class="badge badge-res">Max ${rbit}</span>
-                            <span class="badge badge-codec">${rspd}</span>
+                            <span class="badge badge-hw">${encoder}</span>
+                            <span class="badge badge-preset">${presetLabel}</span>
+                            <span class="badge badge-cq">CQ ${rcq}</span>
+                            <span class="badge badge-bitrate">Max ${rbit}</span>
+                            <span class="badge badge-speed">${rspd}</span>
                             <span class="badge badge-audio">${audioCodec} ${audioBr}</span>
                             ${(s.resize && s.resize !== 'original') ? `<span class="badge badge-res">Resize: ${cleanRes(s.resize)}</span>` : ''}
                             ${s.delete_original ? '<span class="badge badge-fail">Delete original</span>' : ''}
                             ${s.discard_larger ? '<span class="badge badge-skip">Discard if larger</span>' : ''}
                             ${s.english_only ? '<span class="badge badge-sdr">English only</span>' : ''}
-                            ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'keep' && isDv ? '<span class="badge badge-hdr">DV Keep</span>' : s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-hdr">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-hdr">DV P8.4</span>' : ''; })()}
+                            ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'keep' && isDv ? '<span class="badge badge-dv">DV Keep</span>' : s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-dv">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-dv">DV P8.4</span>' : ''; })()}
                             ${s.skip_4k ? '<span class="badge badge-skip">Skip 4K</span>' : ''}
                             ${s.hdr_only ? '<span class="badge badge-hdr">HDR only</span>' : ''}
                         </div>
@@ -4670,6 +4705,13 @@ function _estimatePct(p) {
 function _fmtPct(pct) {
     return pct < 10 ? pct.toFixed(1) + '%' : Math.round(pct) + '%';
 }
+function _memColor(used, total) {
+    if (!total || total <= 0) return 'var(--text-secondary)';
+    const pct = used / total * 100;
+    if (pct >= 90) return '#f85149';
+    if (pct >= 70) return '#f0883e';
+    return '#3fb950';
+}
 
 function renderProgress() {
     const activeJobs = (state.active || []).filter(j => j.status === 'encoding');
@@ -4694,7 +4736,15 @@ function renderProgress() {
             }
         }
         const barText = document.getElementById('encodeBarText-' + job.id);
-        if (barText) barText.textContent = isPreparing ? 'Preparing...' : _fmtPct(estPct);
+        if (barText) {
+            if (isPreparing) {
+                barText.textContent = 'Preparing...';
+            } else {
+                const elapsed = job.started_at ? Math.floor(Date.now()/1000 - job.started_at) : 0;
+                const elStr = elapsed > 0 ? formatTime(elapsed) : '';
+                barText.textContent = _fmtPct(estPct) + (elStr ? '  ·  ' + elStr : '');
+            }
+        }
         if (grid) grid.innerHTML = renderStatsGrid(p, parseFloat(grid.dataset.started) || 0);
         const sumPct = document.getElementById('encSummaryPct-' + job.id);
         const sumSpd = document.getElementById('encSummarySpeed-' + job.id);
@@ -4745,7 +4795,8 @@ function drawGraphs(data) {
     const cpuPts = data.cpu || [];
     if (cpuLabel && cpuPts.length > 0) {
         const cpuName = data.cpu_name ? data.cpu_name.replace(/\(R\)|\(TM\)/g, '').replace(/\s+/g, ' ').trim() : 'CPU';
-        const memInfo = data.mem_total ? ` &nbsp; RAM: ${data.mem_used}/${data.mem_total} GB` : '';
+        const ramColor = data.mem_total ? _memColor(parseFloat(data.mem_used), parseFloat(data.mem_total)) : '';
+        const memInfo = data.mem_total ? ` &nbsp; RAM: <span style="color:${ramColor}">${data.mem_used}/${data.mem_total} GB</span>` : '';
         if (isCompact) {
             cpuLabel.innerHTML = `CPU &nbsp; ${Math.round(cpuPts[cpuPts.length - 1].v)}%`;
         } else {
@@ -4765,11 +4816,11 @@ function drawGraphs(data) {
             const gi = perGpu['0'] || {};
             const gpuName = gi.name || 'GPU';
             const tempStr = lastTemp > 0 ? ` &nbsp; Temp: ${lastTemp}&deg;C` : '';
-            const memStr = gi.mem_total ? ` &nbsp; VRAM: ${(gi.mem_used/1024).toFixed(1)}/${(gi.mem_total/1024).toFixed(1)} GB` : '';
+            const vramColor = gi.mem_total ? _memColor(gi.mem_used, gi.mem_total) : '';
             if (isCompact) {
                 gpuLabel.innerHTML = `GPU0 ${gpuPts[gpuPts.length - 1].v}%`;
             } else {
-                gpuLabel.innerHTML = `GPU0 ${gpuPts[gpuPts.length - 1].v}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gi.mem_total ? (gi.mem_used/1024).toFixed(1) + '/' + (gi.mem_total/1024).toFixed(1) + 'G' : ''}`;
+                gpuLabel.innerHTML = `GPU0 ${gpuPts[gpuPts.length - 1].v}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gi.mem_total ? '<span style="color:' + vramColor + '">' + (gi.mem_used/1024).toFixed(1) + '/' + (gi.mem_total/1024).toFixed(1) + 'G</span>' : ''}`;
             }
         }
         const memPctPts = (perGpu['0'] || {}).mem_pct || [];
@@ -4798,12 +4849,12 @@ function drawGraphs(data) {
                     const lastTemp = gd.temp.length > 0 ? gd.temp[gd.temp.length - 1].v : 0;
                     const gpuName = gd.name || `GPU ${i}`;
                     const tempStr = lastTemp > 0 ? ` &nbsp; Temp: ${lastTemp}&deg;C` : '';
-                    const memStr = gd.mem_total ? ` &nbsp; VRAM: ${(gd.mem_used/1024).toFixed(1)}/${(gd.mem_total/1024).toFixed(1)} GB` : '';
+                    const vColor = gd.mem_total ? _memColor(gd.mem_used, gd.mem_total) : '';
                     const no4k = gd.can_4k === false ? ' <span style="color:var(--text-muted);font-size:9px;opacity:0.7;">(no 4K)</span>' : '';
                     if (isCompact) {
                         lbl.innerHTML = `GPU${i} ${lastUtil}%${no4k}`;
                     } else {
-                        lbl.innerHTML = `GPU${i} ${lastUtil}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gd.mem_total ? (gd.mem_used/1024).toFixed(1) + '/' + (gd.mem_total/1024).toFixed(1) + 'G' : ''}${no4k}`;
+                        lbl.innerHTML = `GPU${i} ${lastUtil}% ${lastTemp > 0 ? lastTemp + '°' : ''} ${gd.mem_total ? '<span style="color:' + vColor + '">' + (gd.mem_used/1024).toFixed(1) + '/' + (gd.mem_total/1024).toFixed(1) + 'G</span>' : ''}${no4k}`;
                     }
                 }
             }
@@ -4818,7 +4869,10 @@ function drawGraphs(data) {
         const memInfo = data.mem_total ? `${data.mem_used}/${data.mem_total}GB` : '';
         const hdrCompact = window.innerWidth < 600;
         let parts = [`<span title="${cpuName}">CPU ${cpuUtil}%</span>`];
-        if (memInfo && !hdrCompact) parts.push(`<span>RAM ${memInfo}</span>`);
+        if (memInfo && !hdrCompact) {
+            const hdrRamColor = data.mem_total ? _memColor(parseFloat(data.mem_used), parseFloat(data.mem_total)) : '';
+            parts.push(`<span>RAM <span style="color:${hdrRamColor}">${memInfo}</span></span>`);
+        }
         for (let i = 0; i < gpuCount; i++) {
             const gd = perGpu[String(i)];
             if (gd) {
@@ -5135,9 +5189,9 @@ function renderHistory() {
         const rcq = s.resolved_cq || s.cq || '?';
         const rbit = s.resolved_maxbitrate || s.maxbitrate || '?';
         const rspd = s.resolved_speed || s.speed || '?';
-        const vcLabel = (s.video_codec || 'hevc') === 'h264' ? 'H.264' : 'HEVC';
+        const vcLabel = (s.video_codec || 'hevc') === 'h264' ? 'H.264' : 'H.265';
         const hGpuId = s.gpu_id;
-        const encoderLabel = getHwLabel(s) + ' ' + vcLabel;
+        const encoderLabel = getHwLabel(s);
 
         const hDm = s.dv_mode || 'skip';
         const hIsDv = (f.hdr_type||'').startsWith('Dolby Vision');
@@ -5155,7 +5209,7 @@ function renderHistory() {
         let detailHtml = `<span class="badge badge-sm ${badgeClass}">${statusText}</span> `;
         // Source badges
         detailHtml += `<span style="color:var(--text-muted);font-size:10px;">Source:</span> `;
-        detailHtml += `<span class="badge badge-sm badge-codec">${f.codec ? f.codec.toUpperCase() : '?'}</span>`;
+        detailHtml += `<span class="badge badge-sm ${codecBadgeClass(f.codec)}">${fmtCodec(f.codec)}</span>`;
         detailHtml += `<span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>`;
         detailHtml += `<span class="badge badge-sm ${hOrigHdrBadge}">${hOrigHdr}</span>`;
         detailHtml += `<span class="badge badge-sm badge-size">${f.size_human}</span>`;
@@ -5163,26 +5217,27 @@ function renderHistory() {
         detailHtml += `<span class="badge badge-sm badge-audio">${hAudioLabel}</span>`;
         // Arrow + target badges
         detailHtml += `<span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span> `;
-        detailHtml += `<span class="badge badge-sm badge-codec">${hHwLabel} ${vcLabel}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-hw">${hHwLabel}</span>`;
+        detailHtml += `<span class="badge badge-sm ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>`;
         detailHtml += `<span class="badge badge-sm badge-res">${hTgtRes}</span>`;
         detailHtml += `<span class="badge badge-sm ${hTargetHdrBadge}">${hTargetHdr}</span>`;
-        detailHtml += `<span class="badge badge-sm badge-sdr">${presetLabel}</span>`;
-        detailHtml += `<span class="badge badge-sm badge-audio">CQ${rcq}</span>`;
-        // Result info
+        detailHtml += `<span class="badge badge-sm badge-preset">${presetLabel}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-cq">CQ${rcq}</span>`;
+        // Result info — sizes, saved %, elapsed
         if (job.result && job.result.orig_size) {
-            detailHtml += ` <span>${job.result.orig_size} → ${job.result.new_size}</span>`;
+            detailHtml += ` <span class="badge badge-sm badge-size">${job.result.orig_size} → ${job.result.new_size}</span>`;
             if (job.status === 'done') {
-                const cls = (job.result.saved_pct || 0) >= 0 ? '' : 'negative';
-                detailHtml += ` <span class="hi-saved ${cls}">${job.result.saved_pct >= 0 ? 'Saved' : 'Grew'} ${Math.abs(job.result.saved_pct)}%</span>`;
+                const savedPct = job.result.saved_pct || 0;
+                detailHtml += ` <span class="badge badge-sm ${savedPct >= 0 ? 'badge-done' : 'badge-skip'}">${savedPct >= 0 ? 'Saved' : 'Grew'} ${Math.abs(savedPct)}%</span>`;
             }
             if (isDiscarded) {
                 const pctBigger = job.result.orig_bytes > 0 ? Math.round((job.result.new_bytes - job.result.orig_bytes) / job.result.orig_bytes * 100) : 0;
                 detailHtml += ` <span class="badge badge-sm badge-skip">Larger (+${pctBigger}%)</span>`;
             }
         }
-        if (job.error && !isDiscarded) detailHtml += ` <span style="color:var(--text-muted)">${escHtml(job.error)}</span>`;
+        if (job.error && !isDiscarded) detailHtml += ` <span class="badge badge-sm badge-fail">${escHtml(job.error).substring(0, 60)}</span>`;
         const elapsed = job.finished_at && job.started_at ? formatTime(job.finished_at - job.started_at) : '';
-        if (elapsed) detailHtml += ` <span style="color:var(--text-muted)">${elapsed}</span>`;
+        if (elapsed) detailHtml += ` <span class="badge badge-sm badge-sdr">${elapsed}</span>`;
 
         const r = job.result || {};
         const hacfg = s.audio_config || [];
@@ -5194,7 +5249,7 @@ function renderHistory() {
         const origAudioStr = f.audio_streams && f.audio_streams.length ? f.audio_streams.map(a => a.codec.toUpperCase() + ' ' + (a.channels === 6 ? '5.1' : a.channels === 8 ? '7.1' : a.channels + 'ch')).join(', ') : '';
         const origDetails = `
             <div style="font-weight:600;margin-bottom:4px;">${r.orig_size || f.size_human || '?'}</div>
-            <div>${f.codec ? f.codec.toUpperCase() : '?'} · ${cleanRes(f.resolution_label || '?')} · ${f.hdr_type || 'SDR'}</div>
+            <div>${fmtCodec(f.codec)} · ${cleanRes(f.resolution_label || '?')} · ${f.hdr_type || 'SDR'}</div>
             <div style="font-size:11px;color:var(--text-secondary);">${f.duration_secs && f.size_bytes ? 'Bitrate ' + (f.size_bytes * 8 / f.duration_secs / 1000000).toFixed(1) + ' Mbps' : ''}${origAudioStr ? ' · Audio: ' + origAudioStr : ''}</div>
             <div style="color:var(--text-muted);margin-top:2px;word-break:break-all;">${escHtml(f.path)}</div>`;
 
@@ -5226,17 +5281,18 @@ function renderHistory() {
         expandContent += `<div style="margin-top:8px;padding:8px;background:var(--bg-tertiary);border-radius:4px;font-size:12px;">
             <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;margin-bottom:4px;">Settings</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <span class="badge badge-codec">${encoderLabel}</span>
-                <span class="badge badge-sdr">${presetLabel}</span>
-                <span class="badge badge-audio">CQ ${rcq}</span>
-                <span class="badge badge-res">Max ${rbit}</span>
-                <span class="badge badge-codec">${rspd}</span>
+                <span class="badge badge-hw">${encoderLabel}</span>
+                <span class="badge ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>
+                <span class="badge badge-preset">${presetLabel}</span>
+                <span class="badge badge-cq">CQ ${rcq}</span>
+                <span class="badge badge-bitrate">Max ${rbit}</span>
+                <span class="badge badge-speed">${rspd}</span>
                 <span class="badge badge-audio">${audioCodec} ${audioBitrate}</span>
                 ${(s.resize && s.resize !== 'original') ? `<span class="badge badge-res">Resize: ${cleanRes(s.resize)}</span>` : ''}
                 ${s.delete_original ? '<span class="badge badge-fail">Delete original</span>' : ''}
                 ${s.discard_larger ? '<span class="badge badge-skip">Discard if larger</span>' : ''}
-                ${s.english_only ? '<span class="badge badge-sdr">English only</span>' : ''}
-                ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'keep' && isDv ? '<span class="badge badge-hdr">DV Keep</span>' : s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-hdr">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-hdr">DV P8.4</span>' : ''; })()}
+                ${s.english_only ? '<span class="badge badge-preset">English only</span>' : ''}
+                ${(() => { const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return s.dv_mode === 'keep' && isDv ? '<span class="badge badge-dv">DV Keep</span>' : s.dv_mode === 'hdr10' && isDv ? '<span class="badge badge-dv">DV→HDR10</span>' : s.dv_mode === 'encode_dv' && (isDv || f.hdr_type === 'HDR10') ? '<span class="badge badge-dv">DV P8.4</span>' : ''; })()}
                 ${s.skip_4k ? '<span class="badge badge-skip">Skip 4K</span>' : ''}
                 ${s.hdr_only ? '<span class="badge badge-hdr">HDR only</span>' : ''}
             </div>
@@ -5504,7 +5560,8 @@ function applyFilters() {
     // Status filter
     const statusFilter = document.getElementById('filterStatus')?.value || '';
     if (statusFilter === 'candidate') files = files.filter(f => !f.output_exists);
-    else if (statusFilter === 'encoded') files = files.filter(f => f.output_exists);
+    else if (statusFilter === 'encoded') files = files.filter(f => f.output_exists && !f.recode_skipped);
+    else if (statusFilter === 'skipped') files = files.filter(f => f.recode_skipped);
 
     // Sort — dropdown sort takes priority, then column sort, then default name sort
     const sort = document.getElementById('filterSort').value;
@@ -5671,8 +5728,8 @@ function renderScanResultsFiltered(files) {
         const realIdx = startIdx + fi;
         const f = pageFiles[fi];
         const hdrBadge = f.hdr_type.startsWith('Dolby Vision') ? 'badge-dv' : f.hdr_type === 'SDR' ? 'badge-sdr' : 'badge-hdr';
-        const codecBadge = f.is_hevc ? 'badge-hevc' : 'badge-codec';
-        let statusText = f.output_exists ? '<span class="badge badge-done" title="Already encoded by Recode">Encoded</span>' : '<span class="badge badge-codec" title="Ready to be encoded">Candidate</span>';
+        const codecBadge = codecBadgeClass(f.codec);
+        let statusText = f.recode_skipped ? '<span class="badge badge-skip" title="Previously encoded but larger than original">Skipped (Larger)</span>' : f.output_exists ? '<span class="badge badge-done" title="Already encoded by Recode">Encoded</span>' : '<span class="badge badge-hw" title="Ready to be encoded">Candidate</span>';
         const audioStreams = f.audio_streams || [];
         const hasAudio = audioStreams.length > 0;
 
@@ -5724,7 +5781,7 @@ function renderScanResultsFiltered(files) {
             <td>
                 <span class="badge badge-res">${resLabel}</span>
                 <div class="file-meta" style="margin-top:3px;">
-                    <span class="badge ${codecBadge}">${f.codec.toUpperCase()}</span>
+                    <span class="badge ${codecBadge}">${fmtCodec(f.codec)}</span>
                     <span class="badge ${hdrBadge}" title="${f.hdr_type}">${f.hdr_type.startsWith('Dolby Vision') ? f.hdr_type.replace('Dolby Vision', 'DV') : f.hdr_type}</span>
                 </div>
             </td>
@@ -5993,8 +6050,8 @@ async function renderGpuToggles() {
                 <div style="display:flex;flex-direction:column;gap:2px;">
                     <span style="background:${encColor};color:${encTextColor};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;text-align:center;">${encLabel}</span>
                     <div style="display:flex;gap:3px;">
-                        <span class="badge badge-sm" style="background:rgba(63,185,80,0.15);color:#3fb950;flex:1;text-align:center;">H.264</span>
-                        <span class="badge badge-sm badge-codec" style="flex:1;text-align:center;">H.265</span>
+                        <span class="badge badge-sm badge-h264" style="flex:1;text-align:center;">H.264</span>
+                        <span class="badge badge-sm badge-h265" style="flex:1;text-align:center;">H.265</span>
                     </div>
                 </div>
                 <div>${capsTable}</div>
@@ -7435,7 +7492,7 @@ function renderLibraryProfiles() {
                 <div class="form-group" style="margin:0;">
                     <label style="font-size:11px;">Video Codec</label>
                     <select onchange="updateLibProfile('${escHtml(lpath)}','video_codec',this.value)" style="font-size:12px;">
-                        <option value="hevc" ${(p.video_codec||'hevc')==='hevc'?'selected':''}>HEVC (H.265)</option>
+                        <option value="hevc" ${(p.video_codec||'hevc')==='hevc'?'selected':''}>H.265 (HEVC)</option>
                         <option value="h264" ${p.video_codec==='h264'?'selected':''}>H.264 (AVC)</option>
                     </select>
                 </div>

@@ -60,7 +60,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "2.23.2"
+VERSION = "3.0.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -1111,6 +1111,7 @@ def cache_row_to_dict(row: sqlite3.Row) -> dict:
         "has_dovi": bool(row["has_dovi"]),
         "dovi_profile": row["dovi_profile"] if "dovi_profile" in row.keys() else None,
         "output_exists": output_exists,
+        "recode_skipped": recode_tag.startswith("SKIPPED:") if recode_tag else False,
         "suggestion": {
             "level": row["suggestion_level"],
             "text": row["suggestion_text"],
@@ -6150,6 +6151,7 @@ async def scan_directory(req: ScanRequest):
             "sub_streams": info.sub_streams,
             "is_hevc": info.is_hevc, "has_dovi": info.has_dovi, "dovi_profile": info.dovi_profile, "hdr10_metadata": info.hdr10_metadata,
             "output_exists": info.output_exists,
+            "recode_skipped": info.recode_tag.startswith("SKIPPED:") if info.recode_tag else False,
             "suggestion": suggestion,
         }
 
