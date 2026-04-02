@@ -2,7 +2,7 @@
 
 **GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-3.3.0-blue)
+![Version](https://img.shields.io/badge/version-3.3.1-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -13,6 +13,7 @@
 - **CPU Encoding** — libx265 software encoding when no GPU is available
 - **H.265 & H.264** — Encode to H.265 or H.264 with configurable quality
 - **Presets** — Auto, Film, Animation, Grain, Custom with per-preset CQ/bitrate/speed
+- **Auto Preset Config** — Configurable CQ/bitrate/speed per resolution tier (4K/1080p/SD) in Settings
 - **Constant Quality (CQ)** — Configurable quality level with max bitrate cap
 - **Resolution Scaling** — Downscale 4K to 1080p, 1440p, 720p, or keep original
 - **Test Mode** — Encode only the first 5 minutes for quick quality checks (originals never deleted)

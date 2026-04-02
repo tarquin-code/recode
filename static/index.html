@@ -86,7 +86,7 @@
 
 body { background: var(--bg-primary); color: var(--text-primary); font-family: var(--font); font-size: 14px; line-height: 1.5; min-height: 100vh; }
 
-.app { display: flex; flex-direction: column; min-height: 100vh; }
+.app { display: flex; flex-direction: column; height: 100vh; }
 
 header { background: var(--bg-secondary); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
 .header-left { display: flex; align-items: center; gap: 12px; }
@@ -94,12 +94,12 @@ header { background: var(--bg-secondary); border-bottom: 1px solid var(--border)
 [data-theme="light"] .logo { color: var(--accent); }
 .logo-sub { font-size: 12px; color: var(--text-muted); font-weight: 400; }
 .status-indicators { display: flex; gap: 12px; align-items: center; }
-.status-dot { display: flex; align-items: center; gap: 6px; font-size: 9px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; }
+.status-dot { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
 .dot.ok { background: var(--success); }
 .dot.err { background: var(--error); }
 
-.layout { display: flex; flex: 1; overflow: hidden; }
+.layout { display: flex; flex: 1; overflow: hidden; min-height: 0; }
 
 /* Sidebar */
 .sidebar { width: 320px; min-width: 320px; background: var(--bg-secondary); border-right: 1px solid var(--border); overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
@@ -146,15 +146,16 @@ select option { background: var(--bg-secondary); }
 input:disabled, select:disabled { opacity: 0.4; cursor: not-allowed; background: var(--bg-primary) !important; }
 
 /* Main */
-.main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
-.tabs { display: flex; background: var(--bg-secondary); border-bottom: 1px solid var(--border); padding: 0 16px; position: sticky; top: 0; z-index: 50; }
+.main-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+.tabs { display: flex; background: var(--bg-secondary); border-bottom: 1px solid var(--border); padding: 0 16px; flex-shrink: 0; z-index: 50; }
+.main { flex: 1; overflow-y: auto; min-height: 0; }
 .tab { padding: 12px 20px; font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; transition: all var(--transition); display: flex; align-items: center; gap: 8px; }
 .tab:hover { color: var(--text-primary); background: rgba(88,166,255,0.08); border-radius: 6px 6px 0 0; }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); background: rgba(88,166,255,0.08); border-radius: 6px 6px 0 0; }
 .tab-badge { background: var(--accent-dim); color: #fff; font-size: 11px; padding: 1px 7px; border-radius: 10px; font-weight: 600; min-width: 20px; text-align: center; }
 .tab-badge.warn { background: var(--warning-dim); }
 .tab-badge.ok { background: var(--success-dim); }
-.tab-content { flex: 1; padding: 20px; display: none; }
+.tab-content { padding: 20px; display: none; min-height: 0; }
 .tab-content.active { display: block; }
 
 /* Table */
@@ -317,7 +318,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .savings-bar { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; }
 
 @media (max-width: 900px) {
-    .layout { flex-direction: column; }
+    .app { height: auto; min-height: 100vh; }
+    .layout { flex-direction: column; overflow: visible; }
+    .main-wrapper { overflow: visible; display: block; }
+    .main { overflow: visible; }
     .sidebar { width: 100%; min-width: unset; border-right: none; border-bottom: 1px solid var(--border); max-height: none; overflow-y: visible; }
     .stats-grid { grid-template-columns: repeat(3, 1fr); }
     header { padding: 8px 12px; flex-wrap: wrap; gap: 6px; }
@@ -560,7 +564,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="logo-sub" id="appVersion">H.265 GPU/CPU encode with HDR &amp; Dolby Vision</div>
             </div>
         </div>
-        <div id="headerSysInfo" style="display:flex;gap:10px;align-items:center;font-size:10px;color:var(--text-muted);margin-right:8px;"></div>
+        <div id="headerSysInfo" style="display:flex;gap:10px;align-items:center;font-size:10px;color:var(--text-muted);margin-right:8px;text-transform:uppercase;"></div>
         <div class="status-indicators" id="systemStatus">
             <span class="status-dot"><span class="dot" id="dotWs"></span>WS</span>
             <span class="status-dot"><span class="dot" id="dotFfmpeg"></span>ffmpeg</span>
@@ -815,7 +819,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
             </div>
         </aside>
 
-        <div class="main">
+        <div class="main-wrapper">
             <div class="tabs">
                 <div class="tab active" data-tab="scanner" onclick="switchTab('scanner')">Scanned <span class="tab-badge" id="badgeScanner" style="display:none">0</span></div>
                 <div class="tab" data-tab="queue" onclick="switchTab('queue')">Queue <span class="tab-badge" id="badgeQueue" style="display:none">0</span></div>
@@ -831,13 +835,20 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="tab" onclick="openSettings()" title="Settings" style="padding:4px 8px;line-height:1;display:flex;align-items:center;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
             </div>
 
+            <div class="main">
             <div class="tab-content active" id="tab-scanner">
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-                    <button class="btn btn-sm" onclick="clearScanCache()" title="Clear cached scan data to force full re-probe">Clear Cache</button>
-                    <button class="btn btn-sm" id="btnFindDupes" onclick="showDuplicates()" title="Find files with both original and encoded versions" style="display:none;">Find Duplicates</button>
-                    <button class="btn btn-danger btn-sm" id="btnDeleteSelected" onclick="removeSelectedScanFiles()" style="display:none;">Delete Selected from Disk</button>
-                    <span style="flex:1;"></span>
-                    <button class="btn btn-danger btn-sm" id="btnCancelScan" onclick="cancelScan()" style="display:none">Cancel Scan</button>
+                <div class="toolbar" style="margin-bottom:6px;">
+                    <div class="toolbar-left">
+                        <button class="btn btn-sm" onclick="clearScanCache()" title="Clear cached scan data to force full re-probe">Clear Cache</button>
+                        <button class="btn btn-sm" id="btnFindDupes" onclick="showDuplicates()" title="Find files with both original and encoded versions" style="display:none;">Find Duplicates</button>
+                        <button class="btn btn-danger btn-sm" id="btnDeleteSelected" onclick="removeSelectedScanFiles()" style="display:none;">Delete Selected from Disk</button>
+                        <button class="btn btn-danger btn-sm" id="btnCancelScan" onclick="cancelScan()" style="display:none">Cancel Scan</button>
+                    </div>
+                    <div class="toolbar-right" id="scanActionBtns" style="display:none;">
+                        <button class="btn btn-sm" onclick="toggleSelectAll()">Select Page</button>
+                        <button class="btn btn-sm" id="btnEstimatePage" onclick="estimatePage()" title="Calculate estimated output sizes for this page">Estimate Page</button>
+                        <button class="btn btn-success btn-sm" id="btnAddQueueTop" onclick="addSelectedToQueue()" disabled>Add Selected to Queue</button>
+                    </div>
                 </div>
                 <div id="savingsInfo"></div>
                 <div class="scan-progress" id="scanProgress">
@@ -959,7 +970,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <div class="empty-state"><div class="icon" id="emptyStatsIcon"></div><h3>Loading statistics...</h3></div>
                 </div>
             </div>
-        </div>
+        </div><!-- /main -->
+        </div><!-- /main-wrapper -->
     </div>
 </div>
 
@@ -2091,6 +2103,25 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v3.3.1 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Auto Preset config</strong> &mdash; configurable CQ, bitrate, and speed sliders per resolution tier (4K/1080p/SD) in Settings</li>
+                                <li><strong>Preset slider sync</strong> &mdash; selecting a preset in Default or Library Profiles moves greyed-out sliders to show the preset values</li>
+                                <li><strong>Sticky tab bar</strong> &mdash; Scanned/Queue/Encoding/Done tabs stay fixed while content scrolls (desktop only)</li>
+                                <li><strong>Translucent UI</strong> &mdash; translucent buttons, progress bars, and non-glowing status dots</li>
+                                <li><strong>Light mode fixes</strong> &mdash; graph axis labels and grid lines visible in light mode, colored header stats</li>
+                                <li><strong>Header stats colors</strong> &mdash; CPU and GPU percentages color-coded green/orange/red by usage, VRAM color-coded</li>
+                                <li><strong>Clear logs</strong> &mdash; per-tab "Clear Log" button in the logs modal</li>
+                                <li><strong>ffmpeg command logging</strong> &mdash; full ffmpeg command shown in logs for both local and remote encodes</li>
+                                <li><strong>Log timestamp reformat</strong> &mdash; ISO timestamps in old logs reformatted to DD-MM-YYYY HH:MM:SS in the browser</li>
+                                <li><strong>Slider order</strong> &mdash; consistent CQ, Bitrate, Speed order across all profiles</li>
+                                <li><strong>Scan toolbar</strong> &mdash; Select Page, Estimate Page, Add to Queue moved to top-right toolbar</li>
+                                <li><strong>Consistent button sizes</strong> &mdash; all queue and encoding buttons use uniform sizing</li>
+                                <li><strong>Plex webhook layout</strong> &mdash; clearer setup instructions with colored labels in Settings</li>
+                                <li><strong>Skipped list summary</strong> &mdash; negative savings shown in red with "Grew" label, auto-scaled units</li>
+                            </ul>
+                        </div>
+                        <div>
                             <div style="font-weight:600;color:var(--text-primary);">v3.3.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
                                 <li><strong>Language picker</strong> &mdash; audio and subtitle language filters show clickable tag-style checkboxes populated from scanned files instead of manual text input</li>
@@ -2697,7 +2728,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div style="display:flex;gap:6px;align-items:center;">
                 <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer;"><input type="checkbox" id="logAutoScroll" checked onchange="_logAutoScroll=this.checked"> Auto-scroll</label>
                 <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer;"><input type="checkbox" id="logAutoRefresh" checked onchange="toggleLogAutoRefresh(this.checked)"> Auto-refresh</label>
-                <button class="btn btn-sm" onclick="loadLogs()" style="font-size:11px;">Refresh</button>
+                <button class="btn btn-sm" onclick="loadLogs()">Refresh</button>
+                <button class="btn btn-danger btn-sm" onclick="clearCurrentLog()">Clear Log</button>
                 <button class="modal-close" onclick="closeLogsModal()">&times;</button>
             </div>
         </div>
@@ -2834,11 +2866,6 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 </select>
                             </div>
                             <div class="form-group" style="margin:0;">
-                                <label style="font-size:11px;">Speed: <span id="setSpeedVal">p5</span></label>
-                                <input type="range" id="setSpeed" value="5" min="1" max="7" oninput="document.getElementById('setSpeedVal').textContent='p'+this.value;" style="font-size:12px;">
-                                <span class="set-desc">p1 = fastest, p7 = best quality</span>
-                            </div>
-                            <div class="form-group" style="margin:0;">
                                 <label style="font-size:11px;">CQ: <span id="setCqVal">24</span></label>
                                 <input type="range" id="setCq" min="1" max="50" value="24" oninput="document.getElementById('setCqVal').textContent=this.value;" style="font-size:12px;">
                                 <span class="set-desc">Lower = better quality, bigger file</span>
@@ -2847,6 +2874,11 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <label style="font-size:11px;">Max Bitrate: <span id="setMaxbitrateVal">20</span>M</label>
                                 <input type="range" id="setMaxbitrate" min="3" max="50" value="20" oninput="document.getElementById('setMaxbitrateVal').textContent=this.value;" style="font-size:12px;">
                                 <span class="set-desc">Peak bitrate cap</span>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label style="font-size:11px;">Speed: <span id="setSpeedVal">p5</span></label>
+                                <input type="range" id="setSpeed" value="5" min="1" max="7" oninput="document.getElementById('setSpeedVal').textContent='p'+this.value;" style="font-size:12px;">
+                                <span class="set-desc">p1 = fastest, p7 = best quality</span>
                             </div>
                         </div>
                         <!-- Row 3: Audio -->
@@ -2921,6 +2953,78 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             </div>
                         </div>
                         <input type="hidden" id="setEnglishOnly">
+                    </div>
+
+                    <!-- Auto Preset Config -->
+                    <div style="margin-bottom:20px;padding:16px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius);">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                            <span style="color:var(--text-muted);"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>
+                            <span style="font-weight:700;font-size:14px;">Auto Preset</span>
+                            <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">Per-resolution quality when preset is "Auto"</span>
+                        </div>
+                        <!-- 4K -->
+                        <div style="margin-top:12px;padding:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;">
+                            <div style="font-size:12px;font-weight:600;margin-bottom:8px;">4K <span style="font-weight:400;color:var(--text-muted);">(3840x2160+)</span></div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">CQ: <span id="autoPreset4kCqVal">27</span></label>
+                                    <input type="range" id="autoPreset4kCq" min="1" max="50" value="27" oninput="document.getElementById('autoPreset4kCqVal').textContent=this.value;">
+                                    <span class="set-desc">Lower = better quality</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">Max Bitrate: <span id="autoPreset4kBitrateVal">15</span>M</label>
+                                    <input type="range" id="autoPreset4kBitrate" min="3" max="80" value="15" oninput="document.getElementById('autoPreset4kBitrateVal').textContent=this.value;">
+                                    <span class="set-desc">Peak bitrate cap</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">Speed: <span id="autoPreset4kSpeedVal">p7</span></label>
+                                    <input type="range" id="autoPreset4kSpeed" min="1" max="7" value="7" oninput="document.getElementById('autoPreset4kSpeedVal').textContent='p'+this.value;">
+                                    <span class="set-desc">p1 = fastest, p7 = best</span>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- 1080p -->
+                        <div style="margin-top:8px;padding:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;">
+                            <div style="font-size:12px;font-weight:600;margin-bottom:8px;">1080p <span style="font-weight:400;color:var(--text-muted);">(1920x1080+)</span></div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">CQ: <span id="autoPreset1080CqVal">27</span></label>
+                                    <input type="range" id="autoPreset1080Cq" min="1" max="50" value="27" oninput="document.getElementById('autoPreset1080CqVal').textContent=this.value;">
+                                    <span class="set-desc">Lower = better quality</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">Max Bitrate: <span id="autoPreset1080BitrateVal">8</span>M</label>
+                                    <input type="range" id="autoPreset1080Bitrate" min="3" max="50" value="8" oninput="document.getElementById('autoPreset1080BitrateVal').textContent=this.value;">
+                                    <span class="set-desc">Peak bitrate cap</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">Speed: <span id="autoPreset1080SpeedVal">p7</span></label>
+                                    <input type="range" id="autoPreset1080Speed" min="1" max="7" value="7" oninput="document.getElementById('autoPreset1080SpeedVal').textContent='p'+this.value;">
+                                    <span class="set-desc">p1 = fastest, p7 = best</span>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- SD -->
+                        <div style="margin-top:8px;padding:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;">
+                            <div style="font-size:12px;font-weight:600;margin-bottom:8px;">SD <span style="font-weight:400;color:var(--text-muted);">(below 1080p)</span></div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">CQ: <span id="autoPresetSdCqVal">27</span></label>
+                                    <input type="range" id="autoPresetSdCq" min="1" max="50" value="27" oninput="document.getElementById('autoPresetSdCqVal').textContent=this.value;">
+                                    <span class="set-desc">Lower = better quality</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">Max Bitrate: <span id="autoPresetSdBitrateVal">4</span>M</label>
+                                    <input type="range" id="autoPresetSdBitrate" min="1" max="30" value="4" oninput="document.getElementById('autoPresetSdBitrateVal').textContent=this.value;">
+                                    <span class="set-desc">Peak bitrate cap</span>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;">Speed: <span id="autoPresetSdSpeedVal">p7</span></label>
+                                    <input type="range" id="autoPresetSdSpeed" min="1" max="7" value="7" oninput="document.getElementById('autoPresetSdSpeedVal').textContent='p'+this.value;">
+                                    <span class="set-desc">p1 = fastest, p7 = best</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Library Profiles -->
@@ -3091,10 +3195,13 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <div style="padding-top:16px;border-top:1px solid var(--border);margin-bottom:20px;">
                         <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">Plex Integration</div>
                         <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;"><span id="setPlexTokenStatus"></span></div>
-                        <div style="font-size:11px;color:var(--text-muted);line-height:2;">
-                            Webhook:<br>
-                            <span id="setPlexWebhookUrl"></span><br>
-                            <span style="font-size:11px;color:var(--accent);">Add in Plex &rarr; Settings &rarr; Webhooks. Uses matching library profile or Default. Click to copy.</span>
+                        <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+                            <span style="font-weight:500;color:var(--text-secondary);">Webhook URL</span> <span style="font-size:10px;">(click to copy)</span>
+                        </div>
+                        <div id="setPlexWebhookUrl" style="margin-bottom:8px;"></div>
+                        <div style="font-size:11px;color:var(--text-secondary);line-height:1.6;">
+                            <strong style="color:var(--accent);">Setup:</strong> <span style="color:var(--text-primary);">Plex &rarr; Settings &rarr; Webhooks &rarr; Add Webhook</span><br>
+                            <span style="color:var(--text-muted);">New media will auto-encode using the matching <span style="color:var(--accent);">library profile</span>, or the <span style="color:var(--accent);">Default Profile</span> as fallback.</span>
                         </div>
                     </div>
 
@@ -3718,6 +3825,8 @@ async function checkSystem() {
 function switchTab(name) {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${name}`));
+    const mc = document.querySelector('.main-content');
+    if (mc) mc.scrollTop = 0;
 }
 
 function onPresetChange() {
@@ -4031,6 +4140,8 @@ function renderScanResults() {
         document.getElementById('scanFilters').style.display = 'none';
         if (delBtn) delBtn.style.display = 'none';
         if (dupeBtn) dupeBtn.style.display = 'none';
+        const sab = document.getElementById('scanActionBtns');
+        if (sab) sab.style.display = 'none';
         badge.style.display = 'none'; return;
     }
     badge.style.display = 'inline'; badge.textContent = files.length;
@@ -4272,8 +4383,11 @@ function resolveConfirm(val) {
 }
 
 function updateAddQueueBtn() {
+    const hasChecked = !!document.querySelector('.file-select:checked');
     const btn = document.getElementById('btnAddQueue');
-    if (btn) btn.disabled = !document.querySelector('.file-select:checked');
+    if (btn) btn.disabled = !hasChecked;
+    const btnTop = document.getElementById('btnAddQueueTop');
+    if (btnTop) btnTop.disabled = !hasChecked;
 }
 
 async function removeScanFile(path) {
@@ -4542,15 +4656,15 @@ function renderQueue() {
 
     // Queue controls (always visible — even when empty, user needs Start/Stop)
     const startBtn = enabled
-        ? `<button class="btn" onclick="btnAction(this, () => queueControl('stop'))" style="font-size:12px;background:#e74c3c;color:#fff;">Stop Queue</button>`
-        : `<button class="btn" onclick="btnAction(this, () => queueControl('start'))" style="font-size:12px;background:#27ae60;color:#fff;">Start Queue</button>`;
+        ? `<button class="btn btn-danger btn-sm" onclick="btnAction(this, () => queueControl('stop'))">Stop Queue</button>`
+        : `<button class="btn btn-success btn-sm" onclick="btnAction(this, () => queueControl('start'))">Start Queue</button>`;
     const stopNowBtn = hasActive
-        ? `<button class="btn btn-danger" onclick="queueControl('stop-now')" style="font-size:12px;">Stop &amp; Cancel</button>`
+        ? `<button class="btn btn-danger btn-sm" onclick="queueControl('stop-now')">Stop &amp; Cancel</button>`
         : '';
-    const statusText = !enabled ? '<span style="color:#e74c3c;font-weight:600;margin-right:8px;">Stopped</span>' :
-                        hasActive ? '<span style="color:#27ae60;font-weight:600;margin-right:8px;">Running</span>' :
-                        '<span style="color:#f39c12;font-weight:600;margin-right:8px;">Idle</span>';
-    const toolbar = `<div class="toolbar"><div class="toolbar-left">${statusText}<span class="info-text">${q.length} file${q.length!==1?'s':''} in queue</span></div><div class="toolbar-right">${startBtn} ${stopNowBtn} <button class="btn btn-danger" onclick="removeAllFromQueue()" style="font-size:12px;">Remove All</button></div></div>`;
+    const statusText = !enabled ? '<span style="color:var(--error);font-weight:600;margin-right:8px;">Stopped</span>' :
+                        hasActive ? '<span style="color:var(--success);font-weight:600;margin-right:8px;">Running</span>' :
+                        '<span style="color:var(--warning);font-weight:600;margin-right:8px;">Idle</span>';
+    const toolbar = `<div class="toolbar"><div class="toolbar-left">${statusText}<span class="info-text">${q.length} file${q.length!==1?'s':''} in queue</span></div><div class="toolbar-right">${startBtn} ${stopNowBtn} <button class="btn btn-danger btn-sm" onclick="removeAllFromQueue()">Remove All</button></div></div>`;
 
     if (!q.length && !hasActive) {
         container.innerHTML = toolbar + `<div class="empty-state"><div class="icon">${svgIcon('clipboard', 48)}</div><h3>Queue is empty</h3><p>Scan a directory and add files to the encode queue.</p></div>`;
@@ -4619,7 +4733,7 @@ function renderQueue() {
                     <span class="badge badge-sm badge-preset" title="${presetTip(job.settings)}">${job.settings.preset || 'auto'}</span>
                 </div>
             </div>
-            <button class="btn btn-danger btn-sm" style="font-size:11px;padding:4px 8px;" onclick="removeFromQueue('${job.id}')">${svgIcon('x-circle', 12)}</button>
+            <button class="btn btn-danger btn-sm" onclick="removeFromQueue('${job.id}')">${svgIcon('x-circle', 12)}</button>
         </div>`;
     });
 
@@ -4699,7 +4813,7 @@ function renderEncoding() {
     if (hasJobs && jobsChanged) {
         lastRenderedJobIds = currentIds;
         let jobsHtml = activeJobs.length > 1
-            ? `<div class="toolbar" style="margin-bottom:8px;"><div class="toolbar-left"><span class="info-text">${activeJobs.length} active encodes</span></div><div class="toolbar-right"><button class="btn btn-danger" onclick="btnAction(this, () => cancelAllActive(), '✓ Cancelled', 2000)" style="font-size:12px;">Cancel All</button></div></div>`
+            ? `<div class="toolbar" style="margin-bottom:8px;"><div class="toolbar-left"><span class="info-text">${activeJobs.length} active encodes</span></div><div class="toolbar-right"><button class="btn btn-danger btn-sm" onclick="btnAction(this, () => cancelAllActive(), '✓ Cancelled', 2000)">Cancel All</button></div></div>`
             : '';
         for (const job of activeJobs) {
             const f = job.file_info;
@@ -4754,8 +4868,8 @@ function renderEncoding() {
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummaryPct-${job.id}">${p.phase === 'preparing' ? 'Preparing...' : _fmtPct(p.pct||0)}</span>
                         <span style="font-size:11px;color:var(--text-secondary);" id="encSummarySpeed-${job.id}">${p.phase === 'preparing' ? '' : (p.speed||'—')}</span>
                         ${job.paused ? '<span class="badge badge-sm badge-skip">Paused</span>' : ''}
-                        <button class="btn btn-sm" style="font-size:11px;padding:4px 10px;margin-left:4px;" onclick="event.stopPropagation(); togglePause('${job.id}', ${job.paused})" id="pauseBtn-${job.id}">${job.paused ? svgIcon('play', 12) + ' Resume' : svgIcon('pause', 12) + ' Pause'}</button>
-                        <button class="btn btn-danger btn-sm" style="font-size:11px;padding:4px 8px;" onclick="event.stopPropagation(); cancelEncode('${job.id}')">${svgIcon('x-circle', 12)}</button>
+                        <button class="btn btn-sm" style="margin-left:4px;" onclick="event.stopPropagation(); togglePause('${job.id}', ${job.paused})" id="pauseBtn-${job.id}">${job.paused ? svgIcon('play', 12) + ' Resume' : svgIcon('pause', 12) + ' Pause'}</button>
+                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); cancelEncode('${job.id}')">${svgIcon('x-circle', 12)}</button>
                     </div>
                     <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;padding-left:22px;font-size:10px;">
                         <span style="color:var(--text-muted);">Source:</span>
@@ -5137,7 +5251,8 @@ function drawGraphs(data) {
         const cpuUtil = cpuPts.length ? Math.round(cpuPts[cpuPts.length - 1].v) : 0;
         const memInfo = data.mem_total ? `${data.mem_used}/${data.mem_total}GB` : '';
         const hdrCompact = window.innerWidth < 600;
-        let parts = [`<span title="${cpuName}">CPU ${cpuUtil}%</span>`];
+        const _utilColor = p => p >= 90 ? '#f85149' : p >= 70 ? '#f0883e' : '#3fb950';
+        let parts = [`<span title="${cpuName}">CPU <span style="color:${_utilColor(cpuUtil)}">${cpuUtil}%</span></span>`];
         if (memInfo && !hdrCompact) {
             const hdrRamColor = data.mem_total ? _memColor(parseFloat(data.mem_used), parseFloat(data.mem_total)) : '';
             parts.push(`<span>RAM <span style="color:${hdrRamColor}">${memInfo}</span></span>`);
@@ -5145,10 +5260,11 @@ function drawGraphs(data) {
         for (let i = 0; i < gpuCount; i++) {
             const gd = perGpu[String(i)];
             if (gd) {
-                const u = gd.util && gd.util.length ? gd.util[gd.util.length - 1].v : 0;
+                const u = gd.util && gd.util.length ? Math.round(gd.util[gd.util.length - 1].v) : 0;
                 const name = gd.name || `GPU ${i}`;
                 const mem = !hdrCompact && gd.mem_total ? ` ${(gd.mem_used/1024).toFixed(1)}/${(gd.mem_total/1024).toFixed(1)}G` : '';
-                parts.push(`<span title="${name}">GPU${i} ${Math.round(u)}%${mem}</span>`);
+                const vramColor = gd.mem_total ? _memColor(gd.mem_used, gd.mem_total) : '';
+                parts.push(`<span title="${name}">GPU${i} <span style="color:${_utilColor(u)}">${u}%</span>${mem ? `<span style="color:${vramColor}">${mem}</span>` : ''}</span>`);
             }
         }
         hdr.innerHTML = parts.join('<span style="color:var(--border);margin:0 1px;">|</span>');
@@ -5167,18 +5283,19 @@ function drawGraph(canvasId, points, color, label, points2, color2, label2, poin
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
 
-    // Grid lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    // Grid lines — theme-aware
+    const _dk = document.documentElement.getAttribute('data-theme') !== 'light';
+    ctx.strokeStyle = _dk ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)';
     ctx.lineWidth = 1;
     for (let pct of [25, 50, 75]) {
         const y = h - (pct / 100) * h;
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.strokeStyle = _dk ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)';
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(w, 0); ctx.stroke();
 
     // Y-axis labels
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillStyle = _dk ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.4)';
     ctx.font = '9px sans-serif';
     ctx.fillText('100%', 2, 10);
     ctx.fillText('50%', 2, h / 2 + 3);
@@ -5408,15 +5525,17 @@ function renderHistory() {
         totalNewBytes += r.new_bytes || 0;
         if (j.started_at && j.finished_at) totalTime += j.finished_at - j.started_at;
     }
-    const fmtSz = b => { if (b >= 1e12) return (b/1e12).toFixed(2) + ' TB'; if (b >= 1e9) return (b/1e9).toFixed(1) + ' GB'; if (b >= 1e6) return (b/1e6).toFixed(0) + ' MB'; return (b/1e3).toFixed(0) + ' KB'; };
+    const fmtSz = b => { const a = Math.abs(b); const s = b < 0 ? '-' : ''; if (a >= 1e12) return s + (a/1e12).toFixed(2) + ' TB'; if (a >= 1e9) return s + (a/1e9).toFixed(1) + ' GB'; if (a >= 1e6) return s + (a/1e6).toFixed(0) + ' MB'; return s + (a/1e3).toFixed(0) + ' KB'; };
     const fmtTime = t => { const h = Math.floor(t/3600); const m = Math.floor((t%3600)/60); return h > 0 ? `${h}h ${m}m` : `${m}m`; };
     const savedBytes = totalOrigBytes - totalNewBytes;
     const savedPct = totalOrigBytes > 0 && totalNewBytes > 0 ? ((savedBytes / totalOrigBytes) * 100).toFixed(1) : 0;
+    const savedColor = savedBytes >= 0 ? 'var(--success)' : 'var(--error)';
+    const savedLabel = savedBytes >= 0 ? 'Saved' : 'Grew';
     html += `<div style="display:flex;gap:16px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--text-muted);">
         <span><strong style="color:var(--text-primary);">${filtered.length}</strong> files</span>
         <span>Original: <strong style="color:var(--text-primary);">${fmtSz(totalOrigBytes)}</strong></span>
         ${totalNewBytes > 0 ? `<span>Encoded: <strong style="color:var(--cyan);">${fmtSz(totalNewBytes)}</strong></span>
-        <span>Saved: <strong style="color:var(--success);">${fmtSz(savedBytes)}</strong> (${savedPct}%)</span>` : ''}
+        <span>${savedLabel}: <strong style="color:${savedColor};">${fmtSz(Math.abs(savedBytes))}</strong> (${Math.abs(savedPct)}%)</span>` : ''}
         ${totalTime > 0 ? `<span>Time: <strong style="color:var(--text-primary);">${fmtTime(totalTime)}</strong></span>` : ''}
     </div>`;
 
@@ -5967,17 +6086,20 @@ function renderScanResultsFiltered(files) {
 
     const estimatesStale = estimateSettingsKey && estimateSettingsKey !== getEstimateSettingsKey() && Object.keys(estimates).length > 0;
 
+    // Show top action buttons
+    const scanActionBtns = document.getElementById('scanActionBtns');
+    if (scanActionBtns) scanActionBtns.style.display = '';
+    // Sync estimate button state
+    const estBtn = document.getElementById('btnEstimatePage');
+    if (estBtn) {
+        if (estimatesStale) { estBtn.textContent = 'Recalculate Estimates'; estBtn.onclick = recalcEstimates; }
+        else { estBtn.textContent = 'Estimate Page'; estBtn.onclick = estimatePage; }
+    }
+
     let html = `
     <div class="toolbar">
         <div class="toolbar-left"><span class="info-text">${files.length} files — Total: ${totalSizeStr}</span></div>
-        <div class="toolbar-right">
-            <button class="btn btn-sm" onclick="toggleSelectAll()">Select Page</button>
-            ${estimatesStale
-                ? `<button class="btn btn-sm" onclick="recalcEstimates()" style="background:var(--warning-dim);color:#fff;" title="Encoding settings changed — recalculate estimates">Recalculate Estimates</button>`
-                : `<button class="btn btn-sm" onclick="estimatePage()" title="Calculate estimated output sizes for this page">Estimate Page</button>`
-            }
-            <button class="btn btn-success btn-sm" id="btnAddQueue" onclick="addSelectedToQueue()" disabled>Add Selected to Queue</button>
-        </div>
+        <div class="toolbar-right"></div>
     </div>
     ${pagerHtml()}
     <div class="table-wrapper"><table><thead><tr>
@@ -6341,6 +6463,24 @@ async function openSettings() {
         // Encode defaults
         // Default profile
         document.getElementById('setPreset').value = s.preset || 'auto';
+        // Auto preset config
+        const ap = s.auto_presets || {};
+        const ap4k = ap['4k'] || {cq:27,maxbitrate:'15M',speed:'p7'};
+        const ap1080 = ap['1080p'] || {cq:27,maxbitrate:'8M',speed:'p7'};
+        const apsd = ap['sd'] || {cq:27,maxbitrate:'4M',speed:'p7'};
+        function _loadAutoPreset(prefix, p) {
+            const brVal = parseInt(String(p.maxbitrate).replace('M','')) || 15;
+            const spVal = parseInt(String(p.speed).replace('p','')) || 5;
+            document.getElementById(prefix+'Cq').value = p.cq;
+            document.getElementById(prefix+'CqVal').textContent = p.cq;
+            document.getElementById(prefix+'Bitrate').value = brVal;
+            document.getElementById(prefix+'BitrateVal').textContent = brVal;
+            document.getElementById(prefix+'Speed').value = spVal;
+            document.getElementById(prefix+'SpeedVal').textContent = 'p'+spVal;
+        }
+        _loadAutoPreset('autoPreset4k', ap4k);
+        _loadAutoPreset('autoPreset1080', ap1080);
+        _loadAutoPreset('autoPresetSd', apsd);
         document.getElementById('setVideoCodec').value = s.video_codec || 'hevc';
         document.getElementById('setEncoder').value = s.encoder || 'gpu';
         // Populate GPU target in default profile — same format as sidebar
@@ -6790,11 +6930,27 @@ function setGpuMaxJobs(index, maxJobs) {
 }
 
 function onSettingsPresetChange() {
-    const isCustom = document.getElementById('setPreset').value === 'custom';
+    const preset = document.getElementById('setPreset').value;
+    const isCustom = preset === 'custom';
     document.getElementById('setCq').disabled = !isCustom;
     document.getElementById('setMaxbitrate').disabled = !isCustom;
     document.getElementById('setSpeed').disabled = !isCustom;
+    // Move sliders to show preset values (even when disabled)
+    if (!isCustom && preset !== 'auto' && window._presetValues && window._presetValues[preset]) {
+        const p = window._presetValues[preset];
+        const cq = p.cq || 24;
+        const br = parseInt(String(p.maxbitrate || '20M').replace('M','')) || 20;
+        const sp = parseInt(String(p.speed || 'p5').replace('p','')) || 5;
+        document.getElementById('setCq').value = cq;
+        document.getElementById('setCqVal').textContent = cq;
+        document.getElementById('setMaxbitrate').value = br;
+        document.getElementById('setMaxbitrateVal').textContent = br;
+        document.getElementById('setSpeed').value = sp;
+        document.getElementById('setSpeedVal').textContent = 'p' + sp;
+    }
 }
+// Fetch preset values once for slider sync
+fetch('/api/presets').then(r => r.json()).then(d => { window._presetValues = d.presets || {}; }).catch(() => {});
 
 function _verIsNewer(latestStr) {
     const cur = (state.system?.version || '').split('.').map(Number);
@@ -7026,6 +7182,11 @@ async function saveSettings() {
     const settings = {
         // Default profile
         preset: document.getElementById('setPreset').value,
+        auto_presets: {
+            '4k':    { cq: parseInt(document.getElementById('autoPreset4kCq').value) || 27, maxbitrate: document.getElementById('autoPreset4kBitrate').value + 'M', speed: 'p' + document.getElementById('autoPreset4kSpeed').value },
+            '1080p': { cq: parseInt(document.getElementById('autoPreset1080Cq').value) || 27, maxbitrate: document.getElementById('autoPreset1080Bitrate').value + 'M', speed: 'p' + document.getElementById('autoPreset1080Speed').value },
+            'sd':    { cq: parseInt(document.getElementById('autoPresetSdCq').value) || 27, maxbitrate: document.getElementById('autoPresetSdBitrate').value + 'M', speed: 'p' + document.getElementById('autoPresetSdSpeed').value },
+        },
         video_codec: document.getElementById('setVideoCodec').value || 'hevc',
         encoder: document.getElementById('setEncoder').value,
         gpu_target: document.getElementById('setGpuTarget').value,
@@ -7102,11 +7263,10 @@ async function saveSettings() {
             // Refresh server status after save (don't re-check clients — connectors need time to reconnect)
             setTimeout(() => { updateGpuServerStatus(); }, 2000);
             btn.textContent = 'Saved';
-            btn.style.background = 'var(--success)';
             const unsaved = document.getElementById('settingsUnsaved');
             if (unsaved) unsaved.style.display = 'none';
             window._settingsDirty = false;
-            setTimeout(() => { btn.textContent = 'Save Settings'; btn.style.background = ''; btn.disabled = true; btn.style.opacity = '0.5'; }, 1500);
+            setTimeout(() => { btn.textContent = 'Save Settings'; btn.disabled = true; btn.style.opacity = '0.5'; }, 1500);
         } else {
             btn.textContent = 'Failed';
             btn.style.background = 'var(--error)';
@@ -7283,6 +7443,14 @@ function openLogs() {
     loadLogs();
     toggleLogAutoRefresh(document.getElementById('logAutoRefresh')?.checked ?? true);
 }
+async function clearCurrentLog() {
+    const active = document.querySelector('.settings-nav-item.active');
+    const tab = active ? active.textContent.trim().toLowerCase() : 'server';
+    const tabMap = {'server':'server','ffmpeg':'ffmpeg','listener':'listener','connectors':'connectors','gc & queue':'gc'};
+    const key = tabMap[tab] || 'server';
+    await fetch('/api/logs/clear', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({tab: key})});
+    loadLogs();
+}
 function closeLogsModal() {
     document.getElementById('logsModal').classList.remove('open');
     if (_logRefreshInterval) { clearInterval(_logRefreshInterval); _logRefreshInterval = null; }
@@ -7308,9 +7476,14 @@ function _getJobColor(name) {
     if (!_logJobColors[name]) { _logJobColors[name] = _logPalette[_logColorIdx % _logPalette.length]; _logColorIdx++; }
     return _logJobColors[name];
 }
+function _reformatTimestamp(line) {
+    // Convert ISO timestamps (2026-03-21T06:20:50.897Z or 2026-03-21T06:20:50Z) to DD-MM-YYYY HH:MM:SS
+    return line.replace(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z?\s*/g,
+        (_, y, mo, d, h, mi, s) => `${d}-${mo}-${y} ${h}:${mi}:${s}  `);
+}
 function _colorLog(line, useJobColor) {
     const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
-    let clean = line.replace(/\x1b\[[0-9;]*m/g, '');
+    let clean = _reformatTimestamp(line.replace(/\x1b\[[0-9;]*m/g, ''));
     let html = esc(clean);
     if (/\bERROR\b|error/i.test(clean)) return `<span style="color:var(--error);">${html}</span>`;
     if (/\bWARN\b|warn/i.test(clean)) return `<span style="color:var(--warning);">${html}</span>`;
@@ -7419,13 +7592,16 @@ function _drawBarChart(canvasId, days, valFn, val2Fn, color, color2, fmtY, stack
     const vals = days.map(d => valFn(d) + (stacked && val2Fn ? val2Fn(d) : 0));
     const maxVal = Math.max(...vals, 1);
     const barW = Math.max(2, (cw / days.length) - 2);
-    // Grid lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    // Grid lines — theme-aware
+    const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+    const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
+    const labelColor = isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.4)';
+    ctx.strokeStyle = gridColor;
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
         const y = pad.t + ch - (ch * i / 4);
         ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
-        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillStyle = labelColor;
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'right';
         ctx.fillText(fmtY(maxVal * i / 4), pad.l - 6, y + 3);
@@ -7449,7 +7625,7 @@ function _drawBarChart(canvasId, days, valFn, val2Fn, color, color2, fmtY, stack
         }
         // Date label (every few bars)
         if (days.length <= 10 || i % Math.ceil(days.length / 8) === 0) {
-            ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            ctx.fillStyle = labelColor;
             ctx.font = '9px sans-serif';
             ctx.textAlign = 'center';
             const lbl = d.date ? d.date.slice(5) : '';
@@ -7840,7 +8016,7 @@ function renderLibraryProfiles() {
                     </select>
                 </div>
             </div>
-            <!-- Row 2: Resolution, Speed, CQ, Bitrate -->
+            <!-- Row 2: Resolution, CQ, Bitrate, Speed -->
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
                 <div class="form-group" style="margin:0;">
                     <label style="font-size:11px;">Output Resolution</label>
@@ -7854,11 +8030,6 @@ function renderLibraryProfiles() {
                     </select>
                 </div>
                 <div class="form-group" style="margin:0;">
-                    <label style="font-size:11px;">Speed: <span id="lpspeed-${escHtml(lpath)}">${p.speed||'p5'}</span></label>
-                    <input type="range" min="1" max="7" value="${parseInt((p.speed||'p5').replace('p',''))||5}" ${isCustom?'':'disabled'} oninput="document.getElementById('lpspeed-${escHtml(lpath)}').textContent='p'+this.value;" onchange="updateLibProfile('${escHtml(lpath)}','speed','p'+this.value)" style="font-size:12px;">
-                    <span class="set-desc">p1 = fastest, p7 = best quality</span>
-                </div>
-                <div class="form-group" style="margin:0;">
                     <label style="font-size:11px;">CQ: <span id="lpcq-${escHtml(lpath)}">${p.cq||24}</span></label>
                     <input type="range" min="1" max="50" value="${p.cq||24}" ${isCustom?'':'disabled'} oninput="document.getElementById('lpcq-${escHtml(lpath)}').textContent=this.value;" onchange="updateLibProfile('${escHtml(lpath)}','cq',parseInt(this.value))" style="font-size:12px;">
                     <span class="set-desc">Lower = better quality, bigger file</span>
@@ -7867,6 +8038,11 @@ function renderLibraryProfiles() {
                     <label style="font-size:11px;">Max Bitrate: <span id="lpbr-${escHtml(lpath)}">${parseInt(String(p.maxbitrate||'20M').replace(/M/i,''))||20}</span>M</label>
                     <input type="range" min="3" max="50" value="${parseInt(String(p.maxbitrate||'20M').replace(/M/i,''))||20}" ${isCustom?'':'disabled'} oninput="document.getElementById('lpbr-${escHtml(lpath)}').textContent=this.value;" onchange="updateLibProfile('${escHtml(lpath)}','maxbitrate',this.value+'M')" style="font-size:12px;">
                     <span class="set-desc">Peak bitrate cap</span>
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:11px;">Speed: <span id="lpspeed-${escHtml(lpath)}">${p.speed||'p5'}</span></label>
+                    <input type="range" min="1" max="7" value="${parseInt((p.speed||'p5').replace('p',''))||5}" ${isCustom?'':'disabled'} oninput="document.getElementById('lpspeed-${escHtml(lpath)}').textContent='p'+this.value;" onchange="updateLibProfile('${escHtml(lpath)}','speed','p'+this.value)" style="font-size:12px;">
+                    <span class="set-desc">p1 = fastest, p7 = best quality</span>
                 </div>
             </div>
             <!-- Row 3: Audio -->
@@ -7945,10 +8121,25 @@ function renderLibraryProfiles() {
         // Populate GPU target dropdown
         const tgtSel = document.getElementById('lp-gputarget-' + lpath);
         if (tgtSel) {
-            // Use same format as sidebar GPU Target dropdown
             const gpuCnt = state.system?.gpu_count || 0;
             populateGpuTargets(tgtSel, gpuCnt);
             if (p.gpu_target) tgtSel.value = p.gpu_target;
+        }
+        // Sync sliders to preset values when not custom
+        if (p.preset && p.preset !== 'custom' && window._presetValues) {
+            const pv = window._presetValues[p.preset];
+            if (pv) {
+                const el = (id) => document.getElementById(id);
+                const cq = pv.cq || 24;
+                const br = parseInt(String(pv.maxbitrate || '20M').replace('M','')) || 20;
+                const sp = parseInt(String(pv.speed || 'p5').replace('p','')) || 5;
+                const cqEl = el('lpcq-' + lpath);
+                const brEl = el('lpbr-' + lpath);
+                const spEl = el('lpspeed-' + lpath);
+                if (cqEl) { cqEl.textContent = cq; cqEl.closest('.form-group').querySelector('input[type=range]').value = cq; }
+                if (brEl) { brEl.textContent = br; brEl.closest('.form-group').querySelector('input[type=range]').value = br; }
+                if (spEl) { spEl.textContent = 'p' + sp; spEl.closest('.form-group').querySelector('input[type=range]').value = sp; }
+            }
         }
     }
 }

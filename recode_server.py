@@ -63,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "3.3.0"
+VERSION = "3.3.1"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -409,6 +409,12 @@ APP_DEFAULTS = {
     "auth_force_password_change": True,
     "auth_session_secret": "",
     "ssl_enabled": True,
+    # Auto preset per resolution
+    "auto_presets": {
+        "4k":    {"cq": 27, "maxbitrate": "15M", "speed": "p7"},
+        "1080p": {"cq": 27, "maxbitrate": "8M",  "speed": "p7"},
+        "sd":    {"cq": 27, "maxbitrate": "4M",  "speed": "p7"},
+    },
 }
 
 def load_settings() -> dict:
@@ -477,6 +483,8 @@ def _get_remote_ffmpeg_env(server_index: int) -> dict:
     return {}
 
 app_settings = load_settings()
+# Sync AUTO_PRESETS from saved settings
+AUTO_PRESETS.update(app_settings.get("auto_presets", {}))
 
 def is_path_allowed(path: str) -> bool:
     """Check if a path is under one of the configured allowed paths."""
@@ -3846,8 +3854,9 @@ async def encode_worker(worker_id: int):
                 if os.path.exists(f): os.remove(f)
             with open(job_file, "w") as _f:
                 json.dump(job_data, _f)
-            log.info(f"[{job.id}] Remote job dispatched via listener")
-            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Dispatched to remote GPU via listener")
+            log.info(f"[{job.id}] Remote job dispatched via listener → {target_gpu_name or 'auto'}")
+            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Dispatched to {target_gpu_name or 'remote GPU'} via listener")
+            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"$ {' '.join(cmd)}")
             duration = info.get("duration_secs", 0) or 0
             job.progress = {
                 "pct": 0, "elapsed_secs": 0, "eta_secs": 0,
@@ -7337,19 +7346,6 @@ async def get_logs(lines: int = 200):
             fname = h.get("file_info", {}).get("filename", h.get("id", "?"))
             ts = time.strftime(_ts_fmt, time.localtime(h.get("started_at", 0))) if h.get("started_at") else ""
             ffmpeg_logs.append(f"{ts}  [{fname[:40]}] {line}")
-    # Also pull ffmpeg-related lines from connector logs
-    for i in range(10):
-        cpath = os.path.join(BASE_DIR, f"rrp-connect-{i}.log")
-        if not os.path.isfile(cpath):
-            break
-        try:
-            with open(cpath) as f:
-                for line in f.readlines()[-lines:]:
-                    line = line.rstrip()
-                    if any(kw in line for kw in ("ffmpeg ", "ffmpeg_stderr", "Probe ", "GPU connector", "Assigned GPU", "Compiled encoder", "capability", "exited", "error", "ERROR", "WARN")):
-                        ffmpeg_logs.append(f"[Connector {i}] {line}")
-        except Exception:
-            pass
     result["ffmpeg"] = ffmpeg_logs[-lines:]
     # GC logs from connector logs + server queue dispatch logs
     gc_logs = []
@@ -7394,6 +7390,34 @@ async def get_logs(lines: int = 200):
             pass
     result["connectors"] = connectors
     return result
+
+@app.post("/api/logs/clear")
+async def clear_logs(req: dict = {}):
+    """Clear log buffer/files for a specific tab."""
+    tab = req.get("tab", "all")
+    if tab in ("server", "all"):
+        _log_buffer.buffer.clear()
+    if tab in ("ffmpeg", "all"):
+        encode_queue.ffmpeg_logs.clear()
+    if tab in ("listener", "all"):
+        path = os.path.join(BASE_DIR, "rrp-client-listener.log")
+        if os.path.isfile(path):
+            try: open(path, "w").close()
+            except Exception: pass
+    if tab in ("connectors", "all"):
+        for i in range(10):
+            path = os.path.join(BASE_DIR, f"rrp-connect-{i}.log")
+            if not os.path.isfile(path): break
+            try: open(path, "w").close()
+            except Exception: pass
+    if tab in ("gc", "all"):
+        # GC logs come from connectors + server buffer — clear both
+        for i in range(10):
+            path = os.path.join(BASE_DIR, f"rrp-connect-{i}.log")
+            if not os.path.isfile(path): break
+            try: open(path, "w").close()
+            except Exception: pass
+    return {"ok": True}
 
 @app.get("/api/stats/history")
 async def get_stats_history():
@@ -8054,9 +8078,11 @@ async def update_settings(new_settings: dict):
             if k == "encode_suffix":
                 v = re.sub(r"[^A-Za-z0-9_-]", "", str(v).strip()) or "recode"
             app_settings[k] = v
-    # Sync default profile
+    # Sync default profile and auto presets
     WEBHOOK_DEFAULTS.clear()
     WEBHOOK_DEFAULTS.update(build_default_profile())
+    if "auto_presets" in new_settings:
+        AUTO_PRESETS.update(new_settings["auto_presets"])
     save_settings(app_settings)
 
     # If gpu_max_jobs or disabled_gpus actually changed, requeue excess jobs
