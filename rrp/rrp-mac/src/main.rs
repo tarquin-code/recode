@@ -261,7 +261,7 @@ fn update_tray_menu_items(jobs: &[JobLog], transcodes: &[Transcode], connected: 
 
     }
 }
-const VERSION: &str = "3.2.2";
+const VERSION: &str = "3.3.0";
 
 // ── Recode Design System (exact CSS values) ────────────────────────────────
 const BG_PRIMARY: egui::Color32 = egui::Color32::from_rgb(13, 17, 23);
@@ -1083,7 +1083,7 @@ fn status_dot(ui: &mut egui::Ui, color: egui::Color32, label: &str) {
         ui.painter().circle_filled(rect.center(), 4.0, color);
         // Glow effect
         ui.painter().circle_filled(rect.center(), 6.0, alpha(color, 20));
-        ui.label(egui::RichText::new(label).color(TEXT_MUTED).size(10.0));
+        ui.label(egui::RichText::new(label.to_uppercase()).color(TEXT_MUTED).size(9.0));
     });
 }
 

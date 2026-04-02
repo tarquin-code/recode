@@ -60,7 +60,7 @@
 }
 
 [data-theme="light"] {
-    --bg-primary: #ffffff;
+    --bg-primary: #f0f2f5;
     --bg-secondary: #f6f8fa;
     --bg-tertiary: #eef1f5;
     --bg-card: #ffffff;
@@ -91,9 +91,10 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: v
 header { background: var(--bg-secondary); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
 .header-left { display: flex; align-items: center; gap: 12px; }
 .logo { font-size: 20px; font-weight: 400; color: #fff; }
+[data-theme="light"] .logo { color: var(--accent); }
 .logo-sub { font-size: 12px; color: var(--text-muted); font-weight: 400; }
 .status-indicators { display: flex; gap: 12px; align-items: center; }
-.status-dot { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.status-dot { display: flex; align-items: center; gap: 6px; font-size: 9px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
 .dot.ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
 .dot.err { background: var(--error); }
@@ -182,22 +183,23 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .badge-codec { background: rgba(88,166,255,0.15); color: var(--accent); }
 .badge-h265 { background: rgba(63,185,80,0.15); color: var(--success); }
 .badge-h264 { background: rgba(57,210,224,0.15); color: var(--cyan); }
-.badge-hw { background: rgba(88,166,255,0.15); color: var(--accent); }
+.badge-hw { background: rgba(99,110,255,0.15); color: #636eff; }
 .badge-hevc { background: rgba(63,185,80,0.15); color: var(--success); }
 .badge-hdr { background: rgba(210,153,34,0.2); color: var(--warning); }
 .badge-dv { background: rgba(188,140,255,0.2); color: var(--purple); }
 .badge-sdr { background: rgba(110,118,129,0.2); color: var(--text-muted); }
-.badge-res { background: rgba(57,210,224,0.15); color: var(--cyan); }
+.badge-res { background: rgba(240,171,55,0.15); color: #f0ab37; }
 .badge-audio { background: rgba(240,136,62,0.15); color: var(--orange); }
 .badge-size { background: rgba(139,148,158,0.25); color: var(--text-secondary); }
-.badge-preset { background: rgba(139,148,158,0.2); color: var(--text-muted); }
+.badge-preset { background: rgba(158,130,100,0.2); color: #b89e7a; }
 .badge-cq { background: rgba(255,123,114,0.15); color: #ff7b72; }
-.badge-bitrate { background: rgba(57,210,224,0.15); color: var(--cyan); }
-.badge-speed { background: rgba(63,185,80,0.15); color: var(--success); }
+.badge-bitrate { background: rgba(100,200,180,0.15); color: #64c8b4; }
+.badge-speed { background: rgba(120,210,120,0.15); color: #78d278; }
 .badge-done { background: rgba(63,185,80,0.15); color: var(--success); }
 .badge-fail { background: rgba(248,81,73,0.15); color: var(--error); }
-.badge-skip { background: rgba(210,153,34,0.15); color: var(--warning); }
-.badge-cancel { background: rgba(110,118,129,0.2); color: var(--text-muted); }
+.badge-skip { background: rgba(210,170,60,0.15); color: #d2aa3c; }
+.badge-cancel { background: rgba(160,140,180,0.2); color: #a08cb4; }
+.badge-time { background: rgba(130,160,190,0.2); color: #82a0be; }
 
 /* Audio Panel (expandable row) */
 .audio-row { display: none; }
@@ -232,7 +234,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .progress-bar-fill.paused { animation: none; background: #666; }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 @keyframes preparing-pulse { 0% { background-position: 200% 0; opacity: 0.4; } 50% { opacity: 0.7; } 100% { background-position: -200% 0; opacity: 0.4; } }
-.progress-bar-text { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: var(--text-primary); text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+.progress-bar-text { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 400; color: var(--text-primary); text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
 .stat-item { background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; text-align: center; }
 .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 4px; }
@@ -788,8 +790,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </div>
                 <div class="form-group" id="audioLangsGroup" style="display:none;">
                     <label>Languages to keep</label>
-                    <input type="text" id="selAudioLangs" value="eng" placeholder="eng, spa, fre, ger..." oninput="onAudioLangModeChange()">
-                    <span class="set-desc">Comma-separated language codes</span>
+                    <div id="audioLangsList" style="max-height:140px;overflow-y:auto;padding:4px 0;"></div>
+                    <input type="hidden" id="selAudioLangs" value="eng">
                 </div>
                 <input type="hidden" id="chkEnglishOnly">
                 <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">TrueHD/Atmos, EAC3 and AC3 are always copied (passthrough). Expand files in the scanner to override per-stream.</p>
@@ -806,8 +808,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 </div>
                 <div class="form-group" id="subLangsGroup" style="display:none;">
                     <label>Languages to keep</label>
-                    <input type="text" id="selSubtitleLangs" value="eng" placeholder="eng, spa, fre, ger..." oninput="onSubtitleModeChange()">
-                    <span class="set-desc">Comma-separated language codes</span>
+                    <div id="subLangsList" style="max-height:140px;overflow-y:auto;padding:4px 0;"></div>
+                    <input type="hidden" id="selSubtitleLangs" value="eng">
                 </div>
                 <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">Expand files in the scanner to override per-stream.</p>
             </div>
@@ -1093,7 +1095,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <ul>
                     <li><strong>Codec Options</strong> &mdash; Passthrough, Opus, AAC, AC3, EAC3</li>
                     <li><strong>Per-Stream Control</strong> &mdash; Configure codec and bitrate per audio track</li>
-                    <li><strong>Language Filter</strong> &mdash; Keep all or selected languages (comma-separated codes)</li>
+                    <li><strong>Language Filter</strong> &mdash; Keep all or selected languages (auto-populated from scanned files)</li>
                     <li><strong>Type Filter</strong> &mdash; Filter by TrueHD, EAC3, AC3, stereo, surround</li>
                 </ul>
 
@@ -1405,9 +1407,9 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <p>Controls which audio tracks to keep by language:</p>
                 <ul>
                     <li><strong>Keep all languages</strong> &mdash; Include all audio tracks (default)</li>
-                    <li><strong>Keep selected languages</strong> &mdash; Only include tracks matching the specified language codes (comma-separated, e.g. <code>eng, spa, fre</code>). Tracks with "und" (undefined) language are always included.</li>
+                    <li><strong>Keep selected languages</strong> &mdash; Shows clickable tag-style checkboxes populated from the languages found in scanned files. Select the languages you want to keep. Tracks with "und" (undefined) language are always included.</li>
                 </ul>
-                <p>Available in the sidebar, default profile (Settings), and per-library profiles.</p>
+                <p>Available in the sidebar (with auto-populated checkboxes from scanned files), default profile (Settings), and per-library profiles.</p>
 
                 <h4>Keep Only Audio Type</h4>
                 <p>Filters which audio streams are included by codec type. Available options:</p>
@@ -2089,16 +2091,24 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
                         <div>
-                            <div style="font-weight:600;color:var(--text-primary);">v3.2.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <div style="font-weight:600;color:var(--text-primary);">v3.3.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
-                                <li><strong>NVENC quality</strong> &mdash; added -rc-lookahead 32 and -bufsize (maxrate+5M) for better bitrate distribution in complex scenes</li>
-                                <li><strong>Slow preset</strong> &mdash; changed to CQ 25, 15M, p7</li>
-                                <li><strong>Skipped file detection</strong> &mdash; ffprobe now reads RECODE_SKIPPED tags so skipped files appear in scan results</li>
-                                <li><strong>Duplicate queue prevention</strong> &mdash; files encoded within the last 24 hours are not re-queued</li>
-                                <li><strong>Source-gone handling</strong> &mdash; jobs for already-encoded files are skipped instead of failed</li>
-                                <li><strong>Pager increments</strong> &mdash; page size options now 50-500 in steps of 50</li>
-                                <li><strong>Mac dock icon</strong> &mdash; dock icon now uses the correct AppIcon instead of a transparent pixel</li>
-                                <li><strong>Mac binary updates</strong> &mdash; stale job cleanup, TCP keepalive, 256KB chunks, progress keepalive</li>
+                                <li><strong>Language picker</strong> &mdash; audio and subtitle language filters show clickable tag-style checkboxes populated from scanned files instead of manual text input</li>
+                                <li><strong>Auto theme</strong> &mdash; 3-way dark/light/auto toggle in header; auto switches between light (7am-7pm) and dark</li>
+                                <li><strong>Unique badge colors</strong> &mdash; every badge type (codec, hw, res, audio, preset, time, etc.) now has a distinct color</li>
+                                <li><strong>Subtitle badges</strong> &mdash; queue, encoding, and history cards show subtitle track counts</li>
+                                <li><strong>Preset tooltips</strong> &mdash; hover over any preset badge to see CQ, bitrate, and speed values</li>
+                                <li><strong>NVENC quality</strong> &mdash; added -rc-lookahead 32 and -bufsize (maxrate+5M) for better bitrate distribution</li>
+                                <li><strong>Preset tuning</strong> &mdash; Slow preset: CQ 25/15M/p7. Auto preset: CQ 27 with 15M/8M/4M per resolution</li>
+                                <li><strong>Skipped file detection</strong> &mdash; ffprobe reads RECODE_SKIPPED tags so skipped files appear in scan results</li>
+                                <li><strong>Duplicate prevention</strong> &mdash; files encoded within 24 hours are not re-queued</li>
+                                <li><strong>Light mode</strong> &mdash; light grey background, blue app name in header</li>
+                                <li><strong>Footer</strong> &mdash; copyright, GitHub, Releases, and Issues links</li>
+                                <li><strong>Log timestamps</strong> &mdash; ffmpeg and connector logs use DD-MM-YYYY HH:MM:SS format matching listener</li>
+                                <li><strong>Progress bar</strong> &mdash; non-bold percentage and elapsed time text</li>
+                                <li><strong>Header status</strong> &mdash; WS, FFMPEG, GPU, SERVER labels use 9px uppercase to match GPU capability table</li>
+                                <li><strong>Pager</strong> &mdash; page size options 50-500 in steps of 50</li>
+                                <li><strong>Mac app</strong> &mdash; dock icon fix, progress fix (select arm for progress_rx), 9px uppercase status labels, TCP keepalive, 256KB chunks</li>
                             </ul>
                         </div>
                         <div>
@@ -3054,6 +3064,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                                 <select id="setTheme">
                                     <option value="dark">Dark</option>
                                     <option value="light">Light</option>
+                                    <option value="auto">Auto (time-based)</option>
                                 </select>
                             </div>
                         </div>
@@ -3217,6 +3228,18 @@ tr.file-row:hover td { background: var(--bg-hover); }
     </div>
 </div>
 
+<footer style="text-align:center;padding:16px 24px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border);">
+    <span>&copy; 2026 Tarquin Douglass</span>
+    <span style="margin:0 8px;">&mdash;</span>
+    <a href="https://github.com/tarquin-code/recode" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">GitHub</a>
+    <span style="margin:0 8px;">&bull;</span>
+    <a href="https://github.com/tarquin-code/recode/releases" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">Releases</a>
+    <span style="margin:0 8px;">&bull;</span>
+    <a href="https://github.com/tarquin-code/recode/issues" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">Issues</a>
+    <span style="margin:0 8px;">&mdash;</span>
+    <span>GPL-3.0</span>
+</footer>
+
 <script>
 /* =========================================================================
    Auth — intercept 401s and redirect to login
@@ -3235,6 +3258,7 @@ const _icons = {
     power: '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
     moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/>',
     sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
+    monitor: '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
     film: '<rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/>',
     clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
@@ -3797,6 +3821,7 @@ function toggleAllSubs(path, include) {
 function onSubtitleModeChange() {
     const mode = document.getElementById('selSubtitleMode').value;
     document.getElementById('subLangsGroup').style.display = mode === 'langs' ? 'block' : 'none';
+    if (mode === 'langs') buildLangCheckboxes('subLangsList', 'subtitle');
     subtitleConfig = {};
     applyFilters();
 }
@@ -3814,7 +3839,7 @@ function getScannedLanguages(type) {
     return [...langs.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-function buildLangCheckboxes(containerId, type, onChange) {
+function buildLangCheckboxes(containerId, type) {
     const el = document.getElementById(containerId);
     if (!el) return;
     const langs = getScannedLanguages(type);
@@ -3823,15 +3848,29 @@ function buildLangCheckboxes(containerId, type, onChange) {
         return;
     }
     const selected = getSelectedLangs(type);
+    const hiddenId = type === 'audio' ? 'selAudioLangs' : 'selSubtitleLangs';
+    const syncFn = type === 'audio' ? 'syncAudioLangs()' : 'syncSubLangs()';
     el.innerHTML = langs.map(([code, count]) => {
         const checked = selected.has(code) ? 'checked' : '';
         const label = code === 'und' ? 'und (undefined)' : code;
-        return `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 0;font-size:12px;">
-            <input type="checkbox" ${checked} onchange="${onChange}" data-lang="${code}">
+        return `<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:3px 8px;margin:2px;font-size:11px;background:${checked ? 'rgba(88,166,255,0.15)' : 'var(--bg-tertiary)'};border:1px solid ${checked ? 'var(--accent)' : 'var(--border)'};border-radius:4px;">
+            <input type="checkbox" ${checked} onchange="this.parentElement.style.background=this.checked?'rgba(88,166,255,0.15)':'var(--bg-tertiary)';this.parentElement.style.borderColor=this.checked?'var(--accent)':'var(--border)';${syncFn}" data-lang="${code}" style="margin:0;">
             <span>${label}</span>
-            <span style="color:var(--text-muted);font-size:10px;">(${count})</span>
+            <span style="color:var(--text-muted);font-size:9px;">${count}</span>
         </label>`;
     }).join('');
+}
+function syncAudioLangs() {
+    const s = getSelectedLangs('audio');
+    document.getElementById('selAudioLangs').value = [...s].join(',');
+    audioConfig = {};
+    applyFilters();
+}
+function syncSubLangs() {
+    const s = getSelectedLangs('subtitle');
+    document.getElementById('selSubtitleLangs').value = [...s].join(',');
+    subtitleConfig = {};
+    applyFilters();
 }
 
 function getSelectedLangs(type) {
@@ -3846,6 +3885,7 @@ function getSelectedLangs(type) {
 function onAudioLangModeChange() {
     const mode = document.getElementById('selAudioLangMode').value;
     document.getElementById('audioLangsGroup').style.display = mode === 'langs' ? 'block' : 'none';
+    if (mode === 'langs') buildLangCheckboxes('audioLangsList', 'audio');
     audioConfig = {};
     applyFilters();
 }
@@ -4000,6 +4040,10 @@ function renderScanResults() {
     // Show filters
     document.getElementById('scanFilters').style.display = 'block';
 
+    // Populate language checkboxes from scanned files
+    buildLangCheckboxes('audioLangsList', 'audio');
+    buildLangCheckboxes('subLangsList', 'subtitle');
+
     // Init audio config for all files
     files.forEach(f => { initAudioConfig(f); initSubtitleConfig(f); });
 
@@ -4073,6 +4117,24 @@ function codecBadgeClass(c) {
     if (cl === 'hevc' || cl === 'h265') return 'badge-h265';
     if (cl === 'h264' || cl === 'avc') return 'badge-h264';
     return 'badge-codec';
+}
+function subLabel(f, s) {
+    const subs = f.sub_streams || [];
+    if (!subs.length) return '';
+    const scfg = s.subtitle_config || [];
+    const mode = s.subtitle_mode || 'all';
+    if (mode === 'none') return '0/' + subs.length + ' subs';
+    if (scfg.length > 0) {
+        const inc = scfg.filter(c => c.include).length;
+        return inc + '/' + subs.length + ' subs';
+    }
+    return subs.length + ' subs';
+}
+function presetTip(s) {
+    const cq = s.resolved_cq || s.cq || '?';
+    const br = s.resolved_maxbitrate || s.maxbitrate || '?';
+    const sp = s.resolved_speed || s.speed || '?';
+    return `CQ: ${cq} · Max Bitrate: ${br} · Speed: ${sp}`;
 }
 function buildOutputFilename(fileInfo, settings) {
     const stem = fileInfo.filename.replace(/\.[^.]+$/, '');
@@ -4546,15 +4608,15 @@ function renderQueue() {
                     <span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${origHdrBadge}">${origHdr}</span>
                     <span class="badge badge-sm badge-size">${f.size_human}</span>
-                    <span class="badge badge-sm badge-sdr">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
+                    <span class="badge badge-sm badge-time">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
                     <span class="badge badge-sm badge-audio">${audioLabel}</span>
+                    ${subLabel(f, job.settings) ? `<span class="badge badge-sm badge-preset">${subLabel(f, job.settings)}</span>` : ''}
                     <span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span>
                     <span class="badge badge-sm badge-hw">${hwLabel}</span>
                     <span class="badge badge-sm ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>
                     <span class="badge badge-sm badge-res">${(job.settings.resize && job.settings.resize !== 'original') ? cleanRes(job.settings.resize) : cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${targetHdrBadge}">${targetHdr}</span>
-                    <span class="badge badge-sm badge-preset">${job.settings.preset || 'auto'}</span>
-                    <span class="badge badge-sm badge-cq">CQ${job.settings.resolved_cq || job.settings.cq || '?'}</span>
+                    <span class="badge badge-sm badge-preset" title="${presetTip(job.settings)}">${job.settings.preset || 'auto'}</span>
                 </div>
             </div>
             <button class="btn btn-danger btn-sm" style="font-size:11px;padding:4px 8px;" onclick="removeFromQueue('${job.id}')">${svgIcon('x-circle', 12)}</button>
@@ -4701,15 +4763,15 @@ function renderEncoding() {
                         <span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>
                         <span class="badge badge-sm ${(() => { const h = f.hdr_type||'SDR'; return h.startsWith('Dolby') ? 'badge-dv' : h === 'SDR' ? 'badge-sdr' : 'badge-hdr'; })()}">${(() => { const h = f.hdr_type||'SDR'; return h.startsWith('Dolby Vision') ? h.replace('Dolby Vision','DV') : h; })()}</span>
                         <span class="badge badge-sm badge-size">${f.size_human}</span>
-                        <span class="badge badge-sm badge-sdr">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
+                        <span class="badge badge-sm badge-time">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>
                         <span class="badge badge-sm badge-audio">${(() => { const ac = s.audio_config || []; const inc = ac.length > 0 ? ac.filter(a => a.include).length : (f.audio_streams || []).length; const tot = (f.audio_streams || []).length; return ac.length > 0 ? inc + '/' + tot + ' audio' : tot + ' audio'; })()}</span>
+                        ${subLabel(f, s) ? `<span class="badge badge-sm badge-preset">${subLabel(f, s)}</span>` : ''}
                         <span style="color:var(--text-muted);margin:0 2px;">→</span>
                         <span class="badge badge-sm badge-hw">${encoder}</span>
                         <span class="badge badge-sm ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>
                         <span class="badge badge-sm badge-res">${(s.resize && s.resize !== 'original') ? cleanRes(s.resize) : cleanRes(f.resolution_label)}</span>
                         <span class="badge badge-sm ${(() => { const dm = s.dv_mode||'skip'; const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); const t = (dm==='encode_dv'&&(isDv||f.hdr_type==='HDR10'))?'DV P8.4':(dm==='hdr10'&&isDv)?'HDR10':(f.hdr_type||'SDR'); return t.startsWith('DV')?'badge-dv':t==='SDR'?'badge-sdr':'badge-hdr'; })()}">${(() => { const dm = s.dv_mode||'skip'; const isDv = (f.hdr_type||'').startsWith('Dolby Vision'); return (dm==='encode_dv'&&(isDv||f.hdr_type==='HDR10'))?'DV P8.4':(dm==='hdr10'&&isDv)?'HDR10':(f.hdr_type||'SDR'); })()}</span>
-                        <span class="badge badge-sm badge-preset">${presetLabel}</span>
-                        <span class="badge badge-sm badge-cq">CQ${rcq}</span>
+                        <span class="badge badge-sm badge-preset" title="${presetTip(s)}">${presetLabel}</span>
                     </div>
                 </div>
                 <div style="margin-top:6px;">
@@ -4750,7 +4812,7 @@ function renderEncoding() {
                         <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;margin-bottom:4px;">Settings</div>
                         <div style="display:flex;gap:6px;flex-wrap:wrap;">
                             <span class="badge badge-hw">${encoder}</span>
-                            <span class="badge badge-preset">${presetLabel}</span>
+                            <span class="badge badge-preset" title="${presetTip(s)}">${presetLabel}</span>
                             <span class="badge badge-cq">CQ ${rcq}</span>
                             <span class="badge badge-bitrate">Max ${rbit}</span>
                             <span class="badge badge-speed">${rspd}</span>
@@ -5420,16 +5482,17 @@ function renderHistory() {
         detailHtml += `<span class="badge badge-sm badge-res">${cleanRes(f.resolution_label)}</span>`;
         detailHtml += `<span class="badge badge-sm ${hOrigHdrBadge}">${hOrigHdr}</span>`;
         detailHtml += `<span class="badge badge-sm badge-size">${f.size_human}</span>`;
-        detailHtml += `<span class="badge badge-sm badge-sdr">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-time">${f.duration_secs ? (Math.floor(f.duration_secs/3600) > 0 ? Math.floor(f.duration_secs/3600) + 'h ' + Math.floor((f.duration_secs%3600)/60) + 'm' : Math.floor(f.duration_secs/60) + 'm') : ''}</span>`;
         detailHtml += `<span class="badge badge-sm badge-audio">${hAudioLabel}</span>`;
+        const hSubLabel = subLabel(f, s);
+        if (hSubLabel) detailHtml += `<span class="badge badge-sm badge-preset">${hSubLabel}</span>`;
         // Arrow + target badges
         detailHtml += `<span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span> `;
         detailHtml += `<span class="badge badge-sm badge-hw">${hHwLabel}</span>`;
         detailHtml += `<span class="badge badge-sm ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>`;
         detailHtml += `<span class="badge badge-sm badge-res">${hTgtRes}</span>`;
         detailHtml += `<span class="badge badge-sm ${hTargetHdrBadge}">${hTargetHdr}</span>`;
-        detailHtml += `<span class="badge badge-sm badge-preset">${presetLabel}</span>`;
-        detailHtml += `<span class="badge badge-sm badge-cq">CQ${rcq}</span>`;
+        detailHtml += `<span class="badge badge-sm badge-preset" title="${presetTip(s)}">${presetLabel}</span>`;
         // Result info — sizes, saved %, elapsed
         if (job.result && job.result.orig_size) {
             detailHtml += ` <span class="badge badge-sm badge-size">${job.result.orig_size} → ${job.result.new_size}</span>`;
@@ -5444,7 +5507,7 @@ function renderHistory() {
         }
         if (job.error && !isDiscarded) detailHtml += ` <span class="badge badge-sm badge-fail">${escHtml(job.error).substring(0, 60)}</span>`;
         const elapsed = job.finished_at && job.started_at ? formatTime(job.finished_at - job.started_at) : '';
-        if (elapsed) detailHtml += ` <span class="badge badge-sm badge-sdr">${elapsed}</span>`;
+        if (elapsed) detailHtml += ` <span class="badge badge-sm badge-time">${elapsed}</span>`;
 
         const r = job.result || {};
         const hacfg = s.audio_config || [];
@@ -5490,7 +5553,7 @@ function renderHistory() {
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 <span class="badge badge-hw">${encoderLabel}</span>
                 <span class="badge ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>
-                <span class="badge badge-preset">${presetLabel}</span>
+                <span class="badge badge-preset" title="${presetTip(s)}">${presetLabel}</span>
                 <span class="badge badge-cq">CQ ${rcq}</span>
                 <span class="badge badge-bitrate">Max ${rbit}</span>
                 <span class="badge badge-speed">${rspd}</span>
@@ -6390,8 +6453,9 @@ async function openSettings() {
             }
         }
         renderLibraryProfiles();
-        // Theme
-        document.getElementById('setTheme').value = s.theme || 'dark';
+        // Theme — localStorage takes priority (set by header toggle), server is fallback
+        const storedTheme = localStorage.getItem('recode-theme');
+        document.getElementById('setTheme').value = storedTheme || s.theme || 'dark';
     } catch(e) { console.error('Failed to load settings', e); }
     onSettingsPresetChange();
     document.getElementById('settingsModal').classList.add('open');
@@ -7104,10 +7168,10 @@ function applySettingsToSidebar(s) {
     updateDeleteWarning();
     // Test mode banner
     document.getElementById('testModeBanner').style.display = s.test_mode ? 'block' : 'none';
-    // Apply theme if set
-    if (s.theme) {
-        document.documentElement.setAttribute('data-theme', s.theme);
+    // Apply theme — only if no local override exists
+    if (s.theme && !localStorage.getItem('recode-theme')) {
         localStorage.setItem('recode-theme', s.theme);
+        document.documentElement.setAttribute('data-theme', _resolveTheme(s.theme));
         setThemeIcon(s.theme);
     }
 }
@@ -7163,22 +7227,41 @@ function onLibrarySelect() {
 /* =========================================================================
    Theme Toggle
    ========================================================================= */
-function setThemeIcon(theme) {
-    document.getElementById('themeBtn').innerHTML = theme === 'dark' ? svgIcon('moon', 18) : svgIcon('sun', 18);
+function _autoThemeValue() {
+    const hour = new Date().getHours();
+    return (hour >= 7 && hour < 19) ? 'light' : 'dark';
+}
+function _resolveTheme(pref) {
+    return pref === 'auto' ? _autoThemeValue() : pref;
+}
+function setThemeIcon(pref) {
+    const icons = { dark: 'moon', light: 'sun', auto: 'monitor' };
+    const titles = { dark: 'Dark mode', light: 'Light mode', auto: 'Auto (7am-7pm light)' };
+    const btn = document.getElementById('themeBtn');
+    btn.innerHTML = svgIcon(icons[pref] || 'moon', 18);
+    btn.title = titles[pref] || 'Toggle theme';
 }
 function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme') || 'dark';
-    const next = current === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    setThemeIcon(next);
+    const pref = localStorage.getItem('recode-theme') || 'dark';
+    const order = ['dark', 'light', 'auto'];
+    const next = order[(order.indexOf(pref) + 1) % order.length];
     localStorage.setItem('recode-theme', next);
+    document.documentElement.setAttribute('data-theme', _resolveTheme(next));
+    setThemeIcon(next);
 }
 function applyStoredTheme() {
-    const theme = localStorage.getItem('recode-theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-    setThemeIcon(theme);
+    const pref = localStorage.getItem('recode-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', _resolveTheme(pref));
+    setThemeIcon(pref);
 }
 applyStoredTheme();
+// Auto theme: check every minute if the hour changed
+setInterval(() => {
+    const pref = localStorage.getItem('recode-theme') || 'dark';
+    if (pref === 'auto') {
+        document.documentElement.setAttribute('data-theme', _autoThemeValue());
+    }
+}, 60000);
 
 // Initialize static empty state icons
 document.getElementById('emptyScanIcon').innerHTML = svgIcon('search', 48);

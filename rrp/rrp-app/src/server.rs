@@ -480,6 +480,11 @@ pub async fn run_fuse_job(
         if child_done { break; }
 
         tokio::select! {
+            Some(p) = progress_rx.recv() => {
+                let _ = write_tagged(tx, TAG_PROGRESS, &p).await;
+                let _ = tx.flush().await;
+                last_progress_sent = std::time::Instant::now();
+            }
             _ = keepalive_interval.tick() => {
                 // Only send keepalive if no real progress was sent recently
                 if last_progress_sent.elapsed() > Duration::from_secs(25) {

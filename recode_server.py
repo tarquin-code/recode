@@ -63,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "3.2.2"
+VERSION = "3.3.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -252,9 +252,9 @@ NVENC_TO_X265 = {
 }
 
 AUTO_PRESETS = {
-    "4k":    {"cq": 20, "maxbitrate": "50M", "speed": "p5"},
-    "1080p": {"cq": 20, "maxbitrate": "20M", "speed": "p6"},
-    "sd":    {"cq": 30, "maxbitrate": "8M",  "speed": "p2"},
+    "4k":    {"cq": 27, "maxbitrate": "15M", "speed": "p7"},
+    "1080p": {"cq": 27, "maxbitrate": "8M",  "speed": "p7"},
+    "sd":    {"cq": 27, "maxbitrate": "4M",  "speed": "p7"},
 }
 
 
@@ -7323,16 +7323,20 @@ async def get_logs(lines: int = 200):
     result = {}
     # ffmpeg logs (active + recent history)
     ffmpeg_logs = []
+    _ts_fmt = "%d-%m-%Y %H:%M:%S"
     for jid, job_lines in list(encode_queue.ffmpeg_logs.items()):
         fi = encode_queue.jobs[jid].file_info if jid in encode_queue.jobs else {}
         fname = fi.get("filename", jid)
+        job = encode_queue.jobs.get(jid) or encode_queue.active_jobs.get(jid)
+        started = time.strftime(_ts_fmt, time.localtime(job.started_at)) if job and job.started_at else time.strftime(_ts_fmt)
         for line in job_lines[-20:]:
-            ffmpeg_logs.append(f"[{fname[:40]}] {line}")
+            ffmpeg_logs.append(f"{started}  [{fname[:40]}] {line}")
     # Also include recent history job logs
     for h in encode_queue.history[-10:]:
         for line in (h.get("log") or [])[-10:]:
             fname = h.get("file_info", {}).get("filename", h.get("id", "?"))
-            ffmpeg_logs.append(f"[{fname[:40]}] {line}")
+            ts = time.strftime(_ts_fmt, time.localtime(h.get("started_at", 0))) if h.get("started_at") else ""
+            ffmpeg_logs.append(f"{ts}  [{fname[:40]}] {line}")
     # Also pull ffmpeg-related lines from connector logs
     for i in range(10):
         cpath = os.path.join(BASE_DIR, f"rrp-connect-{i}.log")

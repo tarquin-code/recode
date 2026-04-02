@@ -2,7 +2,7 @@
 
 **GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-3.2.2-blue)
+![Version](https://img.shields.io/badge/version-3.3.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -30,7 +30,7 @@
 ### Audio
 - **Codec Options** — Passthrough, Opus, AAC, AC3, EAC3
 - **Per-Stream Control** — Configure codec and bitrate for each audio track individually
-- **Language Filter** — Keep all or selected languages (comma-separated codes)
+- **Language Filter** — Keep all or selected languages (auto-populated checkboxes from scanned files)
 - **Audio Type Filter** — All tracks, TrueHD/Atmos, EAC3, AC3, stereo, surround
 - **Bitrate Control** — Configurable per-codec bitrate (64k-640k)
 
@@ -99,7 +99,7 @@
 - **Smooth Progress** — Preparing phase, decimal percentages, frame-based fallback, 1-second interpolation
 - **System Monitoring** — CPU, RAM, GPU utilization, temperature, VRAM in header
 - **GPU Graphs** — Per-GPU utilization, VRAM, and temperature charts with VRAM capability labels
-- **Dark / Light Theme** — Toggle with header icon or in Settings
+- **Dark / Light / Auto Theme** — 3-way toggle in header; auto switches light (7am-7pm) and dark
 - **Mobile Responsive** — Adapts to desktop, tablet, and mobile screens
 - **Settings Modal** — All settings in one place, save without closing, unsaved indicator
 - **System Transcodes** — View all ffmpeg/Plex processes, remote GPU jobs on servers
