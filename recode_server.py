@@ -63,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "3.3.1"
+VERSION = "3.3.2"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -132,8 +132,8 @@ def build_encode_tag(video_codec: str, info: dict, dv_mode: str = "skip", resize
     hdr_type = info.get("hdr_type", "SDR")
     is_dv = hdr_type.startswith("Dolby Vision")
 
-    if dv_mode == "encode_dv" and (is_dv or hdr_type == "HDR10"):
-        hdr_tag = "DV-P8"
+    if dv_mode in ("encode_dv", "encode_dv81", "encode_dv7") and (is_dv or hdr_type == "HDR10"):
+        hdr_tag = "DV-P7" if dv_mode == "encode_dv7" else "DV-P81" if dv_mode == "encode_dv81" else "DV-P84"
     elif dv_mode == "keep" and is_dv:
         hdr_tag = "DV"
     elif dv_mode == "hdr10" and is_dv:
@@ -350,8 +350,9 @@ APP_DEFAULTS = {
     "video_codec": "hevc",
     "skip_4k": False,
     "hdr_only": False,
-    "dv_mode": "skip",  # "skip", "keep" (preserve DV metadata), "hdr10" (convert to HDR10), "encode_dv" (DV→P8.4)
+    "dv_mode": "skip",  # "skip", "keep", "hdr10", "encode_dv" (P8.4), "encode_dv81" (P8.1), "encode_dv7" (P7)
     "discard_larger": False,
+    "early_abort": False,
     "delete_original": False,
     "tmp_dir": "/var/lib/plex/tmp",
     # Audio defaults
@@ -507,6 +508,7 @@ def build_default_profile() -> dict:
         "hdr_only": app_settings.get("hdr_only", False),
         "delete_original": app_settings.get("delete_original", False),
         "discard_larger": app_settings.get("discard_larger", False),
+        "early_abort": app_settings.get("early_abort", False),
         "tmp_dir": app_settings.get("tmp_dir", "/var/lib/plex/tmp"),
         "english_only": app_settings.get("english_only", False),
         "audio_filter": app_settings.get("audio_filter", "all"),
@@ -711,28 +713,33 @@ async def probe_file(path: str) -> dict:
 
 
 async def detect_dolby_vision(path: str) -> tuple[bool, Optional[int]]:
-    """Check for Dolby Vision using mediainfo. Returns (has_dovi, profile_number)."""
+    """Check for Dolby Vision using mediainfo. Returns (has_dovi, profile_string).
+    Profile string is e.g. '5', '7', '8.1', '8.4' for sub-profile detection."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "mediainfo", "--Inform=Video;%HDR_Format/String%", path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, _ = await proc.communicate()
-        text = stdout.decode().lower()
-        if "dolby vision" not in text:
+        text = stdout.decode()
+        text_lower = text.lower()
+        if "dolby vision" not in text_lower:
             return False, None
-        # Extract profile number — mediainfo outputs e.g. "Dolby Vision, Version 1.0, dvhe.05.06, ..."
-        # or "Dolby Vision / ... / dvhe.05 ..." — profile is after "dvhe." or "dvav."
         import re
-        m = re.search(r'dvhe\.(\d+)|dvav\.(\d+)', text)
+        m = re.search(r'dvhe\.(\d+)|dvav\.(\d+)', text_lower)
         if m:
             profile = int(m.group(1) or m.group(2))
-            return True, profile
-        # Fallback: look for "profile X" pattern
-        m = re.search(r'profile\s+(\d+)', text)
-        if m:
-            return True, int(m.group(1))
-        return True, None
+        else:
+            m = re.search(r'profile\s+(\d+)', text_lower)
+            profile = int(m.group(1)) if m else None
+        # For Profile 8, detect sub-profile from compatibility info
+        if profile == 8:
+            if "hlg compatible" in text_lower:
+                return True, "8.4"
+            elif "hdr10 compatible" in text_lower:
+                return True, "8.1"
+            return True, "8"
+        return True, str(profile) if profile is not None else None
     except Exception:
         return False, None
 
@@ -1063,7 +1070,7 @@ def get_cache_db() -> sqlite3.Connection:
         audio_streams   TEXT NOT NULL,
         is_hevc         INTEGER NOT NULL,
         has_dovi        INTEGER NOT NULL,
-        dovi_profile    INTEGER,
+        dovi_profile    TEXT,
         suggestion_level TEXT,
         suggestion_text  TEXT NOT NULL DEFAULT '',
         savings_pct      INTEGER NOT NULL DEFAULT 0
@@ -1197,6 +1204,12 @@ def _get_render_device(gpu_idx):
     return None
 
 
+def _dv_profile_info(dv_mode):
+    """Return (target_label, dovi_tool_mode, dovi_tool_profile, compat_id) for a DV encode mode."""
+    if dv_mode == "encode_dv81": return ("P8.1", " -m 2", "8.1", 1)
+    if dv_mode == "encode_dv7": return ("P7", " -m 3", "7", 0)
+    return ("P8.4", " -m 4", "8.4", 4)
+
 def _build_encoder_args(encoder_type, is_h264, cq, speed, maxbitrate):
     """Build encoder-specific ffmpeg args for video codec, quality, and speed."""
     if encoder_type == "nvenc":
@@ -1277,7 +1290,7 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
     cmd = [ffmpeg_bin, "-y", "-nostdin"]
 
     # Hardware acceleration for GPU only
-    dovi_p5 = info.get("dovi_profile") == 5
+    dovi_p5 = str(info.get("dovi_profile", "")) == "5"
 
     is_remote = settings.get("_remote_server_idx", -1) >= 0
     encoder_type = _get_encoder_type_for_job(settings, is_remote)
@@ -1316,7 +1329,7 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
             cuda_safe_fmts = ("yuv420p", "nv12", "p010le", "yuv420p10le")
             if pix_fmt in cuda_safe_fmts:
                 cmd += ["-hwaccel", "cuda", "-hwaccel_device", gpu_id, "-extra_hw_frames", "16"]
-                if not dovi_p5 and not (info.get("has_dovi") and dv_mode == "encode_dv"):
+                if not dovi_p5 and not (info.get("has_dovi") and dv_mode in ("encode_dv", "encode_dv81", "encode_dv7")):
                     cmd += ["-hwaccel_output_format", "cuda"]
                 else:
                     log.info(f"DV P{info.get('dovi_profile','?')} encode_dv: CUDA decode without output_format cuda")
@@ -1402,7 +1415,13 @@ def build_ffmpeg_cmd(info: dict, settings: dict, ffmpeg_bin: str = None) -> tupl
             log.info(f"Audio stream {i}: codec={codec_choice}, bitrate={bitrate} (source={astream.get('codec','?')}, default_action={astream['action']})")
 
         if codec_choice == "copy":
-            cmd += [f"-c:a:{out_audio_idx}", "copy"]
+            # TS/M2TS files with AAC can have broken headers — re-encode AAC to avoid muxing failures
+            _input_ext = Path(info.get("path", "")).suffix.lower()
+            if _input_ext in (".ts", ".m2ts") and astream.get("codec", "").lower() == "aac":
+                cmd += [f"-c:a:{out_audio_idx}", "aac", f"-b:a:{out_audio_idx}", bitrate]
+                log.info(f"Audio stream {i}: forcing AAC re-encode for .ts input (avoids muxing errors)")
+            else:
+                cmd += [f"-c:a:{out_audio_idx}", "copy"]
         elif codec_choice == "libopus":
             # libopus max bitrate is 512k — clamp if higher
             opus_br = bitrate
@@ -1723,10 +1742,18 @@ class EncodeQueue:
             self.queue_enabled = app_settings.get("auto_start_queue", False)
             # Restore queued jobs
             for job_data in data.get("queued", []):
+                s = job_data["settings"]
+                # Clear stale remote assignments from previous runs
+                for k in ("_remote_server_idx", "_remote_gpu_name", "_remote_encoder_type"):
+                    s.pop(k, None)
+                if s.get("encoder") == "remote":
+                    s["encoder"] = "gpu"
+                if s.get("gpu_target") == "remote":
+                    s["gpu_target"] = "auto"
                 job = EncodeJob(
                     id=job_data["id"],
                     file_info=job_data["file_info"],
-                    settings=job_data["settings"],
+                    settings=s,
                 )
                 self.jobs[job.id] = job
                 self.queue_order.append(job.id)
@@ -2756,8 +2783,9 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
         encode_queue.queue_order = [j for j in encode_queue.queue_order if j != job.id]
         if job.id in encode_queue.active_jobs:
             log_lines = encode_queue.ffmpeg_logs.get(job.id, [])[-100:]
-            encode_queue.history.append({"id": job.id, "file_info": info, "settings": job.settings, "status": job.status, "error": job.error, "started_at": job.started_at, "finished_at": job.finished_at, "result": job.result or {}, "log": log_lines})
-            _record_encode_stat(job.status, job.result or {}, job.started_at, job.finished_at)
+            _final_status = job.status if job.status != JobStatus.ENCODING else (status or JobStatus.FAILED)
+            encode_queue.history.append({"id": job.id, "file_info": info, "settings": job.settings, "status": _final_status, "error": job.error, "started_at": job.started_at, "finished_at": job.finished_at, "result": job.result or {}, "log": log_lines})
+            _record_encode_stat(_final_status, job.result or {}, job.started_at, job.finished_at)
         encode_queue.active_jobs.pop(job.id, None)
         encode_queue.ffmpeg_procs.pop(job.id, None)
         encode_queue.ffmpeg_logs.pop(job.id, None)
@@ -2770,6 +2798,18 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
     exit_code = 1
     error_msg = ""
     _listener_pid = _remote_client_proc.pid if _remote_client_proc else None
+
+    def _cleanup_job_files():
+        """Guarantee cleanup of all listener job files."""
+        for f in (job_file, progress_file, result_file):
+            try:
+                if os.path.exists(f): os.remove(f)
+            except Exception: pass
+        # Also clean cancel file if it exists
+        cancel_f = os.path.join(jobs_dir, f"{job.id}.cancel")
+        try:
+            if os.path.exists(cancel_f): os.remove(cancel_f)
+        except Exception: pass
     _last_progress_change = time.time()
     _last_progress_pct = 0
     log.info(f"[{job.id}] Remote monitor task started (progress_file={progress_file})")
@@ -2777,8 +2817,14 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
         await asyncio.sleep(1)
         # Timeout: if no progress change for 10 minutes, assume job is dead
         current_pct = job.progress.get("pct", 0) if job.progress else 0
-        if current_pct != _last_progress_pct:
+        current_output = job.progress.get("output_size", 0) if job.progress else 0
+        current_frame = job.progress.get("frame", 0) if job.progress else 0
+        if (current_pct != _last_progress_pct or
+            current_output != getattr(job, '_last_output_size', 0) or
+            current_frame != getattr(job, '_last_frame', 0)):
             _last_progress_pct = current_pct
+            job._last_output_size = current_output
+            job._last_frame = current_frame
             _last_progress_change = time.time()
         elif time.time() - _last_progress_change > 600:
             _rname = job.settings.get("_remote_gpu_name", "?")
@@ -2839,6 +2885,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 if os.path.exists(f): os.remove(f)
             break
         # Read progress
+        elapsed = time.time() - job.started_at if job.started_at else 0
         if os.path.isfile(progress_file):
             try:
                 with open(progress_file) as _f:
@@ -2852,10 +2899,15 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 # CUDA hwaccel reports frame=0 and time=N/A — estimate from output_size
                 if pct == 0 and output_size > 0 and info.get("size_bytes", 0) > 0:
                     pct = min(99, round(output_size / info["size_bytes"] * 100, 1))
-                elapsed = time.time() - job.started_at if job.started_at else 0
+                # Estimate speed from frame count when time is N/A
+                if spd == 0 and frame > 0 and elapsed > 0:
+                    est_time = frame / 24.0
+                    spd = est_time / elapsed
+                    if pct == 0 and duration > 0:
+                        pct = min(99, round(est_time / duration * 100, 1))
                 remaining = max(duration - current_time, 0)
                 eta = remaining / spd if spd > 0 else 0
-                phase = "encoding" if pct > 0 or output_size > 0 else "preparing"
+                phase = "encoding" if pct > 0 or output_size > 0 or frame > 0 else "preparing"
                 job.progress = {
                     "pct": pct, "elapsed_secs": elapsed, "eta_secs": eta,
                     "speed": f"{spd:.2f}x", "bitrate": f"{br:.1f}kbits/s", "frame": frame,
@@ -2863,8 +2915,50 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                     "output_size": output_size, "phase": phase,
                 }
                 await manager.broadcast({"type": "progress_update", "data": {"id": job.id, "progress": job.progress}})
+                # Early abort: if discard_larger and output exceeds or is predicted to exceed original
+                orig_bytes = info.get("size_bytes", 0)
+                _should_abort = False
+                if settings.get("discard_larger") and output_size > 0 and orig_bytes > 0:
+                    if output_size >= orig_bytes:
+                        _should_abort = True
+                        _abort_reason = f"output ({human_size(output_size)}) exceeds original ({human_size(orig_bytes)})"
+                    elif settings.get("early_abort") and pct >= 25 and pct > 0 and (output_size / (pct / 100)) > orig_bytes:
+                        _predicted = int(output_size / (pct / 100))
+                        _should_abort = True
+                        _abort_reason = f"predicted {human_size(_predicted)} exceeds original {human_size(orig_bytes)} (at {pct}%, output already {human_size(output_size)})"
+                if _should_abort:
+                    log.info(f"[{job.id}] Early abort: {_abort_reason}")
+                    encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Early abort: {_abort_reason}")
+                    # Write cancel file
+                    cancel_file = os.path.join(jobs_dir, f"{job.id}.cancel")
+                    with open(cancel_file, "w") as _cf: _cf.write("cancel")
+                    # Wait for result
+                    for _ in range(10):
+                        await asyncio.sleep(0.5)
+                        if os.path.isfile(result_file): break
+                    for f in (job_file, progress_file, result_file, cancel_file):
+                        if os.path.exists(f): os.remove(f)
+                    if os.path.exists(tmp_output): os.remove(tmp_output)
+                    _predicted_size = int(output_size / (pct / 100)) if pct > 0 else output_size
+                    pct_bigger = int((_predicted_size - orig_bytes) / orig_bytes * 100) if orig_bytes > 0 else 0
+                    # Use 0 for new_bytes so stats aren't inflated by predictions
+                    job.result = {"orig_size": human_size(orig_bytes), "new_size": human_size(_predicted_size), "orig_bytes": orig_bytes, "new_bytes": 0, "saved_pct": 0, "action": "discarded"}
+                    _finish_job(JobStatus.SKIPPED, f"Predicted larger than original ({human_size(_predicted_size)} vs {human_size(orig_bytes)}, +{abs(pct_bigger)}%) — early abort at {pct}%")
+                    encode_queue.record_remote_success(settings.get("_remote_gpu_name", ""))
+                    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+                    return  # Don't fall through to failure handler
             except Exception as _pe:
                 log.warning(f"[{job.id}] Progress read error: {_pe}")
+        else:
+            # No progress file yet — still broadcast elapsed time so UI shows activity
+            job.progress = {
+                "pct": 0, "elapsed_secs": elapsed, "eta_secs": 0,
+                "speed": "0x", "bitrate": "0kbits/s", "frame": 0,
+                "current_time": 0, "total_time": duration,
+                "output_size": 0, "phase": "preparing",
+            }
+            if int(elapsed) % 2 == 0:
+                await manager.broadcast({"type": "progress_update", "data": {"id": job.id, "progress": job.progress}})
         # Check for result
         if os.path.isfile(result_file):
             try:
@@ -2937,6 +3031,13 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
         _finish_job(JobStatus.CANCELLED, "Cancelled by user")
         await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
         return
+    if exit_code == -2:
+        # Cancelled on the remote GPU server GUI
+        _rname = settings.get("_remote_gpu_name", "?")
+        log.info(f"[{job.id}] Job cancelled on remote GPU '{_rname}'")
+        _finish_job(JobStatus.CANCELLED, f"Cancelled on remote GPU ({_rname})", no_retry=True)
+        await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+        return
     if exit_code != 0:
         encode_queue.record_remote_failure(settings.get("_remote_gpu_name", ""))
         _finish_job(JobStatus.FAILED, error_msg or f"Remote encode failed (exit {exit_code})")
@@ -2950,10 +3051,11 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
         _dv_mode = settings.get("dv_mode", "skip")
         _dovi_profile = info.get("dovi_profile")
         _is_dv = info.get("hdr_type", "").startswith("Dolby Vision")
-        _needs_dv_inject = _is_dv and _dv_mode == "encode_dv"
+        _needs_dv_inject = _is_dv and _dv_mode in ("encode_dv", "encode_dv81", "encode_dv7")
         if _needs_dv_inject:
-            _is_p5 = _dovi_profile == 5
-            _dv_label = f"DV P{_dovi_profile}→P8.4"
+            _is_p5 = str(_dovi_profile) == "5"
+            _tp, _, _, _compat_id = _dv_profile_info(_dv_mode)
+            _dv_label = f"DV P{_dovi_profile}→{_tp}"
             log.info(f"[{job.id}] {_dv_label} — RPU injection starting (local post-process)")
             encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (local post-process) ===")
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
@@ -2965,7 +3067,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
             remuxed_mkv = os.path.join(tmp_dir, f"{job.id}_dv.mkv")
             dovi_cleanup = [rpu_bin, encoded_hevc, injected_hevc, remuxed_mkv]
             try:
-                _dovi_mode_str = " -m 4"
+                _, _dovi_mode_str, _, _compat_id = _dv_profile_info(_dv_mode)
                 _rpu_duration = "-t 300 " if app_settings.get("test_mode") else ""
                 log.info(f"[{job.id}] {_dv_label} step 1/4: extracting RPU")
                 encode_queue.ffmpeg_logs.get(job.id, []).append("DV step 1/4: extracting RPU...")
@@ -3023,7 +3125,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 else:
                     raise RuntimeError("mkvmerge not found")
                 if os.path.exists(injected_hevc): os.remove(injected_hevc)
-                patch_dvvc_compat_id(remuxed_mkv, 4)
+                patch_dvvc_compat_id(remuxed_mkv, _compat_id)
                 os.remove(tmp_output)
                 shutil.move(remuxed_mkv, tmp_output)
                 log.info(f"[{job.id}] {_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
@@ -3044,14 +3146,15 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 for f in dovi_cleanup:
                     if os.path.exists(f): os.remove(f)
 
-        # HDR10 → DV P8.4 upgrade (runs locally)
+        # HDR10 → DV P8.x upgrade (runs locally)
         _needs_dv_upgrade = (
-            _dv_mode == "encode_dv" and not _is_dv
+            _dv_mode in ("encode_dv", "encode_dv81", "encode_dv7") and not _is_dv
             and info.get("is_hdr", False) and info.get("hdr_type", "") == "HDR10"
             and os.path.exists(tmp_output)
         )
         if _needs_dv_upgrade:
-            _dv_label = "HDR10→DV P8.4"
+            _tp2, _, _, _compat_id = _dv_profile_info(_dv_mode)
+            _dv_label = f"HDR10→DV {_tp2}"
             log.info(f"[{job.id}] {_dv_label} — generating RPU (local post-process)")
             encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {_dv_label} (local post-process) ===")
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
@@ -3091,8 +3194,9 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 }}
                 with open(gen_json, "w") as f: json.dump(gen_config, f)
 
+                _, _, _gen_profile, _compat_id = _dv_profile_info(_dv_mode)
                 p = await asyncio.create_subprocess_exec(
-                    DOVI_TOOL, "generate", "-j", gen_json, "-o", rpu_bin, "--profile", "8.4",
+                    DOVI_TOOL, "generate", "-j", gen_json, "-o", rpu_bin, "--profile", _gen_profile,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 _, stderr_out = await p.communicate()
                 if p.returncode != 0 or not os.path.exists(rpu_bin) or os.path.getsize(rpu_bin) == 0:
@@ -3127,7 +3231,7 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 else:
                     raise RuntimeError("mkvmerge not found")
                 if os.path.exists(injected_hevc): os.remove(injected_hevc)
-                patch_dvvc_compat_id(remuxed_mkv, 4)
+                patch_dvvc_compat_id(remuxed_mkv, _compat_id)
                 os.remove(tmp_output)
                 shutil.move(remuxed_mkv, tmp_output)
                 log.info(f"[{job.id}] {_dv_label} complete — {human_size(os.path.getsize(tmp_output))}")
@@ -3590,6 +3694,7 @@ async def encode_worker(worker_id: int):
             encode_queue.running = True
             next_job.status = JobStatus.ENCODING
             next_job.started_at = time.time()
+            next_job.progress = {"pct": 0, "elapsed_secs": 0, "eta_secs": 0, "speed": "0x", "bitrate": "0kbits/s", "frame": 0, "current_time": 0, "total_time": 0, "output_size": 0, "phase": "preparing"}
             encode_queue.active_jobs[next_job.id] = next_job
             encode_queue.job_gpus[next_job.id] = gpu_id
             _rname = next_job.settings.get("_remote_gpu_name", "")
@@ -3668,9 +3773,10 @@ async def encode_worker(worker_id: int):
             # Only add to history if cancel_job hasn't already cleaned this up
             if job.id in encode_queue.active_jobs:
                 log_lines = encode_queue.ffmpeg_logs.get(job.id, [])[-100:]
+                _final_status = job.status if job.status != JobStatus.ENCODING else (status or JobStatus.FAILED)
                 encode_queue.history.append({
                     "id": job.id, "file_info": info, "settings": job.settings,
-                    "status": job.status,
+                    "status": _final_status,
                     "error": job.error, "started_at": job.started_at,
                     "finished_at": job.finished_at, "result": job.result or {},
                     "log": log_lines,
@@ -3682,6 +3788,14 @@ async def encode_worker(worker_id: int):
             encode_queue._proc_ended_at.pop(job.id, None)
             encode_queue.job_gpus.pop(job.id, None)
             encode_queue.running = len(encode_queue.active_jobs) > 0
+
+        # Prevent re-encode loops — skip files that are already encoded output
+        _src_name = info.get("filename", "")
+        if "_recode." in _src_name and _src_name.count("_recode") >= 2:
+            log.warning(f"[{job.id}] Re-encode loop detected: {_src_name}")
+            _finish_job(JobStatus.SKIPPED, "Re-encode loop detected — file already encoded multiple times", no_retry=True)
+            await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+            continue
 
         # Check source file still exists
         if not os.path.exists(info.get("path", "")):
@@ -3872,6 +3986,12 @@ async def encode_worker(worker_id: int):
                 except Exception as e:
                     log.error(f"[{j.id}] Remote monitor task crashed: {e}")
                     import traceback; traceback.print_exc()
+                finally:
+                    # Guarantee cleanup of all listener job files
+                    for _cf in (jf, pf, rf, os.path.join(jd, f"{j.id}.cancel")):
+                        try:
+                            if os.path.exists(_cf): os.remove(_cf)
+                        except Exception: pass
             asyncio.create_task(_safe_monitor(job, job_file, progress_file, result_file, jobs_dir, info, settings, tmp_output, output_file, cmd))
             continue  # Worker is free to dispatch more jobs
 
@@ -3916,6 +4036,7 @@ async def encode_worker(worker_id: int):
                 "data": {"id": job.id, "progress": job.progress}
             })
 
+            _early_abort = False
             # Parse progress — remote uses stderr (-stats), local uses stdout (-progress pipe:1)
             current_time = 0
             speed = "0x"
@@ -3974,6 +4095,24 @@ async def encode_worker(worker_id: int):
                                     "type": "progress_update",
                                     "data": {"id": job.id, "progress": job.progress}
                                 })
+                            # Early abort: discard_larger and output already exceeds original
+                            _orig_sz = info.get("size_bytes", 0)
+                            _should_abort = False
+                            if settings.get("discard_larger") and output_size > 0 and _orig_sz > 0:
+                                if output_size >= _orig_sz:
+                                    _should_abort = True
+                                    _abort_reason = f"output ({human_size(output_size)}) exceeds original ({human_size(_orig_sz)})"
+                                elif settings.get("early_abort") and pct >= 25 and pct > 0 and (output_size / (pct / 100)) > _orig_sz:
+                                    _predicted = int(output_size / (pct / 100))
+                                    _should_abort = True
+                                    _abort_reason = f"predicted {human_size(_predicted)} exceeds original {human_size(_orig_sz)} (at {pct}%, output already {human_size(output_size)})"
+                            if _should_abort:
+                                log.info(f"[{job.id}] Early abort: {_abort_reason}")
+                                encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Early abort: {_abort_reason}")
+                                _early_abort = True
+                                try: proc.kill()
+                                except Exception: pass
+                                break
                         else:
                             encode_queue.ffmpeg_logs.setdefault(job.id, []).append(line_text)
             else:
@@ -4037,6 +4176,24 @@ async def encode_worker(worker_id: int):
                             "type": "progress_update",
                             "data": {"id": job.id, "progress": job.progress}
                         })
+                        # Early abort: discard_larger and output already exceeds or is predicted to exceed original
+                        _orig_sz = info.get("size_bytes", 0)
+                        _should_abort = False
+                        if settings.get("discard_larger") and output_size > 0 and _orig_sz > 0:
+                            if output_size >= _orig_sz:
+                                _should_abort = True
+                                _abort_reason = f"output ({human_size(output_size)}) exceeds original ({human_size(_orig_sz)})"
+                            elif settings.get("early_abort") and pct >= 25 and pct > 0 and (output_size / (pct / 100)) > _orig_sz:
+                                _predicted = int(output_size / (pct / 100))
+                                _should_abort = True
+                                _abort_reason = f"predicted {human_size(_predicted)} exceeds original {human_size(_orig_sz)} (at {pct}%, output already {human_size(output_size)})"
+                        if _should_abort:
+                            log.info(f"[{job.id}] Early abort: {_abort_reason}")
+                            encode_queue.ffmpeg_logs.setdefault(job.id, []).append(f"Early abort: {_abort_reason}")
+                            _early_abort = True
+                            try: proc.kill()
+                            except Exception: pass
+                            break
 
             await proc.wait()
             if stderr_task:
@@ -4061,6 +4218,22 @@ async def encode_worker(worker_id: int):
         # Check if job was requeued while encoding (e.g. concurrent limit lowered)
         if job.status == JobStatus.QUEUED and job.id not in encode_queue.active_jobs:
             log.info(f"[{job.id}] Job was requeued — skipping post-encode processing")
+            continue
+
+        if _early_abort:
+            orig_bytes = info.get("size_bytes", 0)
+            try: actual_size = os.path.getsize(tmp_output) if os.path.exists(tmp_output) else 0
+            except OSError: actual_size = 0
+            # Estimate what progress was at when aborted
+            _abort_pct = job.progress.get("pct", 0) if job.progress else 0
+            _predicted = int(actual_size / (_abort_pct / 100)) if _abort_pct > 0 else actual_size
+            pct_bigger = int((_predicted - orig_bytes) / orig_bytes * 100) if orig_bytes > 0 else 0
+            if os.path.exists(tmp_output): os.remove(tmp_output)
+            tag_file_skipped(info["path"], f"early-abort:+{abs(pct_bigger)}%")
+            # Use 0 for new_bytes so stats aren't inflated by predictions
+            job.result = {"orig_size": human_size(orig_bytes), "new_size": human_size(_predicted), "orig_bytes": orig_bytes, "new_bytes": 0, "saved_pct": 0, "action": "discarded"}
+            _finish_job(JobStatus.SKIPPED, f"Predicted larger than original ({human_size(_predicted)} vs {human_size(orig_bytes)}, +{abs(pct_bigger)}%) — early abort at {_abort_pct}%")
+            await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
             continue
 
         if job.status == JobStatus.CANCELLED:
@@ -4104,7 +4277,7 @@ async def encode_worker(worker_id: int):
                 encode_queue._save_state()
                 await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
                 continue
-            cuda_errors = ("No decoder surfaces left", "Failed to inject frame into filter", "hwaccel initialisation returned error", "CUDA_ERROR")
+            cuda_errors = ("No decoder surfaces left", "Failed to inject frame into filter", "hwaccel initialisation returned error", "CUDA_ERROR", "Impossible to convert between the formats", "Function not implemented")
             if job.status != JobStatus.CANCELLED and not settings.get("use_cpu") and any(e in log_text for e in cuda_errors):
                 log.warning(f"[{job.id}] CUDA decode failed for {info['filename']}, retrying with software decode + GPU encode")
                 encode_queue.ffmpeg_logs[job.id].append("=== Retrying with software decoding (GPU encode still active) ===")
@@ -4343,10 +4516,11 @@ async def encode_worker(worker_id: int):
                 dv_mode = settings.get("dv_mode", "skip")
                 dovi_profile = info.get("dovi_profile")
                 is_dv = info.get("hdr_type", "").startswith("Dolby Vision")
-                needs_dv_inject = is_dv and dv_mode == "encode_dv"
+                needs_dv_inject = is_dv and dv_mode in ("encode_dv", "encode_dv81", "encode_dv7")
                 if needs_dv_inject:
-                    is_p5 = dovi_profile == 5
-                    dv_label = f"DV P{dovi_profile}→P8.4"
+                    is_p5 = str(dovi_profile) == "5"
+                    _tgt_p, _, _, _compat_id = _dv_profile_info(dv_mode)
+                    dv_label = f"DV P{dovi_profile}→{_tgt_p}"
                     log.info(f"[{job.id}] {dv_label} — RPU injection starting")
                     encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {dv_label} ===")
                     await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
@@ -4358,15 +4532,10 @@ async def encode_worker(worker_id: int):
                     remuxed_mkv = os.path.join(tmp_dir, f"{job.id}_dv.mkv")
                     dovi_cleanup = [rpu_bin, encoded_hevc, injected_hevc, remuxed_mkv]
                     try:
-                        # Step 1: Extract RPU from source and convert to P8.4
-                        # P5: -m 4 (IPTPQc2 → P8.4 with HLG compatibility)
-                        # All others: -m 4 (ensures P8.4)
-                        if is_p5:
-                            dovi_mode_str = " -m 4"
-                            mode_desc = "P5 → P8.4 via -m 4"
-                        else:
-                            dovi_mode_str = " -m 4"
-                            mode_desc = f"P{dovi_profile} → P8.4 via -m 4"
+                        # Step 1: Extract RPU from source and convert to target profile
+                        _, _dovi_m, _, _compat_id = _dv_profile_info(dv_mode)
+                        dovi_mode_str = _dovi_m
+                        mode_desc = f"P{dovi_profile} → {_tgt_p} via{_dovi_m}"
                         log.info(f"[{job.id}] {dv_label} step 1/4: extracting RPU ({mode_desc})")
                         encode_queue.ffmpeg_logs.get(job.id, []).append(f"DV step 1/4: extracting RPU ({mode_desc})...")
                         _rpu_duration = "-t 300 " if app_settings.get("test_mode") else ""
@@ -4463,7 +4632,7 @@ async def encode_worker(worker_id: int):
                             os.remove(injected_hevc)
 
                         # Patch dvvC compatibility_id (mkvmerge always writes 1, we need 4 for P8.4)
-                        patch_dvvc_compat_id(remuxed_mkv, 4)
+                        patch_dvvc_compat_id(remuxed_mkv, _compat_id)
 
                         os.remove(tmp_output)
                         shutil.move(remuxed_mkv, tmp_output)
@@ -4492,15 +4661,16 @@ async def encode_worker(worker_id: int):
                             if os.path.exists(f):
                                 os.remove(f)
 
-                # HDR10 → DV P8.4 upgrade (generate RPU from HDR10 metadata)
+                # HDR10 → DV P8.x upgrade (generate RPU from HDR10 metadata)
                 needs_dv_upgrade = (
-                    dv_mode == "encode_dv"
+                    dv_mode in ("encode_dv", "encode_dv81", "encode_dv7")
                     and not is_dv
                     and info.get("is_hdr", False)
                     and info.get("hdr_type", "") == "HDR10"
                 )
                 if needs_dv_upgrade:
-                    dv_label = "HDR10→DV P8.4"
+                    _tgt_p2, _, _, _compat_id2 = _dv_profile_info(dv_mode)
+                    dv_label = f"HDR10→DV {_tgt_p2}"
                     log.info(f"[{job.id}] {dv_label} — generating DV RPU from HDR10 metadata")
                     encode_queue.ffmpeg_logs.get(job.id, []).append(f"=== {dv_label} ===")
                     encode_queue.ffmpeg_logs.get(job.id, []).append("Probing encoded file for frame count...")
@@ -4566,7 +4736,7 @@ async def encode_worker(worker_id: int):
                         log.info(f"[{job.id}] {dv_label} step 1/4: generating RPU (MaxCLL={gen_config['level6']['max_content_light_level']}, MaxFALL={gen_config['level6']['max_frame_average_light_level']})")
                         encode_queue.ffmpeg_logs.get(job.id, []).append(f"DV step 1/4: generating RPU ({frame_count} frames, MaxCLL={gen_config['level6']['max_content_light_level']})...")
                         p = await asyncio.create_subprocess_exec(
-                            DOVI_TOOL, "generate", "-j", gen_json, "-o", rpu_bin, "--profile", "8.4",
+                            DOVI_TOOL, "generate", "-j", gen_json, "-o", rpu_bin, "--profile", _dv_profile_info(dv_mode)[2],
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                         _, stderr_out = await p.communicate()
                         if p.returncode != 0 or not os.path.exists(rpu_bin) or os.path.getsize(rpu_bin) == 0:
@@ -4635,8 +4805,8 @@ async def encode_worker(worker_id: int):
                         if os.path.exists(injected_hevc):
                             os.remove(injected_hevc)
 
-                        # Patch dvvC compatibility_id (mkvmerge always writes 1, we need 4 for P8.4)
-                        patch_dvvc_compat_id(remuxed_mkv, 4)
+                        # Patch dvvC compatibility_id (mkvmerge always writes 1, HDR10 upgrade)
+                        patch_dvvc_compat_id(remuxed_mkv, _compat_id2)
 
                         os.remove(tmp_output)
                         shutil.move(remuxed_mkv, tmp_output)
@@ -5600,6 +5770,15 @@ async def job_watchdog():
             await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
 
 
+async def _periodic_cleanup():
+    """Run cleanup_tmp_dir every hour."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            cleanup_tmp_dir()
+        except Exception as e:
+            log.warning(f"Periodic cleanup error: {e}")
+
 def cleanup_tmp_dir():
     """Remove orphan temp files not associated with any active encode."""
     tmp_dir = app_settings.get("tmp_dir", "/var/lib/plex/tmp")
@@ -5633,6 +5812,21 @@ def cleanup_tmp_dir():
                 pass
     if removed:
         log.info(f"Cleaned up {removed} orphan temp file(s) from {tmp_dir}")
+    # Clean up stale listener job files (progress/result from completed jobs)
+    listener_dir = os.path.join(tmp_dir, "rrp", "listener-jobs")
+    if os.path.isdir(listener_dir):
+        stale = 0
+        now = time.time()
+        for fname in os.listdir(listener_dir):
+            fpath = os.path.join(listener_dir, fname)
+            try:
+                if now - os.path.getmtime(fpath) > 3600:  # older than 1 hour
+                    os.remove(fpath)
+                    stale += 1
+            except OSError:
+                pass
+        if stale:
+            log.info(f"Cleaned up {stale} stale listener job file(s)")
 
 
 # GPU server process management
@@ -5852,6 +6046,7 @@ async def startup():
     global watch_task
     watch_task = asyncio.create_task(folder_watcher())
     asyncio.create_task(daily_cache_scan())
+    asyncio.create_task(_periodic_cleanup())
     # Clear cached online status for remote servers (will be refreshed by status check)
     for srv in app_settings.get("remote_gpu_servers", []):
         srv.pop("_online", None)
@@ -6443,7 +6638,7 @@ async def scan_directory(req: ScanRequest):
 
     # Batch broadcast helper
     broadcast_batch = []
-    BATCH_SIZE = 10
+    BATCH_SIZE = 25
 
     async def flush_batch():
         nonlocal broadcast_batch
@@ -7187,6 +7382,18 @@ async def get_system_transcodes():
                                     _duration = float(_df.read().strip())
                             except: pass
                         _pct = round(_time_secs / _duration * 100, 1) if _duration > 0 and _time_secs > 0 else 0
+                        # Fallback: estimate from output_size when time is N/A (CUDA hwaccel)
+                        if _pct == 0 and _total_size > 0 and _duration > 0:
+                            # Estimate from frame count if available
+                            if _frame > 0:
+                                _est_fps = 24.0  # assume ~24fps
+                                _est_time = _frame / _est_fps
+                                _pct = min(99, round(_est_time / _duration * 100, 1))
+                                if _speed == 0:
+                                    try:
+                                        _elapsed = time.time() - os.path.getmtime(os.path.join(rrp_job_dir, "rrp_input.txt"))
+                                        _speed = _est_time / _elapsed if _elapsed > 0 else 0
+                                    except Exception: pass
                         info["progress"] = {
                             "pct": min(_pct, 100),
                             "speed": f"{_speed:.1f}x" if _speed > 0 else "",
@@ -7221,6 +7428,16 @@ async def kill_transcode(pid: int):
         return JSONResponse({"error": "Permission denied reading process info"}, status_code=403)
 
     try:
+        # Check if this is an RRP remote job — if so, write cancel marker
+        _rrp_base = os.path.join(app_settings.get("tmp_dir") or "/tmp/recode", "rrp")
+        if _rrp_base in cmdline:
+            import re as _re
+            m = _re.search(re.escape(_rrp_base) + r"/([^/\x00]+)", cmdline)
+            if m:
+                _cancel_marker = os.path.join(_rrp_base, m.group(1), ".cancelled")
+                try:
+                    with open(_cancel_marker, "w") as _f: _f.write("cancelled")
+                except Exception: pass
         os.kill(pid, signal.SIGTERM)
         log.info(f"Killed transcode process PID {pid}")
         return {"ok": True, "pid": pid}
@@ -7573,7 +7790,7 @@ async def daily_cache_scan():
                 await asyncio.sleep(3600)
                 continue
 
-            sem = asyncio.Semaphore(8)  # Lower concurrency than interactive scan
+            sem = asyncio.Semaphore(16)  # Background scan concurrency
 
             for scan_path in sorted(paths):
                 if not app_settings.get("daily_scan_enabled", True):
@@ -7841,6 +8058,8 @@ async def detect_duplicates(path: str):
     for root, _, files in os.walk(path):
         file_set = set(files)
         for f in files:
+            if os.path.splitext(f)[1].lower() not in VIDEO_EXTENSIONS:
+                continue
             if is_encoded_output(f):
                 continue
             nameonly = os.path.splitext(f)[0]
@@ -7947,6 +8166,36 @@ async def cleanup_duplicate(path: str, keep: str = "encoded"):
         return {"ok": True, "deleted": path}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/scan/extra-files")
+async def find_extra_files(path: str):
+    """Find all non-video files in scanned directories."""
+    if not is_path_allowed(path):
+        return JSONResponse({"error": f"Restricted to: {', '.join(app_settings.get('allowed_paths', ['/mnt']))}"}, status_code=403)
+    if not os.path.isdir(path):
+        return JSONResponse({"error": "Directory not found"}, status_code=400)
+
+    _skip = {".recode.json"}
+    extras = []
+    for root, _, files in os.walk(path):
+        for f in files:
+            if f in _skip or f.startswith("."):
+                continue
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in VIDEO_EXTENSIONS:
+                fp = os.path.join(root, f)
+                try:
+                    size = os.path.getsize(fp)
+                    extras.append({"path": fp, "name": f, "dir": root, "ext": ext or "(none)", "size": size, "size_human": human_size(size)})
+                except OSError:
+                    pass
+    total = sum(e["size"] for e in extras)
+    # Group by extension
+    by_ext = {}
+    for e in extras:
+        by_ext.setdefault(e["ext"], []).append(e)
+    return {"files": extras, "count": len(extras), "total_bytes": total, "total_size": human_size(total), "by_extension": {k: len(v) for k, v in by_ext.items()}}
 
 
 # =============================================================================

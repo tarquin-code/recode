@@ -161,9 +161,6 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, secret: &str, ffmpeg: &
             &mut rx, &mut tx, ffmpeg, &ffmpeg_args, &input_files,
             &job_dir, &job_id, &peer.ip().to_string(), &[],
         ).await?;
-        let _ = write_tagged(&mut tx, TAG_CONTROL, &ControlMsg::JobComplete { exit_code }).await;
-        let _ = tx.flush().await;
-        tokio::time::sleep(Duration::from_secs(2)).await;
         info!("Job {} done (FUSE mode), exit {}", job_id, exit_code);
 
     } else {
@@ -292,6 +289,7 @@ pub async fn run_fuse_job(
     post_commands: &[String],
 ) -> Result<i32> {
     let mount_dir = job_dir.join("mnt");
+    let mount_dir_clone = mount_dir.clone();
     std::fs::create_dir_all(&mount_dir)?;
 
     let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<FuseReadRequest>(32);
@@ -486,12 +484,20 @@ pub async fn run_fuse_job(
                 last_progress_sent = std::time::Instant::now();
             }
             _ = keepalive_interval.tick() => {
-                // Only send keepalive if no real progress was sent recently
-                if last_progress_sent.elapsed() > Duration::from_secs(25) {
-                    let _ = write_tagged(tx, TAG_PROGRESS, &ProgressMsg {
-                        frame: 0, time_secs: 0.0, speed: 0.0, bitrate_kbps: 0.0, output_size: 0,
-                    }).await;
-                    let _ = tx.flush().await;
+                // Keepalive doubles as connection health check
+                let mut ka_ok = true;
+                if let Ok(r) = tokio::time::timeout(Duration::from_secs(10), write_tagged(tx, TAG_PROGRESS, &ProgressMsg {
+                    frame: 0, time_secs: 0.0, speed: 0.0, bitrate_kbps: 0.0, output_size: 0,
+                })).await { if r.is_err() { ka_ok = false; } } else { ka_ok = false; }
+                if ka_ok {
+                    if let Ok(r) = tokio::time::timeout(Duration::from_secs(10), tx.flush()).await {
+                        if r.is_err() { ka_ok = false; }
+                    } else { ka_ok = false; }
+                }
+                if !ka_ok {
+                    warn!("Data connection dead (keepalive failed) — killing ffmpeg");
+                    let _ = child.kill().await;
+                    break;
                 }
             }
             Some(freq) = req_rx.recv() => {
@@ -500,22 +506,31 @@ pub async fn run_fuse_job(
                     offset: freq.offset,
                     length: freq.length,
                 };
-                if write_tagged(tx, TAG_FILE_READ_REQ, &req).await.is_err() {
-                    warn!("Failed to send read request to client");
+                let write_ok = match tokio::time::timeout(Duration::from_secs(30), write_tagged(tx, TAG_FILE_READ_REQ, &req)).await {
+                    Ok(Ok(())) => true,
+                    _ => false,
+                };
+                if !write_ok {
+                    warn!("Failed to send read request to client (timeout or error)");
                     let _ = freq.resp_tx.send(Err(()));
                     let _ = child.kill().await;
                     break;
                 }
-                tx.flush().await?;
+                if tokio::time::timeout(Duration::from_secs(10), tx.flush()).await.is_err() {
+                    warn!("Flush timeout on data connection");
+                    let _ = freq.resp_tx.send(Err(()));
+                    let _ = child.kill().await;
+                    break;
+                }
 
-                match read_tagged(rx).await {
-                    Ok((TAG_FILE_READ_RESP, payload)) => {
+                match tokio::time::timeout(Duration::from_secs(30), read_tagged(rx)).await {
+                    Ok(Ok((TAG_FILE_READ_RESP, payload))) => {
                         match bincode::deserialize::<FileReadResp>(&payload) {
                             Ok(resp) if !resp.error => { let _ = freq.resp_tx.send(Ok(resp.data)); }
                             _ => { let _ = freq.resp_tx.send(Err(())); }
                         }
                     }
-                    Ok((TAG_CONTROL, payload)) => {
+                    Ok(Ok((TAG_CONTROL, payload))) => {
                         if let Ok(ControlMsg::CancelJob) = bincode::deserialize(&payload) {
                             warn!("Job cancelled by client");
                             let _ = freq.resp_tx.send(Err(()));
@@ -523,8 +538,8 @@ pub async fn run_fuse_job(
                             break;
                         }
                     }
-                    Err(_) => {
-                        warn!("Client disconnected during FUSE read");
+                    Ok(Err(_)) | Err(_) => {
+                        warn!("Client disconnected or read timeout during FUSE read");
                         let _ = freq.resp_tx.send(Err(()));
                         let _ = child.kill().await;
                         break;
@@ -561,6 +576,16 @@ pub async fn run_fuse_job(
                 }
             }
         }
+    };
+
+    // Check if job was cancelled via GUI (cancel marker written by kill API)
+    let cancel_marker = job_dir.join(".cancelled");
+    let exit_code = if cancel_marker.exists() {
+        info!("Job {} was cancelled via GUI", job_id);
+        let _ = std::fs::remove_file(&cancel_marker);
+        -2  // Special code: cancelled by user on GPU server
+    } else {
+        exit_code
     };
 
     // Run post-commands while FUSE is still mounted (source files accessible)
@@ -615,7 +640,16 @@ pub async fn run_fuse_job(
         let meta = tokio::fs::metadata(&output_local).await?;
         let total = meta.len();
         info!("Sending output: {:.1} GB ({} bytes)", total as f64 / 1_073_741_824.0, total);
-        write_tagged(tx, STREAM_OUTPUT, &total).await?;
+        // Check connection is alive before starting transfer
+        match tokio::time::timeout(Duration::from_secs(30), write_tagged(tx, STREAM_OUTPUT, &total)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => { error!("Connection dead before output transfer: {}", e); return Err(e.into()); }
+            Err(_) => { error!("Connection timed out before output transfer"); return Err(anyhow::anyhow!("Connection timeout")); }
+        }
+        match tokio::time::timeout(Duration::from_secs(10), tx.flush()).await {
+            Ok(Ok(())) => {}
+            _ => { error!("Flush failed — connection dead"); return Err(anyhow::anyhow!("Connection dead")); }
+        }
         let mut file = tokio::fs::File::open(&output_local).await?;
         let mut hasher = Sha256::new();
         let mut buf = vec![0u8; CHUNK_SIZE];
@@ -625,15 +659,15 @@ pub async fn run_fuse_job(
             let n = file.read(&mut buf).await?;
             if n == 0 { break; }
             hasher.update(&buf[..n]);
-            // Timeout each write to detect stalled connections (5 minutes per chunk)
-            match tokio::time::timeout(Duration::from_secs(300), tx.write_all(&buf[..n])).await {
+            // Timeout each write to detect stalled connections (60 seconds per chunk)
+            match tokio::time::timeout(Duration::from_secs(60), tx.write_all(&buf[..n])).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     error!("Output transfer write error at {:.1} GB: {}", sent as f64 / 1_073_741_824.0, e);
                     return Err(e.into());
                 }
                 Err(_) => {
-                    error!("Output transfer stalled at {:.1} GB — write timeout after 5 minutes", sent as f64 / 1_073_741_824.0);
+                    error!("Output transfer stalled at {:.1} GB — write timeout after 60s", sent as f64 / 1_073_741_824.0);
                     return Err(anyhow::anyhow!("Output transfer stalled"));
                 }
             }
@@ -651,17 +685,29 @@ pub async fn run_fuse_job(
         info!("Output sent: {:.1} GB", sent as f64 / 1_073_741_824.0);
     }
 
-    // Send JobComplete so the listener knows the final exit code
+    // Cleanup: kill any lingering ffmpeg, unmount FUSE, join thread
+    // Send JobComplete to listener before cleanup
     let _ = write_tagged(tx, TAG_CONTROL, &ControlMsg::JobComplete { exit_code }).await;
     let _ = tx.flush().await;
 
-    // Unmount FUSE after output is sent (safe to unmount now)
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    fuse_unmount(&mount_dir);
-    // Join with timeout — don't block forever if macFUSE unmount hangs
-    let fuse_join = tokio::task::spawn_blocking(move || { let _ = fuse_handle.join(); });
-    let _ = tokio::time::timeout(Duration::from_secs(10), fuse_join).await;
+    info!("Job cleanup: killing any remaining ffmpeg processes");
+    // Kill ffmpeg by job dir (in case child.kill didn't fully clean up)
+    let job_dir_str = job_dir.to_string_lossy().to_string();
+    let _ = std::process::Command::new("pkill").args(["-f", &job_dir_str]).output();
 
+    info!("Job cleanup: unmounting FUSE");
+    fuse_unmount(&mount_dir);
+    // Join FUSE thread with timeout
+    let fuse_join = tokio::task::spawn_blocking(move || { let _ = fuse_handle.join(); });
+    match tokio::time::timeout(Duration::from_secs(5), fuse_join).await {
+        Ok(_) => info!("FUSE thread joined"),
+        Err(_) => {
+            warn!("FUSE thread join timed out — force unmounting");
+            fuse_unmount(&mount_dir_clone);
+        }
+    }
+
+    info!("Job complete: exit_code={}", exit_code);
     Ok(exit_code)
 }
 

@@ -384,18 +384,39 @@ async fn handle_control(
                 Some(job_msg) = job_rx.recv() => {
                     write_msg(&mut tx, &job_msg).await?;
                     tx.flush().await?;
-                    match read_msg::<ReverseControlMsg, _>(&mut rx).await? {
-                        ReverseControlMsg::JobAccepted { job_id } => {
-                            info!("GPU '{}' accepted job {}", name, job_id);
-                            if let Some(gpu) = state.gpus.write().await.get_mut(&conn_id) {
-                                gpu.active_jobs += 1;
+                    // Read response — may receive JobFinished for a previous job before the accept/reject
+                    loop {
+                        match read_msg::<ReverseControlMsg, _>(&mut rx).await? {
+                            ReverseControlMsg::JobAccepted { job_id } => {
+                                info!("GPU '{}' accepted job {}", name, job_id);
+                                if let Some(gpu) = state.gpus.write().await.get_mut(&conn_id) {
+                                    gpu.active_jobs += 1;
+                                }
+                                break;
                             }
+                            ReverseControlMsg::JobReject { job_id, reason } => {
+                                warn!("GPU '{}' rejected job {}: {}", name, job_id, reason);
+                                state.job_queue.write().await.remove(&job_id);
+                                break;
+                            }
+                            ReverseControlMsg::JobFinished { job_id, exit_code, stderr } => {
+                                info!("GPU '{}' finished job {} (exit {})", name, job_id, exit_code);
+                                let result_path = format!("/tmp/recode/rrp/listener-jobs/{}.result", job_id);
+                                let _ = std::fs::write(&result_path, serde_json::json!({"exit_code": exit_code, "stderr": stderr}).to_string());
+                                if let Some(gpu) = state.gpus.write().await.get_mut(&conn_id) {
+                                    gpu.active_jobs = gpu.active_jobs.saturating_sub(1);
+                                }
+                                state.job_queue.write().await.remove(&job_id);
+                                // Continue loop — still waiting for accept/reject for the new job
+                            }
+                            ReverseControlMsg::Heartbeat { .. } => {
+                                if let Some(gpu) = state.gpus.write().await.get_mut(&conn_id) {
+                                    gpu.last_heartbeat = std::time::Instant::now();
+                                }
+                                // Continue loop — still waiting for accept/reject
+                            }
+                            _ => { break; }
                         }
-                        ReverseControlMsg::JobReject { job_id, reason } => {
-                            warn!("GPU '{}' rejected job {}: {}", name, job_id, reason);
-                            state.job_queue.write().await.remove(&job_id);
-                        }
-                        _ => {}
                     }
                 }
             }

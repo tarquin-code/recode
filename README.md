@@ -2,7 +2,7 @@
 
 **GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-3.3.1-blue)
+![Version](https://img.shields.io/badge/version-3.3.2-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -21,12 +21,14 @@
 ### HDR & Dolby Vision
 - **HDR10** — Passthrough and metadata preservation
 - **HLG** — Hybrid Log-Gamma support
-- **Dolby Vision** — DV Profile 5, 7, 8 support with skip, keep, HDR10, and P8.4 modes
-- **DV P5 → P8.4** — Vulkan/libplacebo color conversion (IPTPQc2 → BT.2020) + RPU injection
+- **Dolby Vision** — DV Profile 5, 7, 8 support with skip, keep, HDR10, P7, P8.1, and P8.4 modes
+- **DV Multi-Profile** — Convert to P7 (dual-layer), P8.1 (MEL/HDR10 compat), or P8.4 (HLG compat)
+- **DV Sub-Profile Detection** — Identifies P8.1 vs P8.4 from mediainfo compatibility flags
+- **DV P5 → P8.x** — Vulkan/libplacebo color conversion (IPTPQc2 → BT.2020) + RPU injection
 - **DV Keep Original** — Re-encode while preserving DV metadata untouched
-- **HDR to DV Upgrade** — Convert HDR10 content to Dolby Vision P8.4
+- **HDR to DV Upgrade** — Convert HDR10 content to Dolby Vision P7, P8.1, or P8.4
 - **dovi_tool Integration** — Automatic RPU extraction, conversion, and injection
-- **Remote DV Support** — DV P8.4 post-processing works on both local and remote GPU encodes
+- **Remote DV Support** — DV post-processing works on both local and remote GPU encodes
 
 ### Audio
 - **Codec Options** — Passthrough, Opus, AAC, AC3, EAC3
@@ -85,6 +87,7 @@
 - **Unlimited History** — Full encode history with detailed logs
 - **Retry Failed** — One-click retry for failed or cancelled jobs
 - **Discard Larger** — Automatically discard encodes that are larger than the original
+- **Early Abort Prediction** — Cancel encode early if predicted output exceeds original (at 25%+)
 - **Skip Tagging** — Discarded files tagged with RECODE_SKIPPED metadata, excluded from future scans
 - **Delete Safety** — Never deletes original if encoded file is less than 5% of original size
 - **DV Fallback** — RPU extraction failure falls back to HDR10 instead of failing the job
@@ -104,9 +107,10 @@
 - **Mobile Responsive** — Adapts to desktop, tablet, and mobile screens
 - **Settings Modal** — All settings in one place, save without closing, unsaved indicator
 - **System Transcodes** — View all ffmpeg/Plex processes, remote GPU jobs on servers
-- **System Logs** — Live log viewer with Server, ffmpeg, Listener, and Connector tabs
+- **System Logs** — Live log viewer with Server, ffmpeg, Listener, and Connector tabs, searchable across all tabs
 - **Stats Charts** — Daily encode count and space saved bar charts (last 30 days)
 - **Find Duplicates** — Detect original + encoded file pairs
+- **Find Extra Files** — Scan for non-video files (subtitles, .nfo, images) with bulk delete
 - **Space Savings** — Total potential savings for scanned libraries
 - **Scan Cache** — Instant re-scans with local metadata cache
 - **Stats Tab** — Aggregate stats: files encoded, space saved, compression ratio

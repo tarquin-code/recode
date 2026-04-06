@@ -261,7 +261,7 @@ fn update_tray_menu_items(jobs: &[JobLog], transcodes: &[Transcode], connected: 
 
     }
 }
-const VERSION: &str = "3.3.1";
+const VERSION: &str = "3.3.2";
 
 // ── Recode Design System (exact CSS values) ────────────────────────────────
 const BG_PRIMARY: egui::Color32 = egui::Color32::from_rgb(13, 17, 23);
@@ -903,6 +903,21 @@ impl App {
                     }
                     if job.duration_secs > 0.0 && job.last_time_secs > 0.0 {
                         job.progress_pct = ((job.last_time_secs / job.duration_secs) * 100.0).min(100.0) as f32;
+                    } else if job.duration_secs > 0.0 && frame > 0 {
+                        // Fallback: estimate from frame count when time is N/A (VideoToolbox/CUDA)
+                        let est_time = frame as f64 / 24.0; // assume ~24fps
+                        job.last_time_secs = est_time;
+                        job.progress_pct = ((est_time / job.duration_secs) * 100.0).min(99.0) as f32;
+                    }
+                    // Estimate speed from elapsed time when N/A
+                    if (speed_str.is_empty() || speed_str == "N/A") && job.last_time_secs > 0.0 {
+                        let elapsed = job.started.elapsed().as_secs_f64();
+                        if elapsed > 0.0 {
+                            let spd = job.last_time_secs / elapsed;
+                            job.last_speed = format!("{:.1}x", spd);
+                        }
+                    } else if !speed_str.is_empty() && speed_str != "N/A" {
+                        job.last_speed = speed_str.clone();
                     }
                     // Update output size
                     let out_size = std::fs::metadata(job_dir.join("output.mkv"))

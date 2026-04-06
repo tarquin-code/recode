@@ -266,6 +266,15 @@ async fn connect_and_run(
             msg = read_msg::<ReverseControlMsg, _>(&mut rx) => {
                 match msg? {
                     ReverseControlMsg::JobAssignment { job_id, ffmpeg_args, input_files, output_path, connect_port, post_commands } => {
+                        // Reject duplicate job IDs
+                        if active_job_ids.lock().unwrap().contains(&job_id) {
+                            warn!("Rejecting duplicate job {}", job_id);
+                            write_msg(&mut tx, &ReverseControlMsg::JobReject {
+                                job_id, reason: "Already running".into()
+                            }).await?;
+                            tx.flush().await?;
+                            continue;
+                        }
                         let permit = match sem.clone().try_acquire_owned() {
                             Ok(p) => p,
                             Err(_) => {
@@ -339,15 +348,23 @@ async fn connect_and_run(
                             } else {
                                 ffmpeg_args
                             };
-                            let (exit_code, stderr) = match execute_job(
+                            // Timeout entire job: 24 hours max (encode + transfer)
+                            let job_future = execute_job(
                                 &addr, &sec, &ff, &td,
                                 &job_id, ffmpeg_args, input_files, &output_path, connect_port,
                                 post_commands,
+                            );
+                            let (exit_code, stderr) = match tokio::time::timeout(
+                                std::time::Duration::from_secs(86400), job_future
                             ).await {
-                                Ok((ec, se)) => (ec, se),
-                                Err(e) => {
+                                Ok(Ok((ec, se))) => (ec, se),
+                                Ok(Err(e)) => {
                                     error!("Job {} failed: {}", job_id, e);
                                     (1, format!("{}", e))
+                                }
+                                Err(_) => {
+                                    error!("Job {} timed out after 24h", job_id);
+                                    (1, "Job timed out after 24 hours".to_string())
                                 }
                             };
                             active.fetch_sub(1, Ordering::Relaxed);
