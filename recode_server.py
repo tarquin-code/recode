@@ -63,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "3.3.2"
+VERSION = "4.0.0"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -3146,9 +3146,9 @@ async def _monitor_remote_job(job, job_file, progress_file, result_file, jobs_di
                 for f in dovi_cleanup:
                     if os.path.exists(f): os.remove(f)
 
-        # HDR10 → DV P8.x upgrade (runs locally)
+        # HDR10 → DV P8.x upgrade (runs locally) — P7 not supported for HDR10 upgrade (requires DV source)
         _needs_dv_upgrade = (
-            _dv_mode in ("encode_dv", "encode_dv81", "encode_dv7") and not _is_dv
+            _dv_mode in ("encode_dv", "encode_dv81") and not _is_dv
             and info.get("is_hdr", False) and info.get("hdr_type", "") == "HDR10"
             and os.path.exists(tmp_output)
         )
@@ -4661,9 +4661,9 @@ async def encode_worker(worker_id: int):
                             if os.path.exists(f):
                                 os.remove(f)
 
-                # HDR10 → DV P8.x upgrade (generate RPU from HDR10 metadata)
+                # HDR10 → DV P8.x upgrade — P7 not supported (requires DV source)
                 needs_dv_upgrade = (
-                    dv_mode in ("encode_dv", "encode_dv81", "encode_dv7")
+                    dv_mode in ("encode_dv", "encode_dv81")
                     and not is_dv
                     and info.get("is_hdr", False)
                     and info.get("hdr_type", "") == "HDR10"
@@ -8045,6 +8045,30 @@ async def folder_watcher():
 # =============================================================================
 # Duplicate Detection
 # =============================================================================
+
+@app.post("/api/scan/rename")
+async def rename_scan_file(req: dict):
+    """Rename a file on disk."""
+    old_path = req.get("path", "")
+    new_name = req.get("new_name", "")
+    if not old_path or not new_name:
+        return JSONResponse({"error": "path and new_name required"}, status_code=400)
+    if not is_path_allowed(old_path):
+        return JSONResponse({"error": "Path not allowed"}, status_code=403)
+    if not os.path.isfile(old_path):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    if "/" in new_name or "\\" in new_name:
+        return JSONResponse({"error": "Name cannot contain path separators"}, status_code=400)
+    new_path = os.path.join(os.path.dirname(old_path), new_name)
+    if os.path.exists(new_path):
+        return JSONResponse({"error": "A file with that name already exists"}, status_code=409)
+    try:
+        os.rename(old_path, new_path)
+        # Also rename any associated files (.recode.json entry, srt, etc.)
+        log.info(f"Renamed: {os.path.basename(old_path)} → {new_name}")
+        return {"ok": True, "new_path": new_path}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/api/scan/duplicates")
 async def detect_duplicates(path: str):

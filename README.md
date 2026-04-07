@@ -2,7 +2,7 @@
 
 **GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-3.3.2-blue)
+![Version](https://img.shields.io/badge/version-4.0.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -111,6 +111,7 @@
 - **Stats Charts** — Daily encode count and space saved bar charts (last 30 days)
 - **Find Duplicates** — Detect original + encoded file pairs
 - **Find Extra Files** — Scan for non-video files (subtitles, .nfo, images) with bulk delete
+- **Inline File Rename** — Click the edit icon to rename any file directly from the scan list
 - **Space Savings** — Total potential savings for scanned libraries
 - **Scan Cache** — Instant re-scans with local metadata cache
 - **Stats Tab** — Aggregate stats: files encoded, space saved, compression ratio

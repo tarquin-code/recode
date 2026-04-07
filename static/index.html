@@ -170,7 +170,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
 tr:last-child td { border-bottom: none; }
 tr.file-row:hover td { background: var(--bg-hover); }
 .file-cell { min-width: 200px; }
-.file-name { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px; }
+.file-name { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
 .size-stack { white-space: nowrap; }
 .size-stack .size-orig { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); }
@@ -1924,6 +1924,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li><strong>Status filter</strong> &mdash; Filter scan results by "Encode Candidate" or "Already Encoded" using the Status dropdown.</li>
                     <li><strong>Duration column</strong> &mdash; Movie/episode length, sortable by column header or dropdown (Longest/Shortest first).</li>
                     <li><strong>Delete files</strong> &mdash; Delete individual files (X button per row) or bulk delete selected files ("Delete Selected from Disk" button). Both require two-step confirmation. Only files under configured allowed paths can be deleted.</li>
+                    <li><strong>Rename files</strong> &mdash; Click the edit (pen) icon next to any filename to rename it inline. The file extension is preserved automatically. Press Enter to save, Escape to cancel.</li>
                     <li><strong>Per-stream control</strong> &mdash; Expand any file to configure audio tracks (codec, bitrate, include/exclude) and subtitle tracks (include/exclude) individually.</li>
                 </ul>
 
@@ -2120,6 +2121,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v4.0.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Inline file rename</strong> &mdash; click the edit icon in the scan list to rename any file on disk, including recoded files</li>
+                                <li><strong>DV P7 HDR10 fix</strong> &mdash; HDR10&rarr;DV P7 upgrade correctly disabled (P7 requires existing DV source, can't be generated from HDR10)</li>
+                                <li><strong>DV filename tags</strong> &mdash; output files now tagged DV-P7, DV-P81, or DV-P84 instead of generic DV-P8</li>
+                                <li><strong>TS audio fix</strong> &mdash; removed global aac_adtstoasc bsf that crashed non-AAC audio in .ts files; AAC re-encoded per-stream</li>
+                                <li><strong>Consistent button sizing</strong> &mdash; all delete/cancel buttons in lists use uniform height</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v3.3.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -3409,6 +3420,7 @@ const _icons = {
     power: '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
     moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/>',
     sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
+    'edit-2': '<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
     monitor: '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
     film: '<rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/>',
@@ -4453,6 +4465,61 @@ function updateAddQueueBtn() {
     if (btnTop) btnTop.disabled = !hasChecked;
 }
 
+function inlineRename(el, oldPath) {
+    if (el.querySelector('input')) return; // already editing
+    const oldName = el.textContent.trim();
+    const nameOnly = oldName.replace(/\.[^.]+$/, '');
+    const ext = oldName.includes('.') ? '.' + oldName.split('.').pop() : '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = nameOnly;
+    const charWidth = Math.min(600, Math.max(200, nameOnly.length * 8 + 40));
+    input.style.cssText = `width:${charWidth}px;font-size:12px;font-family:var(--font-mono);padding:4px 6px;border:1px solid var(--accent);border-radius:3px;background:var(--bg-input);color:var(--text-primary);`;
+    input.dataset.ext = ext;
+    input.dataset.oldPath = oldPath;
+    input.dataset.oldName = oldName;
+    el.textContent = '';
+    el.appendChild(input);
+    // Select just the name part (not extension)
+    input.focus();
+    input.select();
+    const commit = async () => {
+        const newName = input.value.trim() + input.dataset.ext;
+        if (!newName || newName === input.dataset.oldName) {
+            el.textContent = input.dataset.oldName;
+            return;
+        }
+        try {
+            const r = await fetch('/api/scan/rename', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path: input.dataset.oldPath, new_name: newName})
+            });
+            const d = await r.json();
+            if (d.ok) {
+                el.textContent = newName;
+                el.title = d.new_path;
+                // Update scan results
+                const f = state.scanResults.find(f => f.path === input.dataset.oldPath);
+                if (f) { f.filename = newName; f.path = d.new_path; }
+                // Update checkbox data-path
+                const cb = el.closest('tr')?.querySelector('.file-select');
+                if (cb) cb.dataset.path = d.new_path;
+            } else {
+                el.textContent = input.dataset.oldName;
+                alert(d.error || 'Rename failed');
+            }
+        } catch(e) {
+            el.textContent = input.dataset.oldName;
+            alert('Rename failed: ' + e.message);
+        }
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { el.textContent = input.dataset.oldName; }
+    });
+}
 async function removeScanFile(path) {
     const fname = path.split('/').pop();
     const warnIcon = `<div style="width:48px;height:48px;margin:0 auto;border-radius:50%;background:rgba(231,76,60,0.15);display:flex;align-items:center;justify-content:center;"><svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>`;
@@ -4798,7 +4865,7 @@ function renderQueue() {
                     <span class="badge badge-sm badge-preset" title="${presetTip(job.settings)}">${job.settings.preset || 'auto'}</span>
                 </div>
             </div>
-            <button class="btn btn-danger btn-sm" onclick="removeFromQueue('${job.id}')">${svgIcon('x-circle', 12)}</button>
+            <button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="removeFromQueue('${job.id}')">${svgIcon('x-circle', 12)}</button>
         </div>`;
     });
 
@@ -4934,7 +5001,7 @@ function renderEncoding() {
                         <span style="font-size:11px;color:var(--text-muted);" id="encSummarySpeed-${job.id}">${p.phase === 'preparing' ? '' : (p.speed||'—')}</span>
                         ${job.paused ? '<span class="badge badge-sm badge-skip">Paused</span>' : ''}
                         <button class="btn btn-sm" style="margin-left:4px;" onclick="event.stopPropagation(); togglePause('${job.id}', ${job.paused})" id="pauseBtn-${job.id}">${job.paused ? svgIcon('play', 12) + ' Resume' : svgIcon('pause', 12) + ' Pause'}</button>
-                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); cancelEncode('${job.id}')">${svgIcon('x-circle', 12)}</button>
+                        <button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="event.stopPropagation(); cancelEncode('${job.id}')">${svgIcon('x-circle', 12)}</button>
                     </div>
                     <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;padding-left:22px;font-size:10px;">
                         <span style="color:var(--text-muted);">Source:</span>
@@ -5779,7 +5846,7 @@ function renderHistory() {
             </div>
             <span style="font-size:10px;color:var(--text-muted);white-space:nowrap;margin-right:6px;">${dateStr}</span>
             ${job.status !== 'done' ? `<button class="btn btn-sm" style="font-size:11px;padding:4px 10px;margin-left:4px;" onclick="event.stopPropagation(); btnAction(this, () => retryJob('${job.id}'), '✓ Queued', 3000)" title="Re-queue this job">${svgIcon('rotate-cw', 12)} Retry</button>` : ''}
-            <button class="btn btn-danger btn-sm" style="font-size:11px;padding:4px 8px;" onclick="event.stopPropagation(); deleteHistoryItem('${job.id}')" title="Remove from history">${svgIcon('x-circle', 12)}</button>
+            <button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="event.stopPropagation(); deleteHistoryItem('${job.id}')" title="Remove from history">${svgIcon('x-circle', 12)}</button>
             <span class="expand-btn" id="hexp-${huid}">${svgIcon('chevron-right', 12)}</span>
             <div style="width:100%;padding-left:28px;display:none;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);" id="hdet-${huid}" onclick="event.stopPropagation()">
                 ${expandContent}
@@ -6240,7 +6307,7 @@ function renderScanResultsFiltered(files) {
             <td class="select-col"><input type="checkbox" class="file-select" data-path="${escHtml(f.path)}" data-idx="${realIdx}"></td>
             <td class="expand-col">${(hasAudio || (f.sub_streams||[]).length > 0) ? `<button class="expand-btn" onclick="toggleAudioRow(${realIdx})" id="expbtn-${realIdx}">${svgIcon('chevron-right', 12)}</button>` : ''}</td>
             <td class="file-cell">
-                <div class="file-name" title="${escHtml(f.path)}">${escHtml(f.filename)}</div>
+                <div class="file-name" title="${escHtml(f.path)}" style="display:flex;align-items:center;gap:4px;max-width:none;"><span id="fname-${realIdx}">${escHtml(f.filename)}</span><span onclick="inlineRename(document.getElementById('fname-${realIdx}'), '${escHtml(f.path)}')" style="cursor:pointer;color:var(--accent);flex-shrink:0;opacity:0.7;" title="Rename file">${svgIcon('edit-2', 11)}</span></div>
             </td>
             <td>
                 <span class="badge badge-res">${resLabel}</span>
@@ -6255,7 +6322,7 @@ function renderScanResultsFiltered(files) {
             <td>${estHtml}</td>
             <td>${sugHtml}</td>
             <td>${statusText}</td>
-            <td style="text-align:center;"><button class="btn btn-danger btn-sm" style="font-size:10px;padding:2px 6px;" onclick="removeScanFile('${escHtml(f.path)}')" title="Delete file from disk">${svgIcon('x-circle', 12)}</button></td>
+            <td style="text-align:center;"><button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="removeScanFile('${escHtml(f.path)}')" title="Delete file from disk">${svgIcon('x-circle', 12)}</button></td>
         </tr>`;
 
         if (hasAudio || (f.sub_streams||[]).length > 0) {
