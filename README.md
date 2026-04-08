@@ -2,7 +2,7 @@
 
 **GPU-accelerated H.265/H.264 re-encoding for Plex media libraries with Dolby Vision support.**
 
-![Version](https://img.shields.io/badge/version-4.0.0-blue)
+![Version](https://img.shields.io/badge/version-4.0.2-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Python](https://img.shields.io/badge/python-3.9+-yellow)
 
@@ -112,6 +112,9 @@
 - **Find Duplicates** — Detect original + encoded file pairs
 - **Find Extra Files** — Scan for non-video files (subtitles, .nfo, images) with bulk delete
 - **Inline File Rename** — Click the edit icon to rename any file directly from the scan list
+- **In-Browser Video Preview** — Click the play icon on any file (scan, queue, or history) to watch it in the browser. Tries native direct play first; falls back to live H.264/HLS transcode at the source resolution for HEVC, Dolby Vision, MKV, and unsupported audio. Status pill shows direct play vs transcoding plus actual stream resolution
+- **Consistent Sort Filters** — Scan, queue, and history all share the same sort options in the same order: Name / Newest / Oldest / Largest / Smallest / Highest bitrate / Lowest bitrate / Highest res / Lowest res / Longest / Shortest
+- **Auto-Sized Filename Column** — Scan results filename column shrinks to the average filename width when the table overflows the viewport, eliminating wasted whitespace on smaller screens
 - **Space Savings** — Total potential savings for scanned libraries
 - **Scan Cache** — Instant re-scans with local metadata cache
 - **Stats Tab** — Aggregate stats: files encoded, space saved, compression ratio

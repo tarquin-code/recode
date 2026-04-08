@@ -63,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "4.0.0"
+VERSION = "4.0.2"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -101,6 +101,29 @@ _active_sessions = {}  # token -> {"username": str, "expires_at": float}
 FFMPEG = _find_bin("ffmpeg")
 FFPROBE = _find_bin("ffprobe")
 DOVI_TOOL = _find_bin("dovi_tool")
+
+# =============================================================================
+# In-browser preview (HLS transcode) state
+# =============================================================================
+PREVIEW_DIR = os.path.join(BASE_DIR, "tmp", "preview")
+_preview_session = {
+    "id": None,            # str — short uuid identifying current session
+    "proc": None,          # asyncio.subprocess.Process for ffmpeg
+    "dir": None,           # str — per-session HLS scratch dir
+    "started_at": 0.0,     # float — time.monotonic() of last activity (for idle reaper)
+    "src": None,           # str — original path being previewed
+    "lock": None,          # asyncio.Lock — initialised in startup() (needs running loop)
+}
+
+def _detect_local_nvenc() -> bool:
+    """One-shot probe: does this host's ffmpeg expose h264_nvenc?"""
+    try:
+        r = subprocess.run([FFMPEG, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=5)
+        return "h264_nvenc" in r.stdout
+    except Exception:
+        return False
+
+LOCAL_NVENC = _detect_local_nvenc()
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".ts", ".m2ts", ".vob", ".3gp", ".ogv", ".divx", ".asf", ".f4v"}
 HOSTNAME = socket.gethostname().split(".")[0]  # short hostname, e.g. "streamer"
@@ -1136,6 +1159,7 @@ def cache_row_to_dict(row: sqlite3.Row) -> dict:
         "path": row["path"],
         "filename": row["filename"],
         "dirname": row["dirname"],
+        "mtime": row["mtime"],
         "size_bytes": row["size_bytes"],
         "size_human": row["size_human"],
         "codec": row["codec"],
@@ -5995,6 +6019,15 @@ async def startup():
     # Capture the event loop for background threads to use
     global _main_loop
     _main_loop = asyncio.get_event_loop()
+    # Initialise preview session lock and clean any leftover scratch dirs from a prior run
+    _preview_session["lock"] = asyncio.Lock()
+    try:
+        if os.path.isdir(PREVIEW_DIR):
+            shutil.rmtree(PREVIEW_DIR, ignore_errors=True)
+        os.makedirs(PREVIEW_DIR, exist_ok=True)
+    except Exception as e:
+        log.warning(f"Failed to reset preview dir: {e}")
+    asyncio.create_task(_preview_idle_reaper())
     # Run GPU capability scan in background thread (non-blocking)
     import concurrent.futures
     _gpu_scan_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -6244,6 +6277,323 @@ async def index():
     if FIRST_RUN:
         return FileResponse(os.path.join(BASE_DIR, "static", "setup.html"))
     return FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
+
+# Mount /static for vendored assets (hls.min.js, etc.). Auth middleware exempts /static/.
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+
+
+# =============================================================================
+# In-browser video preview (HLS transcode)
+# =============================================================================
+
+def _local_encode_active() -> bool:
+    """True if at least one currently-running encode job is local (not remote)."""
+    try:
+        for j in encode_queue.active_jobs.values():
+            if (j.settings or {}).get("_remote_server_idx", -1) < 0:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _build_preview_ffmpeg_cmd(src: str, use_nvenc: bool) -> list:
+    """Build the ffmpeg command for HLS preview transcode (cwd should be the session dir).
+    Encodes at the source resolution using quality-based VBR so bitrate scales naturally.
+    Forces 4s keyframe intervals so HLS can cut segments on time — without this, NVENC's
+    default long GOP makes the first segment ~3 minutes long, blowing the start-up window."""
+    cmd = [
+        FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", src,
+        "-map", "0:v:0", "-map", "0:a:0?",
+        # Tone-map HDR/DV to 8-bit SDR but keep original resolution
+        "-vf", "format=yuv420p",
+        "-force_key_frames", "expr:gte(t,n_forced*4)",
+    ]
+    if use_nvenc:
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll",
+                "-rc", "vbr", "-cq", "26", "-b:v", "0", "-maxrate", "25M", "-bufsize", "40M",
+                "-g", "120", "-no-scenecut", "1"]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main",
+                "-pix_fmt", "yuv420p", "-crf", "26", "-maxrate", "25M", "-bufsize", "40M",
+                "-g", "120", "-keyint_min", "120", "-sc_threshold", "0"]
+    cmd += [
+        "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+        "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
+        "-hls_flags", "independent_segments",
+        "-hls_segment_filename", "seg_%04d.ts", "playlist.m3u8",
+    ]
+    return cmd
+
+
+async def _kill_preview_session_locked():
+    """Tear down the active preview session. Caller must hold the session lock."""
+    proc = _preview_session.get("proc")
+    sess_dir = _preview_session.get("dir")
+    if proc is not None:
+        try:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                try: proc.kill()
+                except Exception: pass
+                try: await proc.wait()
+                except Exception: pass
+        except Exception:
+            pass
+    if sess_dir and os.path.isdir(sess_dir):
+        try:
+            shutil.rmtree(sess_dir, ignore_errors=True)
+        except Exception:
+            pass
+    _preview_session["id"] = None
+    _preview_session["proc"] = None
+    _preview_session["dir"] = None
+    _preview_session["src"] = None
+    _preview_session["started_at"] = 0.0
+
+
+_RAW_MIME_BY_EXT = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+    ".webm": "video/webm", ".mkv": "video/x-matroska", ".ogv": "video/ogg",
+    ".ts": "video/mp2t", ".m2ts": "video/mp2t",
+}
+
+
+def _browser_can_direct_play(ext: str, vcodec: str, acodec: str) -> bool:
+    """Conservative check: only return True for combinations every modern browser
+    can decode in both streams. MKV is excluded entirely because Chrome and Firefox
+    don't reliably demux it even when the inner codecs are H.264+AAC."""
+    ext = (ext or "").lower()
+    vcodec = (vcodec or "").lower()
+    acodec = (acodec or "").lower()
+    if ext in (".mp4", ".m4v", ".mov"):
+        return vcodec in ("h264", "avc1") and acodec in ("aac", "mp3")
+    if ext == ".webm":
+        return vcodec in ("vp8", "vp9", "av1") and acodec in ("opus", "vorbis")
+    return False
+
+
+@app.get("/api/preview/probe")
+async def preview_probe(path: str):
+    """Probe a file's container/codecs so the frontend can decide whether the browser
+    can play it directly or whether we need the HLS transcode path."""
+    if not path:
+        return JSONResponse({"error": "path is required"}, status_code=400)
+    if not is_path_allowed(path):
+        return JSONResponse({"error": "Path not under allowed paths"}, status_code=403)
+    if not os.path.isfile(path):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE, "-v", "error", "-print_format", "json",
+            "-show_streams", "-select_streams", "v:0,a:0", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        data = json.loads(out.decode(errors="replace") or "{}")
+    except Exception as e:
+        return JSONResponse({"error": f"ffprobe failed: {e}"}, status_code=500)
+    vcodec = ""
+    acodec = ""
+    width = 0
+    height = 0
+    for s in data.get("streams", []):
+        if s.get("codec_type") == "video" and not vcodec:
+            vcodec = s.get("codec_name", "")
+            width = s.get("width", 0) or 0
+            height = s.get("height", 0) or 0
+        elif s.get("codec_type") == "audio" and not acodec:
+            acodec = s.get("codec_name", "")
+    ext = os.path.splitext(path)[1].lower()
+    can_direct = _browser_can_direct_play(ext, vcodec, acodec)
+    return {
+        "can_direct": can_direct,
+        "video_codec": vcodec,
+        "audio_codec": acodec,
+        "width": width,
+        "height": height,
+        "ext": ext,
+    }
+
+
+@app.get("/api/preview/raw")
+async def preview_raw(path: str):
+    """Stream the source file directly with HTTP range support, so the browser can try
+    native playback. The frontend falls back to /api/preview/start (HLS transcode) if
+    the browser cannot decode the container or codec."""
+    if not path:
+        return JSONResponse({"error": "path is required"}, status_code=400)
+    if not is_path_allowed(path):
+        return JSONResponse({"error": "Path not under allowed paths"}, status_code=403)
+    if not os.path.isfile(path):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    ext = os.path.splitext(path)[1].lower()
+    media_type = _RAW_MIME_BY_EXT.get(ext, "application/octet-stream")
+    # Starlette's FileResponse handles Range headers (HTTP 206) automatically.
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/preview/start")
+async def preview_start(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+    src = (body.get("path") or "").strip()
+    if not src:
+        return JSONResponse({"error": "path is required"}, status_code=400)
+    if not is_path_allowed(src):
+        return JSONResponse({"error": f"Path not under allowed paths: {', '.join(app_settings.get('allowed_paths', ['/mnt']))}"}, status_code=403)
+    if not os.path.isfile(src):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    lock = _preview_session.get("lock")
+    if lock is None:
+        # startup() should have created this, but be defensive
+        lock = asyncio.Lock()
+        _preview_session["lock"] = lock
+
+    async with lock:
+        # Tear down any existing session before starting a new one
+        await _kill_preview_session_locked()
+
+        session_id = uuid.uuid4().hex[:8]
+        sess_dir = os.path.join(PREVIEW_DIR, session_id)
+        try:
+            os.makedirs(sess_dir, exist_ok=True)
+        except Exception as e:
+            return JSONResponse({"error": f"Failed to create preview dir: {e}"}, status_code=500)
+
+        use_nvenc = LOCAL_NVENC and not _local_encode_active()
+        cmd = _build_preview_ffmpeg_cmd(src, use_nvenc)
+        log.info(f"[preview {session_id}] starting ({'nvenc' if use_nvenc else 'libx264'}): {os.path.basename(src)}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=sess_dir,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except Exception as e:
+            shutil.rmtree(sess_dir, ignore_errors=True)
+            return JSONResponse({"error": f"Failed to launch ffmpeg: {e}"}, status_code=500)
+
+        # Drain stderr in the background so the pipe never fills up; keep last ~4 KB for diagnostics
+        stderr_tail = bytearray()
+        async def _drain_stderr():
+            try:
+                while True:
+                    chunk = await proc.stderr.read(1024)
+                    if not chunk:
+                        break
+                    stderr_tail.extend(chunk)
+                    if len(stderr_tail) > 4096:
+                        del stderr_tail[:len(stderr_tail) - 4096]
+                    log.warning(f"[preview {session_id}] ffmpeg: {chunk.decode(errors='replace').strip()}")
+            except Exception:
+                pass
+        stderr_task = asyncio.create_task(_drain_stderr())
+
+        _preview_session["id"] = session_id
+        _preview_session["proc"] = proc
+        _preview_session["dir"] = sess_dir
+        _preview_session["src"] = src
+        _preview_session["started_at"] = time.monotonic()
+
+        # Wait up to ~20s for the playlist to materialise with at least one segment line.
+        # NVENC context init + first GOP can take several seconds on cold start.
+        playlist_path = os.path.join(sess_dir, "playlist.m3u8")
+        ready = False
+        for _ in range(200):
+            if proc.returncode is not None:
+                break
+            if os.path.isfile(playlist_path):
+                try:
+                    with open(playlist_path) as f:
+                        content = f.read()
+                    if "seg_" in content and ".ts" in content:
+                        ready = True
+                        break
+                except Exception:
+                    pass
+            await asyncio.sleep(0.1)
+
+        if not ready:
+            await _kill_preview_session_locked()
+            try: stderr_task.cancel()
+            except Exception: pass
+            detail = bytes(stderr_tail).decode(errors="replace")[-600:]
+            log.warning(f"[preview {session_id}] failed to start: {detail}")
+            return JSONResponse({"error": "ffmpeg failed to start streaming", "detail": detail}, status_code=500)
+
+        return {"session_id": session_id, "playlist": f"/api/preview/{session_id}/playlist.m3u8"}
+
+
+@app.get("/api/preview/{session_id}/playlist.m3u8")
+async def preview_playlist(session_id: str):
+    if session_id != _preview_session.get("id"):
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    sess_dir = _preview_session.get("dir")
+    if not sess_dir:
+        return JSONResponse({"error": "Session not active"}, status_code=404)
+    pl = os.path.join(sess_dir, "playlist.m3u8")
+    if not os.path.isfile(pl):
+        return JSONResponse({"error": "Playlist not ready"}, status_code=404)
+    _preview_session["started_at"] = time.monotonic()
+    return FileResponse(pl, media_type="application/vnd.apple.mpegurl",
+                        headers={"Cache-Control": "no-store"})
+
+
+_SEG_RE = re.compile(r"^seg_\d{4}\.ts$")
+
+@app.get("/api/preview/{session_id}/{segment}")
+async def preview_segment(session_id: str, segment: str):
+    if session_id != _preview_session.get("id"):
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    if not _SEG_RE.match(segment):
+        return JSONResponse({"error": "Invalid segment name"}, status_code=400)
+    sess_dir = _preview_session.get("dir")
+    if not sess_dir:
+        return JSONResponse({"error": "Session not active"}, status_code=404)
+    seg_path = os.path.join(sess_dir, segment)
+    if not os.path.isfile(seg_path):
+        return JSONResponse({"error": "Segment not found"}, status_code=404)
+    _preview_session["started_at"] = time.monotonic()
+    return FileResponse(seg_path, media_type="video/mp2t",
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/preview/{session_id}/stop")
+async def preview_stop(session_id: str):
+    lock = _preview_session.get("lock")
+    if lock is None:
+        return {"ok": True}
+    async with lock:
+        if session_id == _preview_session.get("id"):
+            log.info(f"[preview {session_id}] stop")
+            await _kill_preview_session_locked()
+    return {"ok": True}
+
+
+async def _preview_idle_reaper():
+    """Tear down preview sessions that have been idle for >5 minutes."""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            sid = _preview_session.get("id")
+            if sid and (time.monotonic() - _preview_session.get("started_at", 0)) > 300:
+                lock = _preview_session.get("lock")
+                if lock is not None:
+                    async with lock:
+                        if _preview_session.get("id") == sid:
+                            log.info(f"[preview {sid}] reaped (idle >5min)")
+                            await _kill_preview_session_locked()
+        except Exception:
+            pass
+
 
 @app.get("/setup")
 async def setup_page():
@@ -6621,8 +6971,13 @@ async def scan_directory(req: ScanRequest):
         # Save to cache
         if cache_conn:
             save_to_cache(cache_conn, info, suggestion)
+        try:
+            _mtime = os.stat(info.path).st_mtime
+        except Exception:
+            _mtime = 0
         return {
             "path": info.path, "filename": info.filename, "dirname": info.dirname,
+            "mtime": _mtime,
             "size_bytes": info.size_bytes, "size_human": info.size_human,
             "codec": info.codec, "width": info.width, "height": info.height,
             "resolution_label": info.resolution_label, "pix_fmt": info.pix_fmt,
@@ -6971,8 +7326,13 @@ async def queue_add(req: QueueAddRequest):
             info = await get_file_info(fpath)
             if not info:
                 continue
+            try:
+                _mtime = os.stat(info.path).st_mtime
+            except Exception:
+                _mtime = 0
             info_dict = {
                 "path": info.path, "filename": info.filename, "dirname": info.dirname,
+                "mtime": _mtime,
                 "size_bytes": info.size_bytes, "size_human": info.size_human,
                 "codec": info.codec, "width": info.width, "height": info.height,
                 "resolution_label": info.resolution_label, "pix_fmt": info.pix_fmt,
@@ -7943,8 +8303,13 @@ async def folder_watcher():
                     if not info:
                         continue
 
+                    try:
+                        _mtime = os.stat(info.path).st_mtime
+                    except Exception:
+                        _mtime = 0
                     info_dict = {
                         "path": info.path, "filename": info.filename, "dirname": info.dirname,
+                        "mtime": _mtime,
                         "size_bytes": info.size_bytes, "size_human": info.size_human,
                         "codec": info.codec, "width": info.width, "height": info.height,
                         "resolution_label": info.resolution_label, "pix_fmt": info.pix_fmt,
@@ -8491,8 +8856,13 @@ async def _webhook_queue_file(file_path: str) -> Optional[dict]:
         log.error(f"Webhook: failed to probe {file_path}")
         return {"file": file_path, "status": "error", "reason": "probe failed"}
 
+    try:
+        _mtime = os.stat(info.path).st_mtime
+    except Exception:
+        _mtime = 0
     info_dict = {
         "path": info.path, "filename": info.filename, "dirname": info.dirname,
+        "mtime": _mtime,
         "size_bytes": info.size_bytes, "size_human": info.size_human,
         "codec": info.codec, "width": info.width, "height": info.height,
         "resolution_label": info.resolution_label, "pix_fmt": info.pix_fmt,

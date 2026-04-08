@@ -26,6 +26,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300b4d8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a9 9 0 1 1-6.219-8.56'/><polyline points='21 3 21 9 15 9'/></svg>">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Recode</title>
+<script src="/static/hls.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -475,7 +476,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .help-section.active { display: block; }
 
 /* Settings modal layout */
-.settings-layout { display: flex; gap: 0; height: 80vh; }
+.settings-modal { height: 90vh; }
+.settings-layout { display: flex; gap: 0; flex: 1; min-height: 0; }
 .settings-nav { width: 200px; min-width: 200px; border-right: 1px solid var(--border); padding: 8px 0; display: flex; flex-direction: column; }
 .settings-nav-item { display: flex; align-items: center; gap: 8px; padding: 10px 16px; font-size: 13px; color: var(--text-secondary); cursor: pointer; border-left: 3px solid transparent; transition: all var(--transition); }
 .settings-nav-item:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -489,13 +491,13 @@ tr.file-row:hover td { background: var(--bg-hover); }
 
 /* Settings responsive */
 @media (max-width: 900px) {
-    .settings-modal { max-width: 98vw !important; width: 98vw !important; max-height: 95vh !important; margin: 8px !important; }
-    .settings-layout { flex-direction: column; min-height: unset; }
-    .settings-nav { width: 100%; min-width: unset; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0; }
+    .settings-modal { max-width: 98vw !important; width: 98vw !important; height: 95vh !important; max-height: 95vh !important; margin: 8px !important; }
+    .settings-layout { flex-direction: column; min-height: 0; flex: 1; }
+    .settings-nav { width: 100%; min-width: unset; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0; flex-shrink: 0; }
     .settings-nav-item { padding: 10px 14px; border-left: none; border-bottom: 3px solid transparent; white-space: nowrap; font-size: 12px; }
     .settings-nav-item.active { border-left-color: transparent; border-bottom-color: var(--accent); }
     .settings-nav-item .nav-icon { display: none; }
-    .settings-panel { padding: 14px; max-height: 70vh; }
+    .settings-panel { padding: 14px; min-height: 0; }
 }
 @media (max-width: 700px) {
     .settings-modal [style*="grid-template-columns: 1fr 1fr 1fr 1fr"] { grid-template-columns: 1fr 1fr !important; }
@@ -871,6 +873,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         <input type="text" id="filterSearch" placeholder="Search filename..." oninput="clearTimeout(window._filterDebounce); window._filterDebounce=setTimeout(applyFilters, 300)">
                         <select id="filterSort" onchange="applyFilters()">
                             <option value="name">Sort: Name</option>
+                            <option value="newest">Sort: Newest first</option>
+                            <option value="oldest">Sort: Oldest first</option>
                             <option value="size_desc">Sort: Largest first</option>
                             <option value="size_asc">Sort: Smallest first</option>
                             <option value="bitrate_desc">Sort: Highest bitrate</option>
@@ -1000,6 +1004,28 @@ tr.file-row:hover td { background: var(--bg-hover); }
         <div class="modal-footer">
             <button class="btn" id="confirmCancel" onclick="resolveConfirm(false)" style="font-size:13px;">Cancel</button>
             <button class="btn" id="confirmOk" onclick="resolveConfirm(true)" style="font-size:13px;">Confirm</button>
+        </div>
+    </div>
+</div>
+
+<!-- Video Preview Modal — live HLS transcode of source/output files -->
+<div class="modal-overlay" id="videoPreviewModal" style="z-index:310;">
+    <div class="modal" style="width:min(1400px,95vw);max-height:95vh;">
+        <div class="modal-header" style="gap:12px;align-items:flex-start;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00b4d8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:2px;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="21 3 21 9 15 9"/></svg>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;">
+                <h2 id="videoPreviewTitle" style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Preview</h2>
+                <div id="videoPreviewBadges" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;"></div>
+            </div>
+            <button class="modal-close" onclick="closeVideoPreview()" style="flex-shrink:0;">&times;</button>
+        </div>
+        <div class="modal-body" style="padding:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:300px;position:relative;">
+            <video id="videoPreviewEl" controls autoplay playsinline style="width:100%;max-height:calc(95vh - 160px);background:#000;display:block;"></video>
+            <div id="videoPreviewSpinner" style="position:absolute;color:#fff;font-size:13px;background:rgba(0,0,0,0.6);padding:8px 14px;border-radius:6px;">Buffering preview…</div>
+        </div>
+        <div class="modal-footer">
+            <span id="videoPreviewNote" style="font-size:11px;color:var(--text-muted);flex:1;">&nbsp;</span>
+            <button class="btn" onclick="closeVideoPreview()">Close</button>
         </div>
     </div>
 </div>
@@ -1971,6 +1997,17 @@ tr.file-row:hover td { background: var(--bg-hover); }
             <div class="help-section" id="helpTab-interface">
                 <h3>Interface Guide</h3>
 
+                <h4>In-Browser Video Preview</h4>
+                <p>Click the <strong>play icon</strong> next to any file in the scan, queue, or history list to preview it in your browser. This is useful for verifying a file is what you think it is before queuing, or comparing a finished encode against its source.</p>
+                <ul>
+                    <li><strong>Direct play first</strong> &mdash; Recode probes the file's container and codec and, if your browser can decode it natively (e.g. H.264 + AAC in MP4), streams the original file directly with HTTP range support so you can seek freely. No transcoding cost.</li>
+                    <li><strong>Live transcode fallback</strong> &mdash; For HEVC, Dolby Vision, MKV containers, or unsupported audio (AC3, EAC3, DTS, TrueHD), the server runs a live HLS transcode to H.264 + AAC at the source resolution. Tone-maps HDR/DV down to SDR for display. Uses NVENC when available, libx264 otherwise.</li>
+                    <li><strong>Status pill</strong> &mdash; The footer of the preview modal shows whether playback is &#127823; <strong>Direct play</strong> or &#129000; <strong>Transcoding</strong>, along with the actual stream resolution (e.g. 3840&times;2160).</li>
+                    <li><strong>Source badges</strong> &mdash; The modal header shows the same badges as the file lists: codec, resolution, HDR/DV type, size, duration, audio track count.</li>
+                    <li><strong>History rows</strong> preview the encoded output when one exists; failed/cancelled jobs preview the source.</li>
+                </ul>
+                <div class="tip">Only one preview session is active at a time. Closing the modal stops the transcode immediately. The server reaps idle previews after 5 minutes if you close the tab without clicking Close. Preview transcodes use libx264 (CPU) when a local encode job is already using the GPU, so they don't fight for hardware.</div>
+
                 <h4>Delete Files from Disk</h4>
                 <p>You can permanently delete files directly from the scan results:</p>
                 <ul>
@@ -1996,7 +2033,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         <div style="font-weight:600;color:var(--text-primary);">Status</div><div style="color:var(--text-secondary);">Candidate (ready to encode) or Encoded (has RECODE metadata tag from previous encode)</div>
                     </div>
                 </div>
-                <div class="tip">Click any column header to sort. Click again to reverse. Use the filter bar to search by name, filter by codec/HDR, or show top N files by size.</div>
+                <div class="tip">Click any column header to sort. Click again to reverse. Use the filter bar to search by name, sort by name / newest / oldest / size / bitrate / resolution / duration, filter by codec/HDR, or show top N files by size. The filename column auto-shrinks to the average filename width on small screens to prevent horizontal scrolling.</div>
 
                 <h4>Queue Management</h4>
                 <ul>
@@ -2121,6 +2158,16 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v4.0.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>In-browser video preview</strong> &mdash; click the play icon in any scan, queue, or history row to watch the file directly in the browser. Tries native direct play first (H.264/AAC MP4), falls back to a live H.264/HLS transcode at the source resolution for HEVC, Dolby Vision, MKV, and unsupported audio codecs (AC3/EAC3/DTS/TrueHD). Status pill shows direct play vs transcoding plus actual resolution; modal header shows the same badges (codec, res, HDR, size, duration, audio) as the file lists. History rows preview the encoded output when available</li>
+                                <li><strong>Sort filter consistency</strong> &mdash; scan, queue, and history filters now share the same sort options in the same order: Name / Newest / Oldest / Largest / Smallest / Highest bitrate / Lowest bitrate / Highest res / Lowest res / Longest / Shortest. Newest/Oldest sort by file mtime in scan and queue; history continues to sort by job finish time</li>
+                                <li><strong>Settings modal footer fix</strong> &mdash; Save Settings and Close buttons no longer get clipped off the bottom of the modal on shorter screens (laptop displays). The settings layout is now flex-sized within the modal instead of demanding a fixed 80vh of vertical space</li>
+                                <li><strong>Auto-sized filename column</strong> &mdash; on smaller screens where the scan results table overflows the viewport, the filename column shrinks to the average filename width across the visible rows, eliminating wasted whitespace and horizontal scrolling</li>
+                                <li><strong>Recode logo</strong> in the preview modal header for visual consistency with the rest of the UI</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v4.0.0 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -4698,12 +4745,16 @@ function filterJobList(jobs, search, codecFilter, hdrFilter, topN) {
 function sortJobList(jobs, sort) {
     const br = f => (f.duration_secs && f.size_bytes) ? (f.size_bytes * 8 / f.duration_secs) : 0;
     if (sort === 'name') jobs.sort((a, b) => (a.file_info.filename || '').localeCompare(b.file_info.filename || ''));
+    else if (sort === 'newest') jobs.sort((a, b) => (b.file_info.mtime || 0) - (a.file_info.mtime || 0));
+    else if (sort === 'oldest') jobs.sort((a, b) => (a.file_info.mtime || 0) - (b.file_info.mtime || 0));
     else if (sort === 'size_desc') jobs.sort((a, b) => (b.file_info.size_bytes || 0) - (a.file_info.size_bytes || 0));
     else if (sort === 'size_asc') jobs.sort((a, b) => (a.file_info.size_bytes || 0) - (b.file_info.size_bytes || 0));
     else if (sort === 'bitrate_desc') jobs.sort((a, b) => br(b.file_info) - br(a.file_info));
     else if (sort === 'bitrate_asc') jobs.sort((a, b) => br(a.file_info) - br(b.file_info));
     else if (sort === 'res_desc') jobs.sort((a, b) => (b.file_info.width || 0) - (a.file_info.width || 0));
     else if (sort === 'res_asc') jobs.sort((a, b) => (a.file_info.width || 0) - (b.file_info.width || 0));
+    else if (sort === 'duration_desc') jobs.sort((a, b) => (b.file_info.duration_secs || 0) - (a.file_info.duration_secs || 0));
+    else if (sort === 'duration_asc') jobs.sort((a, b) => (a.file_info.duration_secs || 0) - (b.file_info.duration_secs || 0));
     return jobs;
 }
 
@@ -4712,14 +4763,17 @@ function jobFilterBarHtml(prefix, searchVal, sortVal, topNVal, codecVal, hdrVal)
         <input type="text" id="${prefix}SearchInput" placeholder="Search filename..." value="${escHtml(searchVal)}" oninput="clearTimeout(window._${prefix}Debounce); window._${prefix}Debounce=setTimeout(()=>{${prefix}Search=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();},300)">
         <select onchange="${prefix}Sort=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
             ${prefix === 'queue' ? `<option value="position" ${sortVal==='position'?'selected':''}>Sort: Queue order</option>` : ''}
-            ${prefix === 'history' ? `<option value="newest" ${sortVal==='newest'?'selected':''}>Sort: Newest first</option><option value="oldest" ${sortVal==='oldest'?'selected':''}>Sort: Oldest first</option>` : ''}
             <option value="name" ${sortVal==='name'?'selected':''}>Sort: Name</option>
+            <option value="newest" ${sortVal==='newest'?'selected':''}>Sort: Newest first</option>
+            <option value="oldest" ${sortVal==='oldest'?'selected':''}>Sort: Oldest first</option>
             <option value="size_desc" ${sortVal==='size_desc'?'selected':''}>Sort: Largest first</option>
             <option value="size_asc" ${sortVal==='size_asc'?'selected':''}>Sort: Smallest first</option>
             <option value="bitrate_desc" ${sortVal==='bitrate_desc'?'selected':''}>Sort: Highest bitrate</option>
             <option value="bitrate_asc" ${sortVal==='bitrate_asc'?'selected':''}>Sort: Lowest bitrate</option>
             <option value="res_desc" ${sortVal==='res_desc'?'selected':''}>Sort: Highest res first</option>
             <option value="res_asc" ${sortVal==='res_asc'?'selected':''}>Sort: Lowest res first</option>
+            <option value="duration_desc" ${sortVal==='duration_desc'?'selected':''}>Sort: Longest first</option>
+            <option value="duration_asc" ${sortVal==='duration_asc'?'selected':''}>Sort: Shortest first</option>
         </select>
         <select onchange="${prefix}FilterTopN=this.value;${prefix}Page=1;render${prefix === 'queue' ? 'Queue' : 'History'}();">
             <option value="0" ${topNVal==='0'?'selected':''}>Show: All</option>
@@ -4865,6 +4919,7 @@ function renderQueue() {
                     <span class="badge badge-sm badge-preset" title="${presetTip(job.settings)}">${job.settings.preset || 'auto'}</span>
                 </div>
             </div>
+            ${_previewBtn(f, {title:'Preview source'})}
             <button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="removeFromQueue('${job.id}')">${svgIcon('x-circle', 12)}</button>
         </div>`;
     });
@@ -5846,6 +5901,10 @@ function renderHistory() {
             </div>
             <span style="font-size:10px;color:var(--text-muted);white-space:nowrap;margin-right:6px;">${dateStr}</span>
             ${job.status !== 'done' ? `<button class="btn btn-sm" style="font-size:11px;padding:4px 10px;margin-left:4px;" onclick="event.stopPropagation(); btnAction(this, () => retryJob('${job.id}'), '✓ Queued', 3000)" title="Re-queue this job">${svgIcon('rotate-cw', 12)} Retry</button>` : ''}
+            ${_previewBtn(f, {
+                path: (job.status==='done' && job.result && job.result.output_path) ? job.result.output_path : f.path,
+                title: (job.status==='done' && job.result && job.result.output_path) ? 'Preview encoded output' : 'Preview source'
+            })}
             <button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="event.stopPropagation(); deleteHistoryItem('${job.id}')" title="Remove from history">${svgIcon('x-circle', 12)}</button>
             <span class="expand-btn" id="hexp-${huid}">${svgIcon('chevron-right', 12)}</span>
             <div style="width:100%;padding-left:28px;display:none;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);" id="hdet-${huid}" onclick="event.stopPropagation()">
@@ -5947,6 +6006,184 @@ function openBrowser() {
 }
 
 function closeBrowser() { document.getElementById('browserModal').classList.remove('open'); }
+
+/* =========================================================================
+   Video preview (live HLS transcode via /api/preview/*)
+   ========================================================================= */
+let _previewSession = null;
+let _previewHls = null;
+
+function _previewFileMeta(f) {
+    return {
+        codec: f.codec || '',
+        resolution_label: f.resolution_label || '',
+        hdr_type: f.hdr_type || 'SDR',
+        size_human: f.size_human || '',
+        duration_secs: f.duration_secs || 0,
+        audio_count: (f.audio_streams || []).length,
+        sub_count: (f.sub_streams || []).length,
+    };
+}
+
+function _renderPreviewBadges(meta) {
+    const target = document.getElementById('videoPreviewBadges');
+    if (!target) return;
+    if (!meta) { target.innerHTML = ''; return; }
+    const isDv = (meta.hdr_type || '').startsWith('Dolby Vision');
+    const hdrShort = isDv ? meta.hdr_type.replace('Dolby Vision', 'DV') : (meta.hdr_type || 'SDR');
+    const hdrBadge = isDv ? 'badge-dv' : (hdrShort === 'SDR' ? 'badge-sdr' : 'badge-hdr');
+    const dur = meta.duration_secs || 0;
+    const durStr = dur ? ((Math.floor(dur/3600) > 0)
+        ? Math.floor(dur/3600) + 'h ' + Math.floor((dur%3600)/60) + 'm'
+        : Math.floor(dur/60) + 'm') : '';
+    target.innerHTML = `
+        ${meta.codec ? `<span class="badge badge-sm ${codecBadgeClass(meta.codec)}">${fmtCodec(meta.codec)}</span>` : ''}
+        ${meta.resolution_label ? `<span class="badge badge-sm badge-res">${cleanRes(meta.resolution_label)}</span>` : ''}
+        <span class="badge badge-sm ${hdrBadge}" title="${escHtml(meta.hdr_type || 'SDR')}">${hdrShort}</span>
+        ${meta.size_human ? `<span class="badge badge-sm badge-size">${meta.size_human}</span>` : ''}
+        ${durStr ? `<span class="badge badge-sm badge-time">${durStr}</span>` : ''}
+        ${meta.audio_count ? `<span class="badge badge-sm badge-audio">${meta.audio_count} audio</span>` : ''}
+        ${meta.sub_count ? `<span class="badge badge-sm badge-preset">${meta.sub_count} sub${meta.sub_count > 1 ? 's' : ''}</span>` : ''}
+    `;
+}
+
+function _previewBtn(f, opts) {
+    opts = opts || {};
+    const path = opts.path || f.path;
+    const title = opts.title || 'Preview';
+    const meta = JSON.stringify(_previewFileMeta(f));
+    return `<button class="btn btn-sm" style="padding-top:5px;padding-bottom:5px;" data-preview-path="${escHtml(path)}" data-preview-name="${escHtml(f.filename)}" data-preview-meta="${escHtml(meta)}" onclick="event.stopPropagation();showVideoPreviewBtn(this)" title="${escHtml(title)}">${svgIcon('play', 12)}</button>`;
+}
+
+function showVideoPreviewBtn(btn) {
+    if (!btn) return;
+    let meta = null;
+    try { meta = JSON.parse(btn.dataset.previewMeta || 'null'); } catch {}
+    showVideoPreview(btn.dataset.previewPath, btn.dataset.previewName, meta);
+}
+
+function _setPreviewNote(mode, v) {
+    const note = document.getElementById('videoPreviewNote');
+    if (!note) return;
+    const w = v && v.videoWidth, h = v && v.videoHeight;
+    const res = (w && h) ? `${w}×${h}` : '…';
+    const dot = mode === 'direct'
+        ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3fb950;margin-right:6px;vertical-align:middle;"></span>'
+        : '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#d29922;margin-right:6px;vertical-align:middle;"></span>';
+    const label = mode === 'direct' ? 'Direct play' : 'Transcoding';
+    note.innerHTML = `${dot}<strong style="color:var(--text-secondary);">${label}</strong> &middot; ${res}`;
+}
+
+async function _startHlsPreview(path, spinEl, v) {
+    spinEl.textContent = 'Transcoding for browser…';
+    spinEl.style.display = '';
+    _setPreviewNote('transcode', v);
+    try {
+        const r = await fetch('/api/preview/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path})
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        _previewSession = j.session_id;
+        const onHlsLoaded = () => {
+            spinEl.style.display = 'none';
+            _setPreviewNote('transcode', v);
+            v.play().catch(() => {});
+        };
+        if (window.Hls && Hls.isSupported()) {
+            _previewHls = new Hls({lowLatencyMode: false, maxBufferLength: 30});
+            _previewHls.loadSource(j.playlist);
+            _previewHls.attachMedia(v);
+            v.addEventListener('loadeddata', onHlsLoaded, {once: true});
+            _previewHls.on(Hls.Events.ERROR, (_e, data) => {
+                if (data && data.fatal) {
+                    spinEl.textContent = 'Playback error: ' + (data.details || data.type);
+                    spinEl.style.display = '';
+                }
+            });
+        } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+            v.src = j.playlist;  // Safari native HLS
+            v.addEventListener('loadeddata', onHlsLoaded, {once: true});
+        } else {
+            throw new Error('HLS not supported in this browser');
+        }
+    } catch (e) {
+        spinEl.textContent = 'Error: ' + (e && e.message ? e.message : e);
+        spinEl.style.display = '';
+    }
+}
+
+async function showVideoPreview(path, displayName, meta) {
+    if (!path) return;
+    // tear down any prior preview cleanly
+    await closeVideoPreview();
+    const titleEl = document.getElementById('videoPreviewTitle');
+    const spinEl = document.getElementById('videoPreviewSpinner');
+    titleEl.textContent = displayName || (path.split('/').pop());
+    titleEl.title = path;
+    _renderPreviewBadges(meta);
+    spinEl.textContent = 'Probing…';
+    spinEl.style.display = '';
+    document.getElementById('videoPreviewModal').classList.add('open');
+
+    const v = document.getElementById('videoPreviewEl');
+
+    // Probe first so we KNOW whether the browser can decode both video and audio
+    // streams. Without this, the browser silently plays the video while the audio
+    // stream (often AC3/EAC3/DTS/TrueHD) goes unrendered.
+    let probe = null;
+    try {
+        const r = await fetch('/api/preview/probe?path=' + encodeURIComponent(path));
+        if (r.ok) probe = await r.json();
+    } catch {}
+
+    if (probe && probe.can_direct) {
+        // Native playback path. We still keep an error listener as a safety net.
+        let fellBack = false;
+        const onLoadedData = () => {
+            v.removeEventListener('error', onNativeError);
+            spinEl.style.display = 'none';
+            _setPreviewNote('direct', v);
+            v.play().catch(() => {});
+        };
+        const onNativeError = () => {
+            if (fellBack) return;
+            fellBack = true;
+            v.removeEventListener('loadeddata', onLoadedData);
+            try { v.removeAttribute('src'); v.load(); } catch {}
+            _startHlsPreview(path, spinEl, v);
+        };
+        v.addEventListener('loadeddata', onLoadedData, {once: true});
+        v.addEventListener('error', onNativeError, {once: true});
+        spinEl.textContent = 'Loading…';
+        v.src = '/api/preview/raw?path=' + encodeURIComponent(path);
+        try { v.load(); } catch {}
+    } else {
+        // Container/codec is not browser-friendly — go straight to HLS transcode.
+        await _startHlsPreview(path, spinEl, v);
+    }
+}
+
+async function closeVideoPreview() {
+    document.getElementById('videoPreviewModal').classList.remove('open');
+    const note = document.getElementById('videoPreviewNote');
+    if (note) note.innerHTML = '&nbsp;';
+    _renderPreviewBadges(null);
+    const v = document.getElementById('videoPreviewEl');
+    try { v.pause(); } catch {}
+    try { v.removeAttribute('src'); v.load(); } catch {}
+    if (_previewHls) {
+        try { _previewHls.destroy(); } catch {}
+        _previewHls = null;
+    }
+    if (_previewSession) {
+        const sid = _previewSession;
+        _previewSession = null;
+        try { await fetch('/api/preview/' + sid + '/stop', {method: 'POST'}); } catch {}
+    }
+}
 
 function selectBrowserPath() {
     document.getElementById('plexLibrary').value = '__custom__';
@@ -6102,6 +6339,8 @@ function applyFilters() {
     else if (sort === 'res_asc') files.sort((a, b) => (a.width * a.height) - (b.width * b.height));
     else if (sort === 'duration_desc') files.sort((a, b) => (b.duration_secs||0) - (a.duration_secs||0));
     else if (sort === 'duration_asc') files.sort((a, b) => (a.duration_secs||0) - (b.duration_secs||0));
+    else if (sort === 'newest') files.sort((a, b) => (b.mtime||0) - (a.mtime||0));
+    else if (sort === 'oldest') files.sort((a, b) => (a.mtime||0) - (b.mtime||0));
     else if (tableSort.column) {
         const dir = tableSort.dir === 'asc' ? 1 : -1;
         const col = tableSort.column;
@@ -6322,7 +6561,7 @@ function renderScanResultsFiltered(files) {
             <td>${estHtml}</td>
             <td>${sugHtml}</td>
             <td>${statusText}</td>
-            <td style="text-align:center;"><button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="removeScanFile('${escHtml(f.path)}')" title="Delete file from disk">${svgIcon('x-circle', 12)}</button></td>
+            <td style="text-align:center;white-space:nowrap;">${_previewBtn(f, {title:'Preview in browser'})}<span style="display:inline-block;width:4px;"></span><button class="btn btn-danger btn-sm" style="padding-top:5px;padding-bottom:5px;" onclick="removeScanFile('${escHtml(f.path)}')" title="Delete file from disk">${svgIcon('x-circle', 12)}</button></td>
         </tr>`;
 
         if (hasAudio || (f.sub_streams||[]).length > 0) {
@@ -6415,7 +6654,41 @@ function renderScanResultsFiltered(files) {
     html += '</tbody></table></div>';
     html += pagerHtml();
     container.innerHTML = html;
+    _autoSizeFileColumn();
 }
+
+/* When the scan results table overflows the viewport horizontally, constrain
+   .file-name to the average natural width of all visible filenames so the wasted
+   space in the file column is reclaimed. Long names get ellipsised; short ones
+   no longer pad the column. Called after every render and on window resize. */
+function _autoSizeFileColumn() {
+    const container = document.getElementById('scanResults');
+    if (!container) return;
+    const wrapper = container.querySelector('.table-wrapper');
+    if (!wrapper) return;
+    const names = container.querySelectorAll('.file-name');
+    if (!names.length) return;
+    // Reset prior overrides so we can re-measure natural widths and re-test overflow.
+    names.forEach(el => el.style.maxWidth = '');
+    if (wrapper.scrollWidth <= wrapper.clientWidth + 4) return;  // no overflow → leave alone
+    let total = 0, count = 0;
+    names.forEach(el => {
+        const span = el.querySelector('span');
+        const w = span ? span.scrollWidth : 0;
+        if (w > 0) { total += w; count++; }
+    });
+    if (!count) return;
+    const avg = Math.round(total / count);
+    // Headroom for the rename pencil icon + cell padding. Floor at 120px.
+    const target = Math.max(120, avg + 30);
+    names.forEach(el => el.style.maxWidth = target + 'px');
+}
+
+let _scanResizeTimer = null;
+window.addEventListener('resize', () => {
+    clearTimeout(_scanResizeTimer);
+    _scanResizeTimer = setTimeout(_autoSizeFileColumn, 100);
+});
 
 function goPage(page) {
     currentPage = page;
