@@ -52,7 +52,7 @@ import hmac as _hmac
 
 import psutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Form, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import requests as http_requests
@@ -63,7 +63,7 @@ import uvicorn
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "4.0.2"
+VERSION = "4.0.3"
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 os.makedirs(BIN_DIR, exist_ok=True)
 
@@ -106,13 +106,17 @@ DOVI_TOOL = _find_bin("dovi_tool")
 # In-browser preview (HLS transcode) state
 # =============================================================================
 PREVIEW_DIR = os.path.join(BASE_DIR, "tmp", "preview")
+PREVIEW_SEG_LEN = 4  # seconds per HLS segment
 _preview_session = {
-    "id": None,            # str — short uuid identifying current session
-    "proc": None,          # asyncio.subprocess.Process for ffmpeg
-    "dir": None,           # str — per-session HLS scratch dir
-    "started_at": 0.0,     # float — time.monotonic() of last activity (for idle reaper)
-    "src": None,           # str — original path being previewed
-    "lock": None,          # asyncio.Lock — initialised in startup() (needs running loop)
+    "id": None,             # str — short uuid identifying current session
+    "dir": None,            # str — per-session HLS scratch dir
+    "src": None,            # str — original path being previewed
+    "duration": 0.0,        # float — source duration in seconds (for VOD playlist)
+    "use_nvenc": False,     # bool — whether to use nvenc for segment transcodes
+    "started_at": 0.0,      # float — time.monotonic() of last activity (for idle reaper)
+    "seg_locks": None,      # dict[int, asyncio.Lock] — per-segment generation lock
+    "active_procs": None,   # set[asyncio.subprocess.Process] — for cleanup
+    "lock": None,           # asyncio.Lock — initialised in startup() (needs running loop)
 }
 
 def _detect_local_nvenc() -> bool:
@@ -629,6 +633,26 @@ class AudioStream:
     reason: str
 
 
+# Year extraction — matches "(1997)", "[1997]", or dot/space-separated ".1997." patterns
+# Ignores resolution tokens like "1080" and "2160" that could also look like years
+_YEAR_BRACKET_RE = re.compile(r'[\(\[](19\d{2}|20\d{2})[\)\]]')
+_YEAR_LOOSE_RE = re.compile(r'(?:^|[\. \-_])((?:19\d{2})|(?:20[0-2]\d))(?:[\. \-_]|$)')
+
+def extract_year(name: str) -> Optional[int]:
+    """Extract a release year from a filename or folder name.
+    Prefers years in brackets/parens; falls back to the last standalone
+    4-digit token (e.g. "2001.A.Space.Odyssey.1968.1080p" → 1968)."""
+    if not name:
+        return None
+    m = _YEAR_BRACKET_RE.search(name)
+    if m:
+        return int(m.group(1))
+    matches = _YEAR_LOOSE_RE.findall(name)
+    if matches:
+        return int(matches[-1])
+    return None
+
+
 @dataclass
 class FileInfo:
     path: str
@@ -654,6 +678,7 @@ class FileInfo:
     hdr10_metadata: dict
     output_exists: bool
     recode_tag: str = ""
+    year: Optional[int] = None
 
 
 @dataclass
@@ -959,6 +984,7 @@ async def get_file_info(path: str) -> Optional[FileInfo]:
     size = p.stat().st_size
     nameonly = p.stem
     dirname = str(p.parent)
+    year = extract_year(p.name) or extract_year(p.parent.name)
     # Check if this file was encoded by Recode — RECODE metadata tag in MKV container
     recode_tag = fmt.get("tags", {}).get("RECODE", "")
     # Check if previously skipped (encoded larger) — RECODE_SKIPPED tag
@@ -991,6 +1017,7 @@ async def get_file_info(path: str) -> Optional[FileInfo]:
         hdr10_metadata=hdr10_metadata,
         output_exists=output_exists,
         recode_tag=recode_tag,
+        year=year,
     )
 
 
@@ -1155,6 +1182,7 @@ def cache_row_to_dict(row: sqlite3.Row) -> dict:
     except (IndexError, KeyError):
         recode_tag = ""
     output_exists = bool(recode_tag)
+    year = extract_year(row["filename"]) or extract_year(Path(row["dirname"]).name)
     return {
         "path": row["path"],
         "filename": row["filename"],
@@ -1179,6 +1207,7 @@ def cache_row_to_dict(row: sqlite3.Row) -> dict:
         "dovi_profile": row["dovi_profile"] if "dovi_profile" in row.keys() else None,
         "output_exists": output_exists,
         "recode_skipped": recode_tag.startswith("SKIPPED:") if recode_tag else False,
+        "year": year,
         "suggestion": {
             "level": row["suggestion_level"],
             "text": row["suggestion_text"],
@@ -6297,62 +6326,196 @@ def _local_encode_active() -> bool:
     return False
 
 
-def _build_preview_ffmpeg_cmd(src: str, use_nvenc: bool) -> list:
-    """Build the ffmpeg command for HLS preview transcode (cwd should be the session dir).
-    Encodes at the source resolution using quality-based VBR so bitrate scales naturally.
-    Forces 4s keyframe intervals so HLS can cut segments on time — without this, NVENC's
-    default long GOP makes the first segment ~3 minutes long, blowing the start-up window."""
+def _build_preview_segment_cmd(src: str, out_path: str, start_time: float, duration: float, use_nvenc: bool) -> list:
+    """Build an ffmpeg command that transcodes a single 4-second HLS segment.
+
+    Each call produces a self-contained mpegts file that starts with an IDR frame AND
+    has its PCR/PTS values offset to match the segment's absolute position in the source
+    timeline (via `-output_ts_offset`). That absolute offset is critical: without it, every
+    segment's PCR starts at ~0 and hls.js sees the first few frames of seg_0001 as
+    "arriving before" seg_0000 ended, which stalls playback after the first segment.
+
+    This is the standard per-segment on-demand transcoding model used by Plex/Jellyfin:
+    forward seek, backward seek, and random access all work because each segment is
+    independently decodable and timestamped relative to the source timeline."""
     cmd = [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+        # Fast seek before -i: jumps to the nearest keyframe before start_time, then
+        # re-encodes forward so the output always begins with an IDR.
+        "-ss", f"{start_time:.3f}",
         "-i", src,
+        "-t", f"{duration:.3f}",
         "-map", "0:v:0", "-map", "0:a:0?",
-        # Tone-map HDR/DV to 8-bit SDR but keep original resolution
         "-vf", "format=yuv420p",
-        "-force_key_frames", "expr:gte(t,n_forced*4)",
+        # Force the very first output frame to be a keyframe so each segment is
+        # independently decodable.
+        "-force_key_frames", "expr:eq(n,0)",
     ]
     if use_nvenc:
-        cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll",
-                "-rc", "vbr", "-cq", "26", "-b:v", "0", "-maxrate", "25M", "-bufsize", "40M",
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p4",
+                "-rc", "vbr", "-cq", "26", "-b:v", "0",
+                "-maxrate", "25M", "-bufsize", "40M",
                 "-g", "120", "-no-scenecut", "1"]
     else:
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main",
-                "-pix_fmt", "yuv420p", "-crf", "26", "-maxrate", "25M", "-bufsize", "40M",
+                "-pix_fmt", "yuv420p", "-crf", "26",
+                "-maxrate", "25M", "-bufsize", "40M",
                 "-g", "120", "-keyint_min", "120", "-sc_threshold", "0"]
     cmd += [
         "-c:a", "aac", "-b:a", "128k", "-ac", "2",
-        "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
-        "-hls_flags", "independent_segments",
-        "-hls_segment_filename", "seg_%04d.ts", "playlist.m3u8",
+        # Align this segment's PCR/PTS to its absolute source-time position so all
+        # segments share a single continuous timeline when stitched by hls.js.
+        "-output_ts_offset", f"{start_time:.3f}",
+        "-muxdelay", "0", "-muxpreload", "0",
+        "-f", "mpegts",
+        out_path,
     ]
     return cmd
 
 
-async def _kill_preview_session_locked():
-    """Tear down the active preview session. Caller must hold the session lock."""
-    proc = _preview_session.get("proc")
+async def _generate_preview_segment(seg_num: int) -> bool:
+    """Transcode a single segment on-demand. Returns True on success.
+    Caller must hold the per-segment lock. Writes atomically via a .tmp file."""
     sess_dir = _preview_session.get("dir")
-    if proc is not None:
+    src = _preview_session.get("src")
+    duration = _preview_session.get("duration", 0.0) or 0.0
+    use_nvenc = bool(_preview_session.get("use_nvenc"))
+    sid = _preview_session.get("id")
+    if not sess_dir or not src or duration <= 0:
+        return False
+
+    start_time = seg_num * PREVIEW_SEG_LEN
+    if start_time >= duration:
+        return False
+    seg_dur = min(float(PREVIEW_SEG_LEN), duration - start_time)
+
+    out_path = os.path.join(sess_dir, f"seg_{seg_num:04d}.ts")
+    tmp_path = out_path + ".tmp"
+    try: os.remove(tmp_path)
+    except Exception: pass
+
+    cmd = _build_preview_segment_cmd(src, tmp_path, start_time, seg_dur, use_nvenc)
+    log.info(f"[preview {sid}] generate seg {seg_num} (t={start_time:.1f}s, d={seg_dur:.1f}s)")
+
+    procs = _preview_session.get("active_procs")
+    if procs is None:
+        procs = set()
+        _preview_session["active_procs"] = procs
+
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        procs.add(proc)
+        stderr_data, _ = await proc.communicate()
+        if proc.returncode != 0:
+            err = (stderr_data or b"").decode(errors="replace")[-500:]
+            log.warning(f"[preview {sid}] segment {seg_num} failed: {err}")
+            try: os.remove(tmp_path)
+            except Exception: pass
+            return False
+        # Atomic publish — makes concurrent readers safe
+        os.rename(tmp_path, out_path)
+        return True
+    except asyncio.CancelledError:
+        if proc is not None:
+            try: proc.kill()
+            except Exception: pass
+        try: os.remove(tmp_path)
+        except Exception: pass
+        raise
+    except Exception as e:
+        log.warning(f"[preview {sid}] segment {seg_num} exception: {e}")
+        try: os.remove(tmp_path)
+        except Exception: pass
+        return False
+    finally:
+        if proc is not None:
+            procs.discard(proc)
+
+
+async def _probe_preview_duration(src: str) -> float:
+    """Return the source duration in seconds, or 0 if ffprobe fails."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE, "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "json", src,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        data = json.loads(out.decode(errors="replace") or "{}")
+        return float(data.get("format", {}).get("duration", 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def _build_vod_preview_playlist(session_id: str, duration: float) -> str:
+    """Build a VOD-style HLS playlist listing every segment ffmpeg will eventually
+    produce. This tells the browser the real total duration upfront so the progress
+    bar and seek UI reflect the whole file, not just the transcoded portion."""
+    seg_len = PREVIEW_SEG_LEN
+    if duration <= 0:
+        # Unknown duration — fall back to a live-ish event playlist with whatever
+        # segments currently exist on disk so the browser can at least start.
+        return ""
+    import math as _math
+    n_segs = max(1, _math.ceil(duration / seg_len))
+    last_seg = duration - (n_segs - 1) * seg_len
+    if last_seg <= 0:
+        last_seg = seg_len
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        f"#EXT-X-TARGETDURATION:{seg_len}",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-INDEPENDENT-SEGMENTS",
+    ]
+    for i in range(n_segs):
+        d = seg_len if i < n_segs - 1 else last_seg
+        lines.append(f"#EXTINF:{d:.3f},")
+        lines.append(f"seg_{i:04d}.ts")
+    lines.append("#EXT-X-ENDLIST")
+    return "\n".join(lines) + "\n"
+
+
+async def _kill_preview_session_locked():
+    """Tear down the active preview session. Caller must hold the session lock.
+    Kills any in-flight per-segment ffmpegs and wipes the session dir."""
+    procs = _preview_session.get("active_procs") or set()
+    for proc in list(procs):
         try:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                try: proc.kill()
-                except Exception: pass
-                try: await proc.wait()
-                except Exception: pass
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    try: proc.kill()
+                    except Exception: pass
+                    try: await proc.wait()
+                    except Exception: pass
         except Exception:
             pass
+    procs.clear()
+
+    sess_dir = _preview_session.get("dir")
     if sess_dir and os.path.isdir(sess_dir):
         try:
             shutil.rmtree(sess_dir, ignore_errors=True)
         except Exception:
             pass
     _preview_session["id"] = None
-    _preview_session["proc"] = None
     _preview_session["dir"] = None
     _preview_session["src"] = None
+    _preview_session["duration"] = 0.0
+    _preview_session["use_nvenc"] = False
     _preview_session["started_at"] = 0.0
+    _preview_session["seg_locks"] = None
+    _preview_session["active_procs"] = None
 
 
 _RAW_MIME_BY_EXT = {
@@ -6467,68 +6630,27 @@ async def preview_start(request: Request):
         except Exception as e:
             return JSONResponse({"error": f"Failed to create preview dir: {e}"}, status_code=500)
 
-        use_nvenc = LOCAL_NVENC and not _local_encode_active()
-        cmd = _build_preview_ffmpeg_cmd(src, use_nvenc)
-        log.info(f"[preview {session_id}] starting ({'nvenc' if use_nvenc else 'libx264'}): {os.path.basename(src)}")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=sess_dir,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except Exception as e:
+        # Probe duration up front — without it we can't build a VOD playlist and
+        # the segment endpoint has no way to know the last segment's length.
+        duration = await _probe_preview_duration(src)
+        if duration <= 0:
             shutil.rmtree(sess_dir, ignore_errors=True)
-            return JSONResponse({"error": f"Failed to launch ffmpeg: {e}"}, status_code=500)
+            return JSONResponse({"error": "Could not probe source duration"}, status_code=500)
 
-        # Drain stderr in the background so the pipe never fills up; keep last ~4 KB for diagnostics
-        stderr_tail = bytearray()
-        async def _drain_stderr():
-            try:
-                while True:
-                    chunk = await proc.stderr.read(1024)
-                    if not chunk:
-                        break
-                    stderr_tail.extend(chunk)
-                    if len(stderr_tail) > 4096:
-                        del stderr_tail[:len(stderr_tail) - 4096]
-                    log.warning(f"[preview {session_id}] ffmpeg: {chunk.decode(errors='replace').strip()}")
-            except Exception:
-                pass
-        stderr_task = asyncio.create_task(_drain_stderr())
+        use_nvenc = LOCAL_NVENC and not _local_encode_active()
+        log.info(f"[preview {session_id}] session started ({'nvenc' if use_nvenc else 'libx264'}, {duration:.1f}s): {os.path.basename(src)}")
 
         _preview_session["id"] = session_id
-        _preview_session["proc"] = proc
         _preview_session["dir"] = sess_dir
         _preview_session["src"] = src
+        _preview_session["duration"] = duration
+        _preview_session["use_nvenc"] = use_nvenc
+        _preview_session["seg_locks"] = {}
+        _preview_session["active_procs"] = set()
         _preview_session["started_at"] = time.monotonic()
 
-        # Wait up to ~20s for the playlist to materialise with at least one segment line.
-        # NVENC context init + first GOP can take several seconds on cold start.
-        playlist_path = os.path.join(sess_dir, "playlist.m3u8")
-        ready = False
-        for _ in range(200):
-            if proc.returncode is not None:
-                break
-            if os.path.isfile(playlist_path):
-                try:
-                    with open(playlist_path) as f:
-                        content = f.read()
-                    if "seg_" in content and ".ts" in content:
-                        ready = True
-                        break
-                except Exception:
-                    pass
-            await asyncio.sleep(0.1)
-
-        if not ready:
-            await _kill_preview_session_locked()
-            try: stderr_task.cancel()
-            except Exception: pass
-            detail = bytes(stderr_tail).decode(errors="replace")[-600:]
-            log.warning(f"[preview {session_id}] failed to start: {detail}")
-            return JSONResponse({"error": "ffmpeg failed to start streaming", "detail": detail}, status_code=500)
-
+        # NOTE: No long-running ffmpeg is started here. Segments are transcoded
+        # on-demand when the browser requests them — see preview_segment().
         return {"session_id": session_id, "playlist": f"/api/preview/{session_id}/playlist.m3u8"}
 
 
@@ -6536,15 +6658,13 @@ async def preview_start(request: Request):
 async def preview_playlist(session_id: str):
     if session_id != _preview_session.get("id"):
         return JSONResponse({"error": "Session not found"}, status_code=404)
-    sess_dir = _preview_session.get("dir")
-    if not sess_dir:
-        return JSONResponse({"error": "Session not active"}, status_code=404)
-    pl = os.path.join(sess_dir, "playlist.m3u8")
-    if not os.path.isfile(pl):
-        return JSONResponse({"error": "Playlist not ready"}, status_code=404)
+    duration = _preview_session.get("duration", 0) or 0
+    if duration <= 0:
+        return JSONResponse({"error": "Session not ready"}, status_code=404)
     _preview_session["started_at"] = time.monotonic()
-    return FileResponse(pl, media_type="application/vnd.apple.mpegurl",
-                        headers={"Cache-Control": "no-store"})
+    body = _build_vod_preview_playlist(session_id, duration)
+    return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl",
+                             headers={"Cache-Control": "no-store"})
 
 
 _SEG_RE = re.compile(r"^seg_\d{4}\.ts$")
@@ -6558,9 +6678,40 @@ async def preview_segment(session_id: str, segment: str):
     sess_dir = _preview_session.get("dir")
     if not sess_dir:
         return JSONResponse({"error": "Session not active"}, status_code=404)
+
+    n = int(segment[4:8])
     seg_path = os.path.join(sess_dir, segment)
-    if not os.path.isfile(seg_path):
-        return JSONResponse({"error": "Segment not found"}, status_code=404)
+
+    # Cache hit: serve the on-disk segment immediately (handles backward seek
+    # and any repeat request for the same segment).
+    if os.path.isfile(seg_path):
+        _preview_session["started_at"] = time.monotonic()
+        return FileResponse(seg_path, media_type="video/mp2t",
+                            headers={"Cache-Control": "no-store"})
+
+    # Per-segment generation lock — prevents two concurrent requests for the
+    # same segment from kicking off two ffmpegs.
+    seg_locks = _preview_session.get("seg_locks")
+    if seg_locks is None:
+        seg_locks = {}
+        _preview_session["seg_locks"] = seg_locks
+    seg_lock = seg_locks.get(n)
+    if seg_lock is None:
+        seg_lock = asyncio.Lock()
+        seg_locks[n] = seg_lock
+
+    async with seg_lock:
+        # Re-check session identity + file presence after acquiring the lock.
+        if session_id != _preview_session.get("id"):
+            return JSONResponse({"error": "Session ended"}, status_code=404)
+        if os.path.isfile(seg_path):
+            _preview_session["started_at"] = time.monotonic()
+            return FileResponse(seg_path, media_type="video/mp2t",
+                                headers={"Cache-Control": "no-store"})
+        ok = await _generate_preview_segment(n)
+        if not ok or not os.path.isfile(seg_path):
+            return JSONResponse({"error": "Segment generation failed"}, status_code=500)
+
     _preview_session["started_at"] = time.monotonic()
     return FileResponse(seg_path, media_type="video/mp2t",
                         headers={"Cache-Control": "no-store"})
@@ -6988,6 +7139,7 @@ async def scan_directory(req: ScanRequest):
             "is_hevc": info.is_hevc, "has_dovi": info.has_dovi, "dovi_profile": info.dovi_profile, "hdr10_metadata": info.hdr10_metadata,
             "output_exists": info.output_exists,
             "recode_skipped": info.recode_tag.startswith("SKIPPED:") if info.recode_tag else False,
+            "year": info.year,
             "suggestion": suggestion,
         }
 
@@ -7342,6 +7494,7 @@ async def queue_add(req: QueueAddRequest):
                 "sub_streams": info.sub_streams,
                 "is_hevc": info.is_hevc, "has_dovi": info.has_dovi, "dovi_profile": info.dovi_profile, "hdr10_metadata": info.hdr10_metadata,
                 "output_exists": info.output_exists,
+                "year": info.year,
                 "suggestion": compute_suggestion(info),
             }
         # Attach per-file audio and subtitle config if provided
@@ -7379,6 +7532,41 @@ async def queue_remove(job_id: str):
     ok = encode_queue.remove(job_id)
     await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
     return {"removed": ok}
+
+
+@app.post("/api/queue/{job_id}/target")
+async def queue_update_target(job_id: str, request: Request):
+    """Change a queued job's GPU target (e.g. 'auto', 'gpu:0', 'remote:Dev').
+    Only permitted while the job is still queued — active jobs are left alone.
+    Also clears per-job retry/dispatch state so it can be picked up fresh."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+    target = (body.get("gpu_target") or "").strip()
+    if not target:
+        return JSONResponse({"error": "gpu_target is required"}, status_code=400)
+    job = encode_queue.jobs.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job.status != JobStatus.QUEUED:
+        return JSONResponse({"error": f"Cannot retarget a job that is {job.status}"}, status_code=409)
+    job.settings["gpu_target"] = target
+    # gpu_id is a legacy mirror of gpu_target used by a few dispatch paths
+    job.settings["gpu_id"] = target
+    # Wipe any dispatch state that would make the job skip the new target
+    for k in ("_retry_count", "_remote_server_idx", "_remote_gpu_name", "_remote_gpu_address"):
+        job.settings.pop(k, None)
+    # If the chosen target is a specific remote GPU, clear that server's
+    # auto-disable flag too — the user explicitly asked for it, assume they
+    # want it to try again.
+    if target.startswith("remote:"):
+        name = target.split(":", 1)[1]
+        encode_queue.remote_auto_disabled.discard(name)
+        encode_queue.remote_fail_counts.pop(name, None)
+    encode_queue._save_state(force=True)
+    await manager.broadcast({"type": "state_update", "data": encode_queue.get_state()})
+    return {"ok": True, "gpu_target": target}
 
 
 @app.delete("/api/queue")
@@ -8319,6 +8507,7 @@ async def folder_watcher():
                         "sub_streams": info.sub_streams,
                         "is_hevc": info.is_hevc, "has_dovi": info.has_dovi, "dovi_profile": info.dovi_profile, "hdr10_metadata": info.hdr10_metadata,
                         "output_exists": info.output_exists,
+                        "year": info.year,
                         "suggestion": compute_suggestion(info),
                     }
 
@@ -8872,6 +9061,7 @@ async def _webhook_queue_file(file_path: str) -> Optional[dict]:
         "sub_streams": info.sub_streams,
         "is_hevc": info.is_hevc, "has_dovi": info.has_dovi, "dovi_profile": info.dovi_profile, "hdr10_metadata": info.hdr10_metadata,
         "output_exists": info.output_exists,
+        "year": info.year,
         "suggestion": compute_suggestion(info),
     }
 

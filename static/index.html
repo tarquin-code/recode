@@ -200,6 +200,59 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .badge-done { background: rgba(63,185,80,0.15); color: var(--success); }
 .badge-fail { background: rgba(248,81,73,0.15); color: var(--error); }
 .badge-skip { background: rgba(210,170,60,0.15); color: #d2aa3c; }
+/* Inline queue GPU target picker — the <select> is transparent and sized to
+   fit an overlay label that shows the target in the same "KEY:VALUE" uppercase
+   badge format as the other row badges, coloured green/purple/yellow/red
+   depending on whether the target is enabled, auto-disabled, or offline.
+   Opening the dropdown still shows the full indented sidebar-style list. */
+.queue-target-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    height: 16px;
+    line-height: 1;
+}
+select.queue-target-sel {
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+    border: 0; outline: 0; cursor: pointer;
+    box-sizing: border-box;
+    height: 16px;                      /* 1px taller than the stock badge-sm pills */
+    padding: 0 14px 0 5px;             /* badge-sm horizontal padding + 9px chevron slot */
+    background-color: rgba(99,110,255,0.15);  /* default tint, JS overrides by state */
+    color: transparent;               /* hide the native selected text — overlay below shows it */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 24 24' fill='none' stroke='%23636eff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 2px center;
+    min-width: 0;
+    width: auto;                       /* set inline to match overlay label width */
+    line-height: 13px;
+    text-transform: none;
+    letter-spacing: 0;
+}
+select.queue-target-sel:hover { filter: brightness(1.15); }
+select.queue-target-sel option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    text-transform: none;
+    font-size: 12px;
+    font-weight: normal;
+    letter-spacing: 0;
+}
+.queue-target-label {
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+    line-height: 1;
+    color: #636eff;                    /* default — JS overrides by state */
+}
 .badge-cancel { background: rgba(160,140,180,0.2); color: #a08cb4; }
 .badge-time { background: rgba(130,160,190,0.2); color: #82a0be; }
 
@@ -207,7 +260,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
 .audio-row { display: none; }
 .audio-row.open { display: table-row; }
 .audio-row td { padding: 0; background: var(--bg-tertiary); }
-.audio-panel { padding: 12px 16px 12px 52px; }
+.audio-panel { padding: 12px 16px; }
 .audio-panel h4 { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
 .audio-stream { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .audio-stream:last-child { margin-bottom: 0; }
@@ -883,6 +936,8 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <option value="res_asc">Sort: Lowest res first</option>
                             <option value="duration_desc">Sort: Longest first</option>
                             <option value="duration_asc">Sort: Shortest first</option>
+                            <option value="year_desc">Sort: Newest year</option>
+                            <option value="year_asc">Sort: Oldest year</option>
                         </select>
                         <select id="filterTopN" onchange="applyFilters()">
                             <option value="0">Show: All</option>
@@ -927,6 +982,10 @@ tr.file-row:hover td { background: var(--bg-hover); }
                             <option value="candidate">Encode Candidate</option>
                             <option value="encoded">Already Encoded</option>
                             <option value="skipped">Skipped (Larger)</option>
+                        </select>
+                        <select id="filterYear" onchange="applyFilters()">
+                            <option value="">Year: All</option>
+                            <option value="none">No year</option>
                         </select>
                     </div>
                 </div>
@@ -2001,7 +2060,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <p>Click the <strong>play icon</strong> next to any file in the scan, queue, or history list to preview it in your browser. This is useful for verifying a file is what you think it is before queuing, or comparing a finished encode against its source.</p>
                 <ul>
                     <li><strong>Direct play first</strong> &mdash; Recode probes the file's container and codec and, if your browser can decode it natively (e.g. H.264 + AAC in MP4), streams the original file directly with HTTP range support so you can seek freely. No transcoding cost.</li>
-                    <li><strong>Live transcode fallback</strong> &mdash; For HEVC, Dolby Vision, MKV containers, or unsupported audio (AC3, EAC3, DTS, TrueHD), the server runs a live HLS transcode to H.264 + AAC at the source resolution. Tone-maps HDR/DV down to SDR for display. Uses NVENC when available, libx264 otherwise.</li>
+                    <li><strong>On-demand transcode fallback</strong> &mdash; For HEVC, Dolby Vision, MKV containers, or unsupported audio (AC3, EAC3, DTS, TrueHD), the server transcodes each 4-second HLS segment on demand to H.264 + AAC at the source resolution. Tone-maps HDR/DV down to SDR. Seeking works in both directions &mdash; backward seeks load instantly from disk cache, forward seeks transcode the target segment in ~1&ndash;2s. Uses NVENC when available, libx264 otherwise.</li>
                     <li><strong>Status pill</strong> &mdash; The footer of the preview modal shows whether playback is &#127823; <strong>Direct play</strong> or &#129000; <strong>Transcoding</strong>, along with the actual stream resolution (e.g. 3840&times;2160).</li>
                     <li><strong>Source badges</strong> &mdash; The modal header shows the same badges as the file lists: codec, resolution, HDR/DV type, size, duration, audio track count.</li>
                     <li><strong>History rows</strong> preview the encoded output when one exists; failed/cancelled jobs preview the source.</li>
@@ -2033,7 +2092,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                         <div style="font-weight:600;color:var(--text-primary);">Status</div><div style="color:var(--text-secondary);">Candidate (ready to encode) or Encoded (has RECODE metadata tag from previous encode)</div>
                     </div>
                 </div>
-                <div class="tip">Click any column header to sort. Click again to reverse. Use the filter bar to search by name, sort by name / newest / oldest / size / bitrate / resolution / duration, filter by codec/HDR, or show top N files by size. The filename column auto-shrinks to the average filename width on small screens to prevent horizontal scrolling.</div>
+                <div class="tip">Click any column header to sort. Click again to reverse. Use the filter bar to search by name, sort by name / newest / oldest / size / bitrate / resolution / duration / year, filter by codec/HDR/year, or show top N files by size. The <strong>Year</strong> filter extracts the release year from filenames (e.g. <code>Titanic (1997)</code>) and folder names, with individual years and decade groups. The filename column auto-shrinks to the average filename width on small screens to prevent horizontal scrolling.</div>
 
                 <h4>Queue Management</h4>
                 <ul>
@@ -2042,6 +2101,7 @@ tr.file-row:hover td { background: var(--bg-hover); }
                     <li><strong>Start / Stop</strong> — Control whether the queue processes jobs</li>
                     <li><strong>Stop &amp; Cancel</strong> — Stop queue and kill all active encodes</li>
                     <li><strong>Remove All</strong> — Clear all queued jobs (active encodes unaffected)</li>
+                    <li><strong>GPU target dropdown</strong> — Click the purple badge on any queue item to reassign it to a different GPU (Auto, specific local GPU, specific remote GPU). Colour-coded: purple = enabled, amber = auto-disabled, red = offline</li>
                     <li>Each queue item shows: encoder (Local/Remote + H.265/H.264), resolution, HDR type, file size, preset, CQ</li>
                     <li>Each active encode shows a spinning recode icon between the Original and Encoding detail cards</li>
                 </ul>
@@ -2158,6 +2218,15 @@ tr.file-row:hover td { background: var(--bg-hover); }
                 <h4>Version History</h4>
                 <div class="example-box">
                     <div style="display:grid;gap:12px;">
+                        <div>
+                            <div style="font-weight:600;color:var(--text-primary);">v4.0.3 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
+                            <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
+                                <li><strong>Preview seeking &amp; progress</strong> &mdash; completely rewrote in-browser video preview to use per-segment on-demand transcoding (Plex/Jellyfin model). Each HLS segment is independently transcoded with its own IDR keyframe and absolute-time PCR via <code>-output_ts_offset</code>. Progress bar now shows correct total duration from a VOD playlist probed upfront. Forward seek, backward seek, and random access all work; backward seeks serve instantly from disk cache</li>
+                                <li><strong>Year filter &amp; sort</strong> &mdash; scan results extract year from filenames (<code>Titanic (1997)</code>, <code>[1999]</code>, <code>.2008.</code>) with folder name fallback. Year filter dropdown with individual years and decade groups; sort by Newest/Oldest year</li>
+                                <li><strong>Inline queue GPU target</strong> &mdash; each queued job shows a colour-coded badge-style dropdown to change its GPU assignment (Auto, Local GPU, Remote GPU). Same options as the sidebar Target dropdown. Changing target clears retry state and re-enables auto-disabled GPUs</li>
+                                <li><strong>Expanded audio/subtitle panel</strong> &mdash; audio and subtitle sections in scan results now span the full table width (fixed colspan and removed excess left padding)</li>
+                            </ul>
+                        </div>
                         <div>
                             <div style="font-weight:600;color:var(--text-primary);">v4.0.2 <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— April 2026</span></div>
                             <ul style="margin:6px 0 0 0;font-size:12px;color:var(--text-secondary);">
@@ -3624,8 +3693,19 @@ function updateGpuServerStatus() {
         // Rebuild dropdowns if GPU count changed
         if (state._connectedGpus.length !== prevCount) {
             const gpuCnt = state.system?.gpu ? (state.system.gpu_count || 0) : 0;
-            document.querySelectorAll('#selGpuTarget, #setGpuTarget, [id^="lp-gputarget-"]').forEach(sel => {
+            document.querySelectorAll('#selGpuTarget, #setGpuTarget, [id^="lp-gputarget-"], .queue-target-sel').forEach(sel => {
+                const curVal = sel.classList.contains('queue-target-sel') ? (sel.dataset.cur || sel.value) : sel.value;
                 populateGpuTargets(sel, gpuCnt);
+                if (sel.classList.contains('queue-target-sel') && curVal) {
+                    let found = false;
+                    for (const o of sel.options) if (o.value === curVal) { found = true; break; }
+                    if (!found) {
+                        const opt = new Option(curVal, curVal);
+                        opt.disabled = true;
+                        sel.add(opt);
+                    }
+                    sel.value = curVal;
+                }
             });
         }
         // Show server address for easy copying
@@ -4259,6 +4339,9 @@ function renderScanResults() {
     // Show filters
     document.getElementById('scanFilters').style.display = 'block';
 
+    // Populate year filter dropdown — individual years (newest first) + decade ranges
+    populateYearFilter(files);
+
     // Populate language checkboxes from scanned files
     buildLangCheckboxes('audioLangsList', 'audio');
     buildLangCheckboxes('subLangsList', 'subtitle');
@@ -4268,6 +4351,41 @@ function renderScanResults() {
 
     // Apply current filters
     applyFilters();
+}
+
+function populateYearFilter(files) {
+    const sel = document.getElementById('filterYear');
+    if (!sel) return;
+    const prev = sel.value;
+    // Collect unique years and decades
+    const years = new Set();
+    const decades = new Set();
+    let hasNoYear = false;
+    for (const f of files) {
+        if (f.year) {
+            years.add(f.year);
+            decades.add(Math.floor(f.year / 10) * 10);
+        } else {
+            hasNoYear = true;
+        }
+    }
+    const sortedDecades = [...decades].sort((a, b) => b - a);
+    const sortedYears = [...years].sort((a, b) => b - a);
+    let html = '<option value="">Year: All</option>';
+    if (hasNoYear) html += '<option value="none">No year</option>';
+    if (sortedDecades.length) {
+        html += '<optgroup label="Decades">';
+        for (const d of sortedDecades) html += `<option value="${d}s">${d}s</option>`;
+        html += '</optgroup>';
+    }
+    if (sortedYears.length) {
+        html += '<optgroup label="Years">';
+        for (const y of sortedYears) html += `<option value="${y}">${y}</option>`;
+        html += '</optgroup>';
+    }
+    sel.innerHTML = html;
+    // Restore prior selection if still valid
+    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -4912,7 +5030,7 @@ function renderQueue() {
                     <span class="badge badge-sm badge-audio">${audioLabel}</span>
                     ${subLabel(f, job.settings) ? `<span class="badge badge-sm badge-preset">${subLabel(f, job.settings)}</span>` : ''}
                     <span style="color:var(--text-muted);font-size:10px;margin-left:4px;">→</span>
-                    <span class="badge badge-sm badge-hw">${hwLabel}</span>
+                    <span class="queue-target-wrap"><select class="queue-target-sel badge badge-sm" data-job-id="${job.id}" data-cur="${escHtml(job.settings.gpu_target || 'auto')}" onchange="changeQueueTarget(this)" onclick="event.stopPropagation()" title="Change GPU assignment"><option>${escHtml(hwLabel)}</option></select><span class="queue-target-label"></span></span>
                     <span class="badge badge-sm ${vcLabel === 'H.264' ? 'badge-h264' : 'badge-h265'}">${vcLabel}</span>
                     <span class="badge badge-sm badge-res">${(job.settings.resize && job.settings.resize !== 'original') ? cleanRes(job.settings.resize) : cleanRes(f.resolution_label)}</span>
                     <span class="badge badge-sm ${targetHdrBadge}">${targetHdr}</span>
@@ -4932,6 +5050,130 @@ function renderQueue() {
     if (qHadFocus) {
         const el = document.getElementById(qSearchId);
         if (el) { el.focus(); el.selectionStart = el.selectionEnd = qCursorPos; }
+    }
+    // Populate inline GPU target dropdowns in each queue row — same option list
+    // as the sidebar's #selGpuTarget.
+    populateQueueTargetSelects();
+    // If the connected-GPU cache is empty, kick off a background refresh and
+    // re-populate when it returns (first page-load race with the poll).
+    if (!state._connectedGpus || !state._connectedGpus.length) {
+        fetch('/api/remote-clients/status').then(r => r.json()).then(d => {
+            state._connectedGpus = (d.gpus || []).filter(g => g.online);
+            populateQueueTargetSelects();
+        }).catch(() => {});
+    }
+}
+
+// Shared <canvas> context used to measure label widths for the queue target
+// selects (cheaper than creating & measuring an offscreen DOM node per row).
+let _queueSelMeasureCtx = null;
+function _measureQueueLabelPx(text, fontSize, fontWeight, fontFamily) {
+    if (!_queueSelMeasureCtx) {
+        const c = document.createElement('canvas');
+        _queueSelMeasureCtx = c.getContext('2d');
+    }
+    _queueSelMeasureCtx.font = `${fontWeight} ${fontSize} ${fontFamily}`;
+    return _queueSelMeasureCtx.measureText(text).width;
+}
+
+/** Convert a gpu_target value into the short "KEY:VALUE" uppercase format
+ *  shown in the queue row badge. */
+function _fmtQueueTargetLabel(value) {
+    if (!value || value === 'auto') return 'AUTO';
+    if (value === 'local') return 'LOCAL';
+    if (value === 'remote') return 'REMOTE';
+    if (value.startsWith('gpu:')) return 'LOCAL: GPU' + value.slice(4);
+    if (value.startsWith('remote:')) return 'REMOTE: ' + value.slice(7).toUpperCase();
+    return value.toUpperCase();
+}
+
+/** Return {fg, bg} CSS colours for the queue target badge based on whether
+ *  the target is enabled, auto-disabled, or offline.
+ *  - enabled:        purple (matches badge-hw)
+ *  - auto-disabled:  amber (target connected but temporarily disabled)
+ *  - offline/missing: red  (target not currently reachable) */
+function _queueTargetColors(value) {
+    const PURPLE = { fg: '#636eff', bg: 'rgba(99,110,255,0.15)' };
+    const AMBER  = { fg: '#d29922', bg: 'rgba(210,153,34,0.18)' };
+    const RED    = { fg: '#f85149', bg: 'rgba(248,81,73,0.18)' };
+    if (!value || value === 'auto' || value === 'local' || value === 'remote') return PURPLE;
+    if (value.startsWith('gpu:')) {
+        const idx = parseInt(value.slice(4), 10);
+        const disabled = (state.settings?.disabled_gpus || []).includes(idx);
+        return disabled ? RED : PURPLE;
+    }
+    if (value.startsWith('remote:')) {
+        const name = value.slice(7);
+        const gpu = (state._connectedGpus || []).find(g => g.name === name);
+        if (!gpu || !gpu.online) return RED;
+        if (gpu.auto_disabled) return AMBER;
+        return PURPLE;
+    }
+    return PURPLE;
+}
+
+function populateQueueTargetSelects() {
+    const gpuCnt = state.system?.gpu ? (state.system.gpu_count || 0) : 0;
+    document.querySelectorAll('#queueContent .queue-target-sel').forEach(sel => {
+        const cur = sel.dataset.cur || 'auto';
+        populateGpuTargets(sel, gpuCnt);
+        // Make sure the current value is selectable even if it's no longer in
+        // the option list (e.g. a remote GPU that disconnected).
+        let found = false;
+        for (const opt of sel.options) { if (opt.value === cur) { found = true; break; } }
+        if (!found) {
+            const opt = new Option(cur, cur);
+            opt.disabled = true;
+            sel.add(opt);
+        }
+        sel.value = cur;
+
+        // Update the overlay label + colours
+        const wrap = sel.parentElement;
+        const labelEl = wrap && wrap.querySelector('.queue-target-label');
+        if (!labelEl) return;
+        const labelText = _fmtQueueTargetLabel(cur);
+        const colors = _queueTargetColors(cur);
+        labelEl.textContent = labelText;
+        labelEl.style.color = colors.fg;
+        sel.style.backgroundColor = colors.bg;
+        // Replace the chevron's stroke colour so it matches the fg
+        const chevHex = colors.fg.replace('#', '%23');
+        sel.style.backgroundImage = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 24 24' fill='none' stroke='${chevHex}' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>")`;
+        // Shrink-to-fit based on the overlay label width (uppercase + letter-spacing)
+        const labelPx = _measureQueueLabelPx(labelText, '9px', '600', getComputedStyle(labelEl).fontFamily || 'sans-serif');
+        // 5px left padding + 12px chevron slot + ~2px slack for letter-spacing
+        sel.style.width = Math.ceil(labelPx) + 19 + 'px';
+    });
+}
+
+async function changeQueueTarget(sel) {
+    const jobId = sel.dataset.jobId;
+    const newTarget = sel.value;
+    const oldTarget = sel.dataset.cur || 'auto';
+    if (!jobId || newTarget === oldTarget) return;
+    sel.disabled = true;
+    try {
+        const r = await fetch(`/api/queue/${jobId}/target`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({gpu_target: newTarget}),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+            alert('Failed to change target: ' + (j.error || r.status));
+            sel.value = oldTarget;
+        } else {
+            sel.dataset.cur = newTarget;
+            // Refresh the overlay label + colours immediately so the user sees
+            // the change without waiting for the next WebSocket state_update.
+            populateQueueTargetSelects();
+        }
+    } catch (e) {
+        alert('Failed to change target: ' + e.message);
+        sel.value = oldTarget;
+    } finally {
+        sel.disabled = false;
     }
 }
 
@@ -6328,6 +6570,20 @@ function applyFilters() {
     else if (statusFilter === 'encoded') files = files.filter(f => f.output_exists && !f.recode_skipped);
     else if (statusFilter === 'skipped') files = files.filter(f => f.recode_skipped);
 
+    // Year filter
+    const yearFilter = document.getElementById('filterYear')?.value || '';
+    if (yearFilter === 'none') files = files.filter(f => !f.year);
+    else if (yearFilter) {
+        // Support decade ranges like "1990s" or specific year "1997"
+        if (yearFilter.endsWith('s')) {
+            const decade = parseInt(yearFilter);
+            files = files.filter(f => f.year && f.year >= decade && f.year < decade + 10);
+        } else {
+            const y = parseInt(yearFilter);
+            files = files.filter(f => f.year === y);
+        }
+    }
+
     // Sort — dropdown sort takes priority, then column sort, then default name sort
     const sort = document.getElementById('filterSort').value;
     const _br = f => (f.duration_secs && f.size_bytes) ? (f.size_bytes * 8 / f.duration_secs) : 0;
@@ -6341,6 +6597,8 @@ function applyFilters() {
     else if (sort === 'duration_asc') files.sort((a, b) => (a.duration_secs||0) - (b.duration_secs||0));
     else if (sort === 'newest') files.sort((a, b) => (b.mtime||0) - (a.mtime||0));
     else if (sort === 'oldest') files.sort((a, b) => (a.mtime||0) - (b.mtime||0));
+    else if (sort === 'year_desc') files.sort((a, b) => (b.year||0) - (a.year||0) || a.filename.localeCompare(b.filename));
+    else if (sort === 'year_asc') files.sort((a, b) => (a.year||9999) - (b.year||9999) || a.filename.localeCompare(b.filename));
     else if (tableSort.column) {
         const dir = tableSort.dir === 'asc' ? 1 : -1;
         const col = tableSort.column;
@@ -6546,7 +6804,7 @@ function renderScanResultsFiltered(files) {
             <td class="select-col"><input type="checkbox" class="file-select" data-path="${escHtml(f.path)}" data-idx="${realIdx}"></td>
             <td class="expand-col">${(hasAudio || (f.sub_streams||[]).length > 0) ? `<button class="expand-btn" onclick="toggleAudioRow(${realIdx})" id="expbtn-${realIdx}">${svgIcon('chevron-right', 12)}</button>` : ''}</td>
             <td class="file-cell">
-                <div class="file-name" title="${escHtml(f.path)}" style="display:flex;align-items:center;gap:4px;max-width:none;"><span id="fname-${realIdx}">${escHtml(f.filename)}</span><span onclick="inlineRename(document.getElementById('fname-${realIdx}'), '${escHtml(f.path)}')" style="cursor:pointer;color:var(--accent);flex-shrink:0;opacity:0.7;" title="Rename file">${svgIcon('edit-2', 11)}</span></div>
+                <div class="file-name" title="${escHtml(f.path)}" style="display:flex;align-items:center;gap:4px;max-width:none;"><span onclick="inlineRename(document.getElementById('fname-${realIdx}'), '${escHtml(f.path)}')" style="cursor:pointer;color:var(--accent);flex-shrink:0;opacity:0.7;" title="Rename file">${svgIcon('edit-2', 11)}</span><span id="fname-${realIdx}" style="overflow:hidden;text-overflow:ellipsis;">${escHtml(f.filename)}</span></div>
             </td>
             <td>
                 <span class="badge badge-res">${resLabel}</span>
@@ -6565,7 +6823,7 @@ function renderScanResultsFiltered(files) {
         </tr>`;
 
         if (hasAudio || (f.sub_streams||[]).length > 0) {
-            html += `<tr class="audio-row" id="audiorow-${realIdx}"><td colspan="10"><div class="audio-panel">`;
+            html += `<tr class="audio-row" id="audiorow-${realIdx}"><td colspan="11"><div class="audio-panel">`;
             if (hasAudio) html += `<h4>Audio Streams — ${escHtml(f.filename)}</h4>`;
             for (const a of f.audio_streams) {
                 const cfg = audioConfig[f.path]?.[a.index] || { include: true, codec: 'auto', bitrate: '448k' };
@@ -6673,7 +6931,8 @@ function _autoSizeFileColumn() {
     if (wrapper.scrollWidth <= wrapper.clientWidth + 4) return;  // no overflow → leave alone
     let total = 0, count = 0;
     names.forEach(el => {
-        const span = el.querySelector('span');
+        // Target the filename span (id^="fname-"), not the leading rename-icon span.
+        const span = el.querySelector('span[id^="fname-"]') || el.querySelector('span:last-child');
         const w = span ? span.scrollWidth : 0;
         if (w > 0) { total += w; count++; }
     });
